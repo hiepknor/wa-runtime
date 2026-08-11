@@ -12,6 +12,7 @@
     "dev:api": "tsx watch src/main.ts",
     "dev:worker": "tsx watch src/worker.ts",
     "dev:scheduler": "tsx watch src/scheduler.ts",
+    "dev:webhook-proxy": "tsx scripts/webhook-proxy.ts",
     "start:api": "node dist/src/main.js",
     "start:worker": "node dist/src/worker.js",
     "start:scheduler": "node dist/src/scheduler.js",

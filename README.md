@@ -84,6 +84,13 @@ OpenWA must register that URL with the same secret as `OPENWA_WEBHOOK_SECRET`. T
 `X-OpenWA-Signature` over the exact raw request body and deduplicates by OpenWA's idempotency key.
 For local-to-VPS testing, expose only this route through a temporary HTTPS tunnel.
 
+The included development proxy deliberately exposes only the webhook route:
+
+```bash
+npm run dev:webhook-proxy
+cloudflared tunnel --url http://127.0.0.1:3101
+```
+
 ## Useful commands
 
 ```bash
