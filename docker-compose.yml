@@ -56,7 +56,7 @@ services:
 
   api:
     <<: *runtime
-    command: ["node", "dist/src/main.js"]
+    command: ["node", "dist/src/entrypoints/api.js"]
     networks:
       automation-internal:
       wa-dev-network:
@@ -74,7 +74,7 @@ services:
 
   worker:
     <<: *runtime
-    command: ["node", "dist/src/worker.js"]
+    command: ["node", "dist/src/entrypoints/worker.js"]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -85,7 +85,7 @@ services:
 
   scheduler:
     <<: *runtime
-    command: ["node", "dist/src/scheduler.js"]
+    command: ["node", "dist/src/entrypoints/scheduler.js"]
     depends_on:
       migrate:
         condition: service_completed_successfully

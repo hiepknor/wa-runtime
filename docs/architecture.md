@@ -72,9 +72,33 @@ session-restriction webhooks invalidate that cache. Redis is configured with AOF
 
 ### OpenWA adapter
 
-`src/openwa/openwa.client.ts` is the anti-corruption layer. Upstream OpenWA payloads stop there and
-are mapped into Runtime-owned types. A full sync verifies OpenWA's live release against
+`src/integrations/openwa/openwa.client.ts` is the anti-corruption layer. Upstream OpenWA payloads
+stop there and are mapped into Runtime-owned types. A full sync verifies OpenWA's live release against
 `OPENWA_RELEASE_TAG` and fails closed on a mismatch.
+
+## Source layout and dependency direction
+
+```text
+src/
+  app.module.ts          Nest composition root
+  entrypoints/           API, scheduler and worker bootstraps
+  contracts/             public request/response DTOs
+  core/                  auth, config, database, queue and OpenAPI setup
+  integrations/openwa/   upstream anti-corruption adapter
+  modules/               campaigns, gateway, health, inbox, messages, webhooks
+```
+
+Dependencies flow inward from entrypoints and the composition root:
+
+```text
+entrypoints -> app.module -> modules -> core / integrations
+                         +-> contracts
+```
+
+`core` never imports a feature module. OpenWA integration never imports client-facing DTOs or
+feature controllers. Feature-to-feature dependencies use exported Nest providers; currently
+Campaigns and Webhooks depend on Gateway, while Campaigns also depends on Messages. Public DTOs stay
+centralized so all supported clients generate from one contract rather than module-internal types.
 
 ## Main flows
 

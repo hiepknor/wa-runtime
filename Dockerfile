@@ -16,4 +16,4 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY migrations ./migrations
 USER node
-CMD ["node", "dist/src/main.js"]
+CMD ["node", "dist/src/entrypoints/api.js"]

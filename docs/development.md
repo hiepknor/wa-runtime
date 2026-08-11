@@ -10,6 +10,24 @@
 The local Runtime and OpenWA stacks share the external Docker network `wa-dev-network` while using
 separate PostgreSQL, Redis and volumes.
 
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `src/entrypoints` | Thin API, scheduler and worker process bootstraps. |
+| `src/modules` | Business features grouped by Nest module. |
+| `src/contracts` | Public DTO source used to generate OpenAPI. |
+| `src/core` | Shared auth, config, database, queue and OpenAPI infrastructure. |
+| `src/integrations` | Third-party adapters; currently OpenWA. |
+| `scripts` | Migration, contract-generation and development proxy executables. |
+| `migrations` | Ordered, forward-only PostgreSQL migrations. |
+| `contracts` | Committed generated Runtime and pinned upstream OpenWA specifications. |
+| `infra` | Local development infrastructure definitions. |
+| `test` | Unit tests for policy and normalization boundaries. |
+
+Run `codegraph sync` after moving symbols or files. Use `codegraph explore` before text search when
+locating implementations or evaluating blast radius.
+
 ## Start local OpenWA
 
 From the repository root:
@@ -81,6 +99,7 @@ Then use:
 
 ```bash
 npm ci
+npm run clean
 npm run typecheck
 npm test
 npm run build
