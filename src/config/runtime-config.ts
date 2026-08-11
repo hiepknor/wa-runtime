@@ -20,6 +20,11 @@ const schema = z
     OPENWA_API_KEY: z.string().min(1),
     OPENWA_RELEASE_TAG: z.string().min(1).default('0.15.0'),
     OPENWA_WEBHOOK_SECRET: z.string().min(32),
+    OPENWA_ALLOWED_SESSION_IDS: z
+      .string()
+      .min(1)
+      .transform(value => value.split(',').map(item => item.trim()).filter(Boolean))
+      .pipe(z.array(z.uuid()).min(1)),
     ALLOW_LIVE_SENDS: booleanString,
     OUTBOUND_MIN_DELAY_MS: z.coerce.number().int().min(0).default(3000),
     OUTBOUND_MAX_DELAY_MS: z.coerce.number().int().min(0).default(7000),

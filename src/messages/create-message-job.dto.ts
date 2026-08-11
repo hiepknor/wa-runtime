@@ -2,7 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsBoolean, IsISO8601, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class CreateMessageJobDto {
-  @ApiProperty({ example: 'primary' })
+  @ApiProperty({ example: 'c4984920-cc62-4720-97ca-c46b4f3f9d80', description: 'Must be in the Runtime session allowlist' })
   @IsString()
   @IsNotEmpty()
   sessionId!: string;

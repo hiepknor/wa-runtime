@@ -23,6 +23,7 @@ export class HealthController {
       status: 'ready',
       liveSendsEnabled: runtimeConfig().ALLOW_LIVE_SENDS,
       openwaRelease: runtimeConfig().OPENWA_RELEASE_TAG,
+      allowedSessionCount: runtimeConfig().OPENWA_ALLOWED_SESSION_IDS.length,
     };
   }
 }

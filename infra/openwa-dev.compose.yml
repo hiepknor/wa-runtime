@@ -1,0 +1,155 @@
+name: openwa-dev
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: openwa-dev-postgres
+    restart: unless-stopped
+    env_file: openwa-dev.env
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME}
+      POSTGRES_USER: ${DATABASE_USERNAME}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+    volumes:
+      - openwa-dev-postgres:/var/lib/postgresql/data
+    networks:
+      - wa-dev-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:8-alpine
+    container_name: openwa-dev-redis
+    restart: unless-stopped
+    env_file: openwa-dev.env
+    command: ["sh", "-c", "exec redis-server --appendonly yes --maxmemory-policy noeviction --requirepass \"$$REDIS_PASSWORD\""]
+    volumes:
+      - openwa-dev-redis:/data
+    networks:
+      - wa-dev-network
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: openwa-dev-minio
+    restart: unless-stopped
+    env_file: openwa-dev.env
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY}
+    command: server /data --console-address ":9001"
+    volumes:
+      - openwa-dev-minio:/data
+    networks:
+      - wa-dev-network
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+
+  openwa-dev-api:
+    image: ${OPENWA_IMAGE}
+    container_name: openwa-dev-api
+    restart: unless-stopped
+    stop_grace_period: 45s
+    env_file: openwa-dev.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 2785
+      HOME: /tmp
+      XDG_CONFIG_HOME: /tmp/.config
+      XDG_CACHE_HOME: /tmp/.cache
+      LOG_LEVEL: info
+      API_MASTER_KEY: ${API_MASTER_KEY}
+      ENABLE_SWAGGER: "true"
+      SERVE_DASHBOARD: "true"
+      CORS_ORIGINS: http://localhost:2785,http://localhost:3100
+      ENGINE_TYPE: baileys
+      AUTO_START_SESSIONS: "true"
+      NODE_ID: ${OPENWA_DEV_NODE_ID}
+      DATABASE_TYPE: postgres
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${DATABASE_NAME}
+      DATABASE_USERNAME: ${DATABASE_USERNAME}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      DATABASE_SYNCHRONIZE: "false"
+      MAIN_DATABASE_NAME: /app/data/main.sqlite
+      MAIN_DATABASE_SYNCHRONIZE: "true"
+      REDIS_ENABLED: "true"
+      QUEUE_ENABLED: "true"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      STORAGE_TYPE: s3
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+      S3_REGION: us-east-1
+      S3_BUCKET: openwa-dev
+      BAILEYS_MARK_ONLINE_ON_CONNECT: "false"
+      BAILEYS_SYNC_FULL_HISTORY: "false"
+      SEND_PACING_ENABLED: "true"
+      WEBHOOK_SSRF_PROTECT: "true"
+      SSRF_ALLOWED_HOSTS: automation-api
+    volumes:
+      - openwa-dev-data:/app/data
+    tmpfs:
+      - /tmp
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    networks:
+      wa-dev-network:
+        aliases:
+          - openwa-dev-api
+    ports:
+      - "127.0.0.1:${OPENWA_DEV_API_PORT}:2785"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:2785/api/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+volumes:
+  openwa-dev-data:
+  openwa-dev-postgres:
+  openwa-dev-redis:
+  openwa-dev-minio:
+
+networks:
+  wa-dev-network:
+    name: wa-dev-network

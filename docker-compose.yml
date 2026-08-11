@@ -11,6 +11,7 @@ x-runtime: &runtime
       condition: service_healthy
   networks:
     - automation-internal
+    - wa-dev-network
 
 services:
   postgres:
@@ -56,6 +57,11 @@ services:
   api:
     <<: *runtime
     command: ["node", "dist/src/main.js"]
+    networks:
+      automation-internal:
+      wa-dev-network:
+        aliases:
+          - automation-api
     ports:
       - "127.0.0.1:3100:3100"
     depends_on:
@@ -95,3 +101,6 @@ volumes:
 networks:
   automation-internal:
     driver: bridge
+  wa-dev-network:
+    external: true
+    name: wa-dev-network
