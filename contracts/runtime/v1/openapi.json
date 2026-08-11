@@ -865,6 +865,114 @@
         ]
       }
     },
+    "/api/v1/campaign-runs/{id}/pause": {
+      "post": {
+        "operationId": "CampaignRunController_pause",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignRunDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "runtime-key": []
+          }
+        ],
+        "summary": "Pause new delivery materialization for a campaign run",
+        "tags": [
+          "campaign-runs"
+        ]
+      }
+    },
+    "/api/v1/campaign-runs/{id}/resume": {
+      "post": {
+        "operationId": "CampaignRunController_resume",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignRunDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "runtime-key": []
+          }
+        ],
+        "summary": "Re-run preflight and resume a paused or blocked campaign run",
+        "tags": [
+          "campaign-runs"
+        ]
+      }
+    },
+    "/api/v1/campaign-runs/{id}/cancel": {
+      "post": {
+        "operationId": "CampaignRunController_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignRunDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "runtime-key": []
+          }
+        ],
+        "summary": "Cancel pending work for a campaign run",
+        "tags": [
+          "campaign-runs"
+        ]
+      }
+    },
     "/api/v1/message-jobs": {
       "post": {
         "operationId": "MessageJobController_create",
@@ -1085,6 +1193,11 @@
             "type": "string",
             "nullable": true
           },
+          "restriction": {
+            "type": "object",
+            "additionalProperties": true,
+            "nullable": true
+          },
           "gatewayCreatedAt": {
             "format": "date-time",
             "type": "string"
@@ -1108,6 +1221,7 @@
           "lastActiveAt",
           "engineLoaded",
           "lastError",
+          "restriction",
           "gatewayCreatedAt",
           "gatewayUpdatedAt",
           "syncedAt"
@@ -1819,6 +1933,65 @@
           "executionMode"
         ]
       },
+      "CampaignRunProgressDto": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "pending": {
+            "type": "number"
+          },
+          "materialized": {
+            "type": "number"
+          },
+          "processing": {
+            "type": "number"
+          },
+          "dryRunCompleted": {
+            "type": "number"
+          },
+          "accepted": {
+            "type": "number"
+          },
+          "sent": {
+            "type": "number"
+          },
+          "delivered": {
+            "type": "number"
+          },
+          "read": {
+            "type": "number"
+          },
+          "failed": {
+            "type": "number"
+          },
+          "unknown": {
+            "type": "number"
+          },
+          "blocked": {
+            "type": "number"
+          },
+          "cancelled": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "total",
+          "pending",
+          "materialized",
+          "processing",
+          "dryRunCompleted",
+          "accepted",
+          "sent",
+          "delivered",
+          "read",
+          "failed",
+          "unknown",
+          "blocked",
+          "cancelled"
+        ]
+      },
       "CampaignRunDto": {
         "type": "object",
         "properties": {
@@ -1855,6 +2028,10 @@
               "FAILED"
             ]
           },
+          "statusReason": {
+            "type": "string",
+            "nullable": true
+          },
           "text": {
             "type": "string"
           },
@@ -1869,6 +2046,9 @@
           },
           "totalTargets": {
             "type": "number"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/CampaignRunProgressDto"
           },
           "scheduledAt": {
             "format": "date-time",
@@ -1895,9 +2075,11 @@
           "sessionId",
           "executionMode",
           "status",
+          "statusReason",
           "text",
           "preflight",
           "totalTargets",
+          "progress",
           "scheduledAt",
           "startedAt",
           "completedAt",

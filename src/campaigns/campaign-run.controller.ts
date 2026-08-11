@@ -1,4 +1,4 @@
-import { Controller, Get, Param, ParseUUIDPipe, Query } from '@nestjs/common';
+import { Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { CampaignDeliveryListDto } from '../contracts/campaigns/campaign-delivery.dto';
 import { CampaignRunDto } from '../contracts/campaigns/campaign-run.dto';
@@ -22,4 +22,19 @@ export class CampaignRunController {
   deliveries(@Param('id', ParseUUIDPipe) id: string, @Query() query: PaginationQueryDto) {
     return this.runs.deliveries(id, query.limit, query.offset);
   }
+
+  @Post(':id/pause')
+  @ApiOperation({ summary: 'Pause new delivery materialization for a campaign run' })
+  @ApiOkResponse({ type: CampaignRunDto })
+  pause(@Param('id', ParseUUIDPipe) id: string) { return this.runs.pause(id); }
+
+  @Post(':id/resume')
+  @ApiOperation({ summary: 'Re-run preflight and resume a paused or blocked campaign run' })
+  @ApiOkResponse({ type: CampaignRunDto })
+  resume(@Param('id', ParseUUIDPipe) id: string) { return this.runs.resume(id); }
+
+  @Post(':id/cancel')
+  @ApiOperation({ summary: 'Cancel pending work for a campaign run' })
+  @ApiOkResponse({ type: CampaignRunDto })
+  cancel(@Param('id', ParseUUIDPipe) id: string) { return this.runs.cancel(id); }
 }

@@ -9,6 +9,22 @@ export class CreateCampaignRunDto {
   executionMode!: CampaignExecutionMode;
 }
 
+export class CampaignRunProgressDto {
+  @ApiProperty() total!: number;
+  @ApiProperty() pending!: number;
+  @ApiProperty() materialized!: number;
+  @ApiProperty() processing!: number;
+  @ApiProperty() dryRunCompleted!: number;
+  @ApiProperty() accepted!: number;
+  @ApiProperty() sent!: number;
+  @ApiProperty() delivered!: number;
+  @ApiProperty() read!: number;
+  @ApiProperty() failed!: number;
+  @ApiProperty() unknown!: number;
+  @ApiProperty() blocked!: number;
+  @ApiProperty() cancelled!: number;
+}
+
 export class CampaignRunDto {
   @ApiProperty({ format: 'uuid' })
   id!: string;
@@ -25,6 +41,9 @@ export class CampaignRunDto {
   @ApiProperty({ enum: ['PREPARING', 'BLOCKED', 'SCHEDULED', 'RUNNING', 'PAUSED', 'COMPLETED', 'PARTIAL_FAILED', 'CANCELLED', 'FAILED'] })
   status!: string;
 
+  @ApiProperty({ type: String, nullable: true })
+  statusReason!: string | null;
+
   @ApiProperty()
   text!: string;
 
@@ -33,6 +52,9 @@ export class CampaignRunDto {
 
   @ApiProperty()
   totalTargets!: number;
+
+  @ApiProperty({ type: CampaignRunProgressDto })
+  progress!: CampaignRunProgressDto;
 
   @ApiProperty({ format: 'date-time' })
   scheduledAt!: Date;

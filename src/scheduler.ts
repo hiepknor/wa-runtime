@@ -85,6 +85,8 @@ async function bootstrap(): Promise<void> {
       }
     }
     await campaignRuns.activateDueRuns();
+    await campaignRuns.reconcileDeliveries();
+    await campaignRuns.finalizeRuns(BATCH_SIZE);
     const runningRunIds = await campaignRuns.listRunningIds(BATCH_SIZE);
     for (const runId of runningRunIds) {
       try {

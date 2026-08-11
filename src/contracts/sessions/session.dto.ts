@@ -28,6 +28,9 @@ export class SessionDto {
   @ApiProperty({ type: String, nullable: true })
   lastError!: string | null;
 
+  @ApiProperty({ type: 'object', additionalProperties: true, nullable: true })
+  restriction!: Record<string, unknown> | null;
+
   @ApiProperty({ format: 'date-time' })
   gatewayCreatedAt!: Date;
 

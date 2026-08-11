@@ -17,6 +17,7 @@ interface SessionRow {
   last_active_at: Date | null;
   engine_loaded: boolean;
   last_error: string | null;
+  restriction: Record<string, unknown> | null;
   gateway_created_at: Date;
   gateway_updated_at: Date;
   synced_at: Date;
@@ -75,6 +76,7 @@ const mapSession = (row: SessionRow): SessionDto => ({
   lastActiveAt: row.last_active_at,
   engineLoaded: row.engine_loaded,
   lastError: row.last_error,
+  restriction: row.restriction,
   gatewayCreatedAt: row.gateway_created_at,
   gatewayUpdatedAt: row.gateway_updated_at,
   syncedAt: row.synced_at,
@@ -133,18 +135,20 @@ export class GatewayRepository {
     const result = await this.database.query<SessionRow>(
       `INSERT INTO gateway_sessions
          (id, name, status, phone, push_name, connected_at, last_active_at, engine_loaded,
-          last_error, gateway_created_at, gateway_updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         last_error, restriction, gateway_created_at, gateway_updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12)
        ON CONFLICT (id) DO UPDATE SET
          name = EXCLUDED.name, status = EXCLUDED.status, phone = EXCLUDED.phone,
          push_name = EXCLUDED.push_name, connected_at = EXCLUDED.connected_at,
          last_active_at = EXCLUDED.last_active_at, engine_loaded = EXCLUDED.engine_loaded,
-         last_error = EXCLUDED.last_error, gateway_updated_at = EXCLUDED.gateway_updated_at,
+         last_error = EXCLUDED.last_error, restriction = EXCLUDED.restriction,
+         gateway_updated_at = EXCLUDED.gateway_updated_at,
          synced_at = now(), updated_at = now()
        RETURNING *`,
       [session.id, session.name, session.status, session.phone ?? null, session.pushName ?? null,
         session.connectedAt ?? null, session.lastActive ?? null, session.engineLoaded,
-        session.lastError ?? null, session.createdAt, session.updatedAt],
+        session.lastError ?? null, session.restriction == null ? null : JSON.stringify(session.restriction),
+        session.createdAt, session.updatedAt],
     );
     return mapSession(result.rows[0]!);
   }
@@ -159,6 +163,14 @@ export class GatewayRepository {
   async findSession(id: string): Promise<SessionDto | null> {
     const result = await this.database.query<SessionRow>('SELECT * FROM gateway_sessions WHERE id = $1', [id]);
     return result.rows[0] ? mapSession(result.rows[0]) : null;
+  }
+
+  async isSessionSendable(id: string): Promise<boolean> {
+    const result = await this.database.query<{ sendable: boolean }>(
+      `SELECT status = 'ready' AND engine_loaded = true AND restriction IS NULL AS sendable
+       FROM gateway_sessions WHERE id = $1`, [id],
+    );
+    return result.rows[0]?.sendable === true;
   }
 
   async replaceGroupSummaries(sessionId: string, groups: OpenWAGroupSummary[]): Promise<void> {

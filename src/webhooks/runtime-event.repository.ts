@@ -51,6 +51,16 @@ export class RuntimeEventRepository {
         );
       }
 
+      if (event.eventType === 'session.restriction.changed') {
+        invalidateSessionCache = true;
+        const restriction = event.payload.active === true ? event.payload : null;
+        await client.query(
+          `UPDATE gateway_sessions SET restriction = $2::jsonb, gateway_updated_at = GREATEST(gateway_updated_at, $3),
+             synced_at = now(), updated_at = now() WHERE id = $1`,
+          [event.sessionId, restriction === null ? null : JSON.stringify(restriction), event.occurredAt],
+        );
+      }
+
 
       if (['group.join', 'group.leave', 'group.update'].includes(event.eventType) && event.payload.groupId) {
         await client.query(

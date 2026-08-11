@@ -8,6 +8,7 @@ export type GroupSendCapabilityReason =
   | 'ADMIN_STATUS_UNKNOWN'
   | 'METADATA_INCOMPLETE'
   | 'GROUP_CHANGED'
+  | 'GATEWAY_PERMISSION_DENIED'
   | 'MANUAL_REFRESH'
   | 'REFRESH_FAILED';
 

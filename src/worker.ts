@@ -7,6 +7,7 @@ import { CampaignRunService } from './campaigns/campaign-run.service';
 import { runtimeConfig } from './config/runtime-config';
 import { DatabaseService } from './database/database.service';
 import { GatewaySyncService } from './gateway/gateway-sync.service';
+import { GatewayRepository } from './gateway/gateway.repository';
 import type { FullGatewaySyncPayload, GroupCapabilityRefreshPayload } from './gateway/gateway-sync.types';
 import { MessageJobRepository } from './messages/message-job.repository';
 import type { MessageSendQueuePayload, MessageJobStatus } from './messages/message-job.types';
@@ -35,6 +36,7 @@ async function bootstrap(): Promise<void> {
   const runtimeEvents = app.get(RuntimeEventRepository);
   const openwa = app.get(OpenWAClient);
   const gatewaySync = app.get(GatewaySyncService);
+  const gateway = app.get(GatewayRepository);
   const campaignRuns = app.get(CampaignRunService);
   const connection = new IORedis(config.REDIS_URL, { maxRetriesPerRequest: null });
 
@@ -57,6 +59,12 @@ async function bootstrap(): Promise<void> {
         throw new Error(error);
       }
 
+      if (!await gateway.isSessionSendable(job.sessionId)) {
+        const error = 'Live send blocked: gateway session is not sendable';
+        await database.transaction(client => messages.updateResult(client, job.id, 'FAILED', { error }));
+        throw new Error(error);
+      }
+
       await new Promise(resolve =>
         setTimeout(resolve, randomDelay(config.OUTBOUND_MIN_DELAY_MS, config.OUTBOUND_MAX_DELAY_MS)),
       );
@@ -74,6 +82,13 @@ async function bootstrap(): Promise<void> {
         const status: MessageJobStatus = error instanceof OpenWAHttpError ? 'FAILED' : 'UNKNOWN';
         const description = error instanceof Error ? error.message : String(error);
         await database.transaction(client => messages.updateResult(client, job.id, status, { error: description }));
+        if (error instanceof OpenWAHttpError && job.recipientId.endsWith('@g.us')) {
+          if (error.status === 403) {
+            await gateway.invalidateGroupCapability(job.sessionId, job.recipientId, 'GATEWAY_PERMISSION_DENIED');
+          } else if (error.status === 404) {
+            await gateway.invalidateGroupCapability(job.sessionId, job.recipientId, 'GROUP_CHANGED');
+          }
+        }
         throw error;
       }
     },

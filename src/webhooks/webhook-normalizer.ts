@@ -66,6 +66,19 @@ export function normalizeOpenWAWebhook(envelope: OpenWAWebhookEnvelope): Runtime
     return { ...base, eventType: 'session.status.changed', payload: { status: text(envelope.data.status) || 'unknown' } };
   }
 
+  if (envelope.event === 'session.restriction') {
+    return {
+      ...base,
+      eventType: 'session.restriction.changed',
+      payload: {
+        active: envelope.data.active === true,
+        kind: text(envelope.data.kind) || null,
+        code: text(envelope.data.code) || null,
+        expiresAt: text(envelope.data.expiresAt) || null,
+      },
+    };
+  }
+
   if (['group.join', 'group.leave', 'group.update'].includes(envelope.event)) {
     return {
       ...base,

@@ -35,6 +35,25 @@ describe('normalizeOpenWAWebhook', () => {
     expect(event).toMatchObject({ eventType: 'session.status.changed', eventVersion: 1, payload: { status: 'ready' } });
   });
 
+  it('normalizes account restrictions and lifts', () => {
+    const restricted = normalizeOpenWAWebhook({
+      event: 'session.restriction', timestamp: '2026-08-11T05:00:00.000Z', sessionId: 'session-1',
+      idempotencyKey: 'restriction-1', deliveryId: 'delivery-1',
+      data: { active: true, kind: 'reachout_timelock', code: 'BIZ_QUALITY', expiresAt: '2026-08-12T05:00:00.000Z' },
+    });
+    const lifted = normalizeOpenWAWebhook({
+      event: 'session.restriction', timestamp: '2026-08-11T06:00:00.000Z', sessionId: 'session-1',
+      idempotencyKey: 'restriction-2', deliveryId: 'delivery-2',
+      data: { active: false, kind: 'reachout_timelock', code: 'BIZ_QUALITY', expiresAt: null },
+    });
+
+    expect(restricted).toMatchObject({
+      eventType: 'session.restriction.changed',
+      payload: { active: true, kind: 'reachout_timelock', code: 'BIZ_QUALITY' },
+    });
+    expect(lifted).toMatchObject({ eventType: 'session.restriction.changed', payload: { active: false } });
+  });
+
   it('keeps only capability-relevant group event fields', () => {
     const event = normalizeOpenWAWebhook({
       event: 'group.update', timestamp: '2026-08-11T05:00:00.000Z', sessionId: 'session-1',
