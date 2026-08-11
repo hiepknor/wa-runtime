@@ -22,7 +22,6 @@ separate PostgreSQL, Redis and volumes.
 | `scripts` | Migration, contract-generation and development proxy executables. |
 | `migrations` | Ordered, forward-only PostgreSQL migrations. |
 | `contracts` | Committed generated Runtime and pinned upstream OpenWA specifications. |
-| `infra` | Local development infrastructure definitions. |
 | `test` | Unit tests for policy and normalization boundaries. |
 
 Run `codegraph sync` after moving symbols or files. Use `codegraph explore` before text search when
@@ -30,18 +29,15 @@ locating implementations or evaluating blast radius.
 
 ## Start local OpenWA
 
-From the repository root:
+OpenWA is an independent Gateway and owns its own Compose files, PostgreSQL, Redis, MinIO, session
+storage and environment configuration. Start the development Gateway from the OpenWA repository,
+not from this repository. Its deployment must provide:
 
-```bash
-cd infra
-cp openwa-dev.env.example openwa-dev.env
-```
-
-Replace every placeholder in `openwa-dev.env`, then start OpenWA:
-
-```bash
-docker compose --env-file openwa-dev.env -f openwa-dev.compose.yml up -d
-```
+- Docker network `wa-dev-network`;
+- service alias `openwa-dev-api` on that network;
+- API port `2785` inside the network;
+- Baileys engine and the pinned release expected by `OPENWA_RELEASE_TAG`;
+- a session-scoped operator key and matching webhook secret for this Runtime.
 
 Local OpenWA endpoints:
 
@@ -50,7 +46,9 @@ Local OpenWA endpoints:
 - MinIO console: <http://localhost:9001>.
 
 Pair only the development session. The VPS `prod-session`, its API key and its session files must
-not be copied into this environment.
+not be copied into this environment. OpenWA infrastructure changes and upgrades belong in the
+OpenWA repository; Automation Runtime stores only its reviewed upstream contract snapshot and
+adapter.
 
 ## Configure and start the Runtime
 

@@ -7,5 +7,5 @@ coverage/
 *.log
 .DS_Store
 volumes/
-infra/*.env
-!infra/*.env.example
+# Legacy local OpenWA config retained temporarily during migration to the OpenWA repository.
+infra/openwa-dev.env

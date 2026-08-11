@@ -41,7 +41,7 @@ data-flow details.
 ## Quick start with Docker
 
 Prerequisites: Docker with Compose. Node.js 22+ is needed only for running checks or processes
-outside Docker. Start the local OpenWA stack first so the shared `wa-dev-network` and
+outside Docker. Start OpenWA from its own repository first so the shared `wa-dev-network` and
 `openwa-dev-api` service exist; see [Development](docs/development.md).
 
 ```bash
