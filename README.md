@@ -110,7 +110,7 @@ both session IDs in one deployment's allowlist.
 | Environment | OpenWA session | Runtime data | Live sends |
 | --- | --- | --- | --- |
 | Local/development | local `dev-session` (`35b45e89-3647-45bd-b756-3df53523f431`) | local PostgreSQL and Redis | always off initially |
-| Production | `prod-session` (`ae69dc9f-d8a1-474c-8981-5ac201a675a0`) | production PostgreSQL and Redis | enabled only after staging approval |
+| Production | VPS `prod-session` (resolve its UUID during deployment) | production PostgreSQL and Redis | enabled only after staging approval |
 
 Each environment must have its own session-scoped OpenWA Operator key and webhook secret. The
 production deployment must start with `ALLOW_LIVE_SENDS=false`; enabling it is a separate, audited
