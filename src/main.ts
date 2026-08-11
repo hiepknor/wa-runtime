@@ -3,8 +3,8 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
-import { runtimeConfig } from './config/runtime-config';
-import { createOpenApiDocument } from './openapi';
+import { runtimeConfig } from './core/config/runtime-config';
+import { createOpenApiDocument } from './core/openapi';
 
 async function bootstrap(): Promise<void> {
   const config = runtimeConfig();

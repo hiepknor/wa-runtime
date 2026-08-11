@@ -1,10 +1,10 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { CampaignRunRepository } from './campaigns/campaign-run.repository';
-import { GatewayRepository } from './gateway/gateway.repository';
-import { MessageJobRepository } from './messages/message-job.repository';
-import { QueueService } from './queue/queue.service';
+import { CampaignRunRepository } from './modules/campaigns/campaign-run.repository';
+import { GatewayRepository } from './modules/gateway/gateway.repository';
+import { MessageJobRepository } from './modules/messages/message-job.repository';
+import { QueueService } from './core/queue/queue.service';
 
 const POLL_INTERVAL_MS = 1_000;
 const BATCH_SIZE = 100;

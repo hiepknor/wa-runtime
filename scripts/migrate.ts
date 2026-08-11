@@ -1,7 +1,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Pool } from 'pg';
-import { runtimeConfig } from '../src/config/runtime-config';
+import { runtimeConfig } from '../src/core/config/runtime-config';
 
 async function main(): Promise<void> {
   const pool = new Pool({ connectionString: runtimeConfig().DATABASE_URL, max: 1 });

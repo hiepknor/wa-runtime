@@ -2186,7 +2186,7 @@
           },
           "text": {
             "type": "string",
-            "example": "Hello from WA Studio",
+            "example": "Hello from Automation Runtime",
             "maxLength": 4096
           },
           "scheduledAt": {

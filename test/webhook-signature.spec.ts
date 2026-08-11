@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { verifyOpenWASignature } from '../src/webhooks/webhook-signature';
+import { verifyOpenWASignature } from '../src/modules/webhooks/webhook-signature';
 
 describe('verifyOpenWASignature', () => {
   it('accepts the HMAC over the exact raw body', () => {

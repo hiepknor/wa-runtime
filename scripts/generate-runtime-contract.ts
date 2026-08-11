@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../src/app.module';
-import { createOpenApiDocument } from '../src/openapi';
+import { createOpenApiDocument } from '../src/core/openapi';
 
 async function main(): Promise<void> {
   const app = await NestFactory.create(AppModule, { logger: false });

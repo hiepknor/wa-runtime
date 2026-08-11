@@ -1,0 +1,96 @@
+import { Body, Controller, Get, Headers, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res } from '@nestjs/common';
+import { ApiCreatedResponse, ApiHeader, ApiOkResponse, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
+import { PaginationQueryDto } from '../../contracts/common/pagination.dto';
+import { CampaignDto, CampaignListDto } from '../../contracts/campaigns/campaign.dto';
+import { CampaignQueryDto } from '../../contracts/campaigns/campaign-query.dto';
+import { CampaignPreflightDto, CampaignPreflightRequestDto } from '../../contracts/campaigns/campaign-preflight.dto';
+import { CampaignTargetListDto, ReplaceCampaignTargetsDto } from '../../contracts/campaigns/campaign-target.dto';
+import { CreateCampaignDto } from '../../contracts/campaigns/create-campaign.dto';
+import { UpdateCampaignDto } from '../../contracts/campaigns/update-campaign.dto';
+import { CampaignRunDto, CampaignRunListDto, CreateCampaignRunDto } from '../../contracts/campaigns/campaign-run.dto';
+import { CampaignRunService } from './campaign-run.service';
+import { CampaignService } from './campaign.service';
+
+@ApiTags('campaigns')
+@ApiSecurity('runtime-key')
+@Controller('campaigns')
+export class CampaignController {
+  constructor(
+    private readonly campaigns: CampaignService,
+    private readonly runs: CampaignRunService,
+  ) {}
+
+  @Post()
+  @ApiOperation({ summary: 'Create a text campaign draft' })
+  @ApiCreatedResponse({ type: CampaignDto })
+  create(@Body() dto: CreateCampaignDto) { return this.campaigns.create(dto); }
+
+  @Get()
+  @ApiOperation({ summary: 'List campaigns for allowlisted sessions' })
+  @ApiOkResponse({ type: CampaignListDto })
+  list(@Query() query: CampaignQueryDto) { return this.campaigns.list(query); }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Read a campaign' })
+  @ApiOkResponse({ type: CampaignDto })
+  get(@Param('id', ParseUUIDPipe) id: string) { return this.campaigns.get(id); }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Update an editable campaign draft' })
+  @ApiOkResponse({ type: CampaignDto })
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateCampaignDto) {
+    return this.campaigns.update(id, dto);
+  }
+
+  @Get(':id/targets')
+  @ApiOperation({ summary: 'List selected group targets with current capability' })
+  @ApiOkResponse({ type: CampaignTargetListDto })
+  listTargets(@Param('id', ParseUUIDPipe) id: string) { return this.campaigns.listTargets(id); }
+
+  @Put(':id/targets')
+  @ApiOperation({ summary: 'Atomically replace all group targets of a campaign draft' })
+  @ApiOkResponse({ type: CampaignTargetListDto })
+  replaceTargets(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReplaceCampaignTargetsDto,
+  ) {
+    return this.campaigns.replaceTargets(id, dto.groupIds);
+  }
+
+  @Post(':id/preflight')
+  @ApiOperation({ summary: 'Evaluate a campaign without creating a run' })
+  @ApiOkResponse({ type: CampaignPreflightDto })
+  preflight(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CampaignPreflightRequestDto,
+  ) {
+    return this.campaigns.preflight(id, dto);
+  }
+
+  @Post(':id/runs')
+  @ApiOperation({ summary: 'Create an idempotent durable campaign run' })
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
+  @ApiCreatedResponse({ type: CampaignRunDto })
+  async createRun(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Body() dto: CreateCampaignRunDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    if (!idempotencyKey?.trim()) {
+      response.status(400);
+      return { statusCode: 400, message: 'Idempotency-Key header is required' };
+    }
+    const result = await this.runs.create(id, idempotencyKey.trim(), dto.executionMode);
+    response.status(result.created ? 201 : 200);
+    return result.run;
+  }
+
+  @Get(':id/runs')
+  @ApiOperation({ summary: 'List runs of a campaign' })
+  @ApiOkResponse({ type: CampaignRunListDto })
+  listRuns(@Param('id', ParseUUIDPipe) id: string, @Query() query: PaginationQueryDto) {
+    return this.runs.list(id, query.limit, query.offset);
+  }
+}

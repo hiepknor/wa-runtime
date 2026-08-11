@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeOpenWAWebhook } from '../src/webhooks/webhook-normalizer';
+import { normalizeOpenWAWebhook } from '../src/modules/webhooks/webhook-normalizer';
 
 describe('normalizeOpenWAWebhook', () => {
   it('normalizes an inbound group message without exposing the upstream payload', () => {

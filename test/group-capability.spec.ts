@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateGroupCapability } from '../src/gateway/group-capability';
+import { evaluateGroupCapability } from '../src/modules/gateway/group-capability';
 
 describe('evaluateGroupCapability', () => {
   it.each([
