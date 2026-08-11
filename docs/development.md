@@ -1,0 +1,165 @@
+# Development
+
+## Prerequisites
+
+- Docker Desktop or Docker Engine with Compose;
+- Node.js 22+ and npm for host-side checks;
+- a paired local OpenWA `dev-session`;
+- no production credentials on the development machine.
+
+The local Runtime and OpenWA stacks share the external Docker network `wa-dev-network` while using
+separate PostgreSQL, Redis and volumes.
+
+## Start local OpenWA
+
+From the repository root:
+
+```bash
+cd infra
+cp openwa-dev.env.example openwa-dev.env
+```
+
+Replace every placeholder in `openwa-dev.env`, then start OpenWA:
+
+```bash
+docker compose --env-file openwa-dev.env -f openwa-dev.compose.yml up -d
+```
+
+Local OpenWA endpoints:
+
+- dashboard and Swagger: <http://localhost:2785>;
+- MinIO API: <http://localhost:9000>;
+- MinIO console: <http://localhost:9001>.
+
+Pair only the development session. The VPS `prod-session`, its API key and its session files must
+not be copied into this environment.
+
+## Configure and start the Runtime
+
+Return to the repository root and create the ignored environment file:
+
+```bash
+cp .env.example .env
+```
+
+Required choices:
+
+- generate independent values of at least 32 characters for `RUNTIME_API_KEY` and
+  `OPENWA_WEBHOOK_SECRET`;
+- set `OPENWA_API_KEY` to a session-scoped local OpenWA operator key;
+- set `OPENWA_ALLOWED_SESSION_IDS` to the UUID of `dev-session` only;
+- keep `ALLOW_LIVE_SENDS=false`;
+- keep `OPENWA_RELEASE_TAG` equal to the reviewed local OpenWA image tag.
+
+The checked-in Compose file consumes `.env` inside containers, so its service hostnames are
+`postgres`, `redis` and `openwa-dev-api`.
+
+```bash
+docker compose up --build -d
+docker compose ps
+docker compose logs --tail=100 migrate api worker scheduler
+```
+
+Migration files are applied in filename order and recorded in `schema_migrations`. Never edit a
+migration that has already been applied; add the next numbered migration.
+
+## Host-side npm commands
+
+When Node runs on the host rather than in Docker, override container DNS names after loading `.env`:
+
+```bash
+set -a
+source .env
+set +a
+
+export DATABASE_URL=postgresql://automation:automation@localhost:5433/automation_runtime
+export REDIS_URL=redis://localhost:6380
+export OPENWA_BASE_URL=http://localhost:2785
+```
+
+Then use:
+
+```bash
+npm ci
+npm run typecheck
+npm test
+npm run build
+npm run check
+```
+
+The development entry points are available when individual host processes are useful:
+
+```bash
+npm run dev:api
+npm run dev:worker
+npm run dev:scheduler
+```
+
+Do not run host and Docker schedulers/workers simultaneously against the same database unless the
+test explicitly targets multi-process concurrency.
+
+## Contract workflow
+
+Public DTOs live under `src/contracts`. After a DTO or controller change:
+
+```bash
+npm run contract:generate
+git diff -- contracts/runtime/v1/openapi.json
+npm run contract:check
+```
+
+Commit the DTO/controller change and generated OpenAPI file together. Never hand-edit the generated
+JSON. A reviewer should inspect semantic changes to paths, required fields, enums and response
+schemas rather than accepting a large generated diff blindly.
+
+## Safe development scenario
+
+Use Swagger or an API client with `X-Runtime-Key` to perform this sequence:
+
+1. `POST /sessions/{sessionId}/sync` and poll its sync run;
+2. list groups and refresh any unknown capability;
+3. create a campaign and select a small set of test groups;
+4. call preflight with `DRY_RUN`;
+5. create a dry-run with a unique `Idempotency-Key`;
+6. inspect run progress and delivery rows;
+7. repeat the same key to verify idempotency;
+8. test scheduled pause/resume and cancel.
+
+Dry-run message jobs finish as `DRY_RUN_COMPLETED` before the OpenWA send call and therefore cannot
+send a WhatsApp message.
+
+## Webhook development
+
+Within Docker, OpenWA posts directly to:
+
+```text
+http://automation-api:3100/api/v1/webhooks/openwa
+```
+
+Both services must use the same webhook secret. If a temporary public callback is needed, expose
+only the webhook proxy route:
+
+```bash
+npm run dev:webhook-proxy
+cloudflared tunnel --url http://127.0.0.1:3101
+```
+
+Never expose PostgreSQL, Redis, MinIO or the Runtime API through that tunnel.
+
+## Reset and shutdown
+
+Stop services while keeping data:
+
+```bash
+docker compose down
+```
+
+Deleting volumes permanently removes local Runtime PostgreSQL and Redis data:
+
+```bash
+docker compose down -v
+```
+
+Use the second command only for an intentional clean-room reset. OpenWA uses a different Compose
+project and different volumes; reset it separately only when the paired development session may be
+destroyed.
