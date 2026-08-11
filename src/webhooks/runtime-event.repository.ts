@@ -1,12 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
+import { SessionStateCacheService } from '../campaigns/session-state-cache.service';
 import type { RuntimeEvent } from './webhook-normalizer';
 
 @Injectable()
 export class RuntimeEventRepository {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly sessionStates: SessionStateCacheService,
+  ) {}
 
   async store(event: RuntimeEvent): Promise<void> {
+    let invalidateSessionCache = false;
     await this.database.transaction(async client => {
       const inserted = await client.query(
         `INSERT INTO runtime_events
@@ -38,6 +43,7 @@ export class RuntimeEventRepository {
       }
 
       if (event.eventType === 'session.status.changed') {
+        invalidateSessionCache = true;
         await client.query(
           `UPDATE gateway_sessions SET status = $2, gateway_updated_at = GREATEST(gateway_updated_at, $3),
              synced_at = now(), updated_at = now() WHERE id = $1`,
@@ -56,5 +62,6 @@ export class RuntimeEventRepository {
         );
       }
     });
+    if (invalidateSessionCache) await this.sessionStates.invalidate(event.sessionId);
   }
 }

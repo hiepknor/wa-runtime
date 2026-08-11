@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Put, Query } 
 import { ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { CampaignDto, CampaignListDto } from '../contracts/campaigns/campaign.dto';
 import { CampaignQueryDto } from '../contracts/campaigns/campaign-query.dto';
+import { CampaignPreflightDto, CampaignPreflightRequestDto } from '../contracts/campaigns/campaign-preflight.dto';
 import { CampaignTargetListDto, ReplaceCampaignTargetsDto } from '../contracts/campaigns/campaign-target.dto';
 import { CreateCampaignDto } from '../contracts/campaigns/create-campaign.dto';
 import { UpdateCampaignDto } from '../contracts/campaigns/update-campaign.dto';
@@ -48,5 +49,15 @@ export class CampaignController {
     @Body() dto: ReplaceCampaignTargetsDto,
   ) {
     return this.campaigns.replaceTargets(id, dto.groupIds);
+  }
+
+  @Post(':id/preflight')
+  @ApiOperation({ summary: 'Evaluate a campaign without creating a run' })
+  @ApiOkResponse({ type: CampaignPreflightDto })
+  preflight(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CampaignPreflightRequestDto,
+  ) {
+    return this.campaigns.preflight(id, dto);
   }
 }

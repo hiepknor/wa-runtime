@@ -617,6 +617,52 @@
         ]
       }
     },
+    "/api/v1/campaigns/{id}/preflight": {
+      "post": {
+        "operationId": "CampaignController_preflight",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignPreflightRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignPreflightDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "runtime-key": []
+          }
+        ],
+        "summary": "Evaluate a campaign without creating a run",
+        "tags": [
+          "campaigns"
+        ]
+      }
+    },
     "/api/v1/health/live": {
       "get": {
         "operationId": "HealthController_live",
@@ -1422,6 +1468,137 @@
         },
         "required": [
           "groupIds"
+        ]
+      },
+      "CampaignPreflightRequestDto": {
+        "type": "object",
+        "properties": {
+          "executionMode": {
+            "type": "string",
+            "enum": [
+              "DRY_RUN",
+              "LIVE"
+            ],
+            "default": "DRY_RUN"
+          }
+        },
+        "required": [
+          "executionMode"
+        ]
+      },
+      "CampaignPreflightCheckDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PASS",
+              "WARN",
+              "BLOCK"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "status",
+          "message"
+        ]
+      },
+      "CampaignTargetIssueDto": {
+        "type": "object",
+        "properties": {
+          "groupId": {
+            "type": "string"
+          },
+          "groupName": {
+            "type": "string"
+          },
+          "capability": {
+            "type": "string",
+            "enum": [
+              "ALLOWED",
+              "DENIED",
+              "UNKNOWN"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "groupId",
+          "groupName",
+          "capability",
+          "reason"
+        ]
+      },
+      "CampaignPreflightDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "PASS",
+              "WARN",
+              "BLOCK"
+            ]
+          },
+          "policyVersion": {
+            "type": "number"
+          },
+          "executionMode": {
+            "type": "string",
+            "enum": [
+              "DRY_RUN",
+              "LIVE"
+            ]
+          },
+          "checkedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "totalTargets": {
+            "type": "number"
+          },
+          "allowedTargets": {
+            "type": "number"
+          },
+          "deniedTargets": {
+            "type": "number"
+          },
+          "unknownTargets": {
+            "type": "number"
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CampaignPreflightCheckDto"
+            }
+          },
+          "targetIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CampaignTargetIssueDto"
+            }
+          }
+        },
+        "required": [
+          "status",
+          "policyVersion",
+          "executionMode",
+          "checkedAt",
+          "totalTargets",
+          "allowedTargets",
+          "deniedTargets",
+          "unknownTargets",
+          "checks",
+          "targetIssues"
         ]
       },
       "InboundMessageDto": {

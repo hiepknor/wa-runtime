@@ -27,6 +27,7 @@ export interface OpenWASession {
   createdAt: string;
   updatedAt: string;
   lastError?: string | null;
+  restriction?: Record<string, unknown> | null;
   engineLoaded: boolean;
 }
 

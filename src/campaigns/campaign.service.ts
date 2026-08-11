@@ -1,16 +1,22 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { runtimeConfig } from '../config/runtime-config';
 import type { CampaignQueryDto } from '../contracts/campaigns/campaign-query.dto';
+import type { CampaignPreflightRequestDto } from '../contracts/campaigns/campaign-preflight.dto';
 import type { CreateCampaignDto } from '../contracts/campaigns/create-campaign.dto';
 import { CampaignScheduleType } from '../contracts/campaigns/create-campaign.dto';
 import type { UpdateCampaignDto } from '../contracts/campaigns/update-campaign.dto';
 import { CampaignRepository } from './campaign.repository';
+import { evaluateCampaignPreflight } from './campaign-preflight';
+import { SessionStateCacheService } from './session-state-cache.service';
 
 @Injectable()
 export class CampaignService {
   private readonly config = runtimeConfig();
 
-  constructor(private readonly repository: CampaignRepository) {}
+  constructor(
+    private readonly repository: CampaignRepository,
+    private readonly sessionStates: SessionStateCacheService,
+  ) {}
 
   async create(dto: CreateCampaignDto) {
     this.assertAllowedSession(dto.sessionId);
@@ -74,6 +80,21 @@ export class CampaignService {
       throw new BadRequestException({ message: 'Some groups are inactive or belong to another session', groupIds: result.invalidGroupIds });
     }
     return { data: result.targets };
+  }
+
+  async preflight(id: string, dto: CampaignPreflightRequestDto) {
+    const campaign = await this.get(id);
+    const [targets, session] = await Promise.all([
+      this.repository.listTargets(id),
+      this.sessionStates.get(campaign.sessionId),
+    ]);
+    return evaluateCampaignPreflight({
+      executionMode: dto.executionMode,
+      text: campaign.text,
+      targets,
+      session,
+      liveSendsEnabled: this.config.ALLOW_LIVE_SENDS,
+    });
   }
 
   private assertAllowedSession(sessionId: string): void {
