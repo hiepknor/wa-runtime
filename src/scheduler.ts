@@ -47,6 +47,29 @@ async function bootstrap(): Promise<void> {
         // Leave the durable run pending; the next scheduler pass retries the enqueue.
       }
     }
+    const capabilityRefreshes = await gateway.listGroupsNeedingCapabilityRefresh(BATCH_SIZE);
+    for (const refresh of capabilityRefreshes) {
+      const safeGroupId = refresh.groupId.replace(/[^a-zA-Z0-9_-]/g, '_');
+      try {
+        await queues.gatewaySync.add(
+          'refresh-group-capability',
+          {
+            sessionId: refresh.sessionId,
+            groupId: refresh.groupId,
+            expectedRevision: refresh.revision,
+          },
+          {
+            jobId: `group-capability-${refresh.sessionId}-${refresh.revision}-${safeGroupId}`,
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 3000 },
+            removeOnComplete: true,
+            removeOnFail: 5000,
+          },
+        );
+      } catch {
+        // Invalidation remains durable in PostgreSQL; a later pass retries the enqueue.
+      }
+    }
     await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
   }
 

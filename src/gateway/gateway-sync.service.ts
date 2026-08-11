@@ -32,8 +32,9 @@ export class GatewaySyncService {
       await this.repository.replaceGroupSummaries(sessionId, groups);
       for (const summary of groups) {
         const group = await this.openwa.getGroup(sessionId, summary.id);
-        membersSynced += await this.repository.upsertGroupDetails(sessionId, group);
-        groupsSynced += 1;
+        const result = await this.repository.upsertGroupDetails(sessionId, group);
+        membersSynced += result.members;
+        if (result.applied) groupsSynced += 1;
       }
       await this.repository.updateSyncRun(syncRunId, {
         status: 'COMPLETED', groups: groupsSynced, members: membersSynced,
@@ -44,6 +45,24 @@ export class GatewaySyncService {
       await this.repository.updateSyncRun(syncRunId, {
         status: 'FAILED', groups: groupsSynced, members: membersSynced, error: description,
       });
+      throw error;
+    }
+  }
+
+  async refreshGroupCapability(
+    sessionId: string,
+    groupId: string,
+    expectedRevision: number,
+  ): Promise<{ applied: boolean }> {
+    if (!this.config.OPENWA_ALLOWED_SESSION_IDS.includes(sessionId)) {
+      throw new ForbiddenException('Session is not in OPENWA_ALLOWED_SESSION_IDS');
+    }
+    try {
+      const group = await this.openwa.getGroup(sessionId, groupId);
+      const result = await this.repository.upsertGroupDetails(sessionId, group, expectedRevision);
+      return { applied: result.applied };
+    } catch (error) {
+      await this.repository.markCapabilityRefreshFailed(sessionId, groupId, expectedRevision);
       throw error;
     }
   }

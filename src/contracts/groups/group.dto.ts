@@ -1,6 +1,23 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { PageMetaDto } from '../common/pagination.dto';
 
+export class GroupSendCapabilityDto {
+  @ApiProperty({ enum: ['ALLOWED', 'DENIED', 'UNKNOWN'] })
+  status!: string;
+
+  @ApiProperty()
+  reason!: string;
+
+  @ApiProperty({ type: String, format: 'date-time', nullable: true })
+  checkedAt!: Date | null;
+
+  @ApiProperty({ type: String, format: 'date-time', nullable: true })
+  invalidatedAt!: Date | null;
+
+  @ApiProperty({ minimum: 1 })
+  revision!: number;
+}
+
 export class GroupMemberDto {
   @ApiProperty()
   participantId!: string;
@@ -60,6 +77,9 @@ export class GroupDto {
 
   @ApiProperty({ format: 'date-time' })
   syncedAt!: Date;
+
+  @ApiProperty({ type: GroupSendCapabilityDto })
+  sendCapability!: GroupSendCapabilityDto;
 }
 
 export class GroupDetailDto extends GroupDto {

@@ -6,6 +6,7 @@ import { AppModule } from './app.module';
 import { runtimeConfig } from './config/runtime-config';
 import { DatabaseService } from './database/database.service';
 import { GatewaySyncService } from './gateway/gateway-sync.service';
+import type { FullGatewaySyncPayload, GroupCapabilityRefreshPayload } from './gateway/gateway-sync.types';
 import { MessageJobRepository } from './messages/message-job.repository';
 import type { MessageSendQueuePayload, MessageJobStatus } from './messages/message-job.types';
 import { OpenWAClient, OpenWAHttpError } from './openwa/openwa.client';
@@ -100,9 +101,16 @@ async function bootstrap(): Promise<void> {
     { connection, concurrency: 10 },
   );
 
-  const gatewaySyncWorker = new Worker<{ syncRunId: string; sessionId: string }>(
+  const gatewaySyncWorker = new Worker<FullGatewaySyncPayload | GroupCapabilityRefreshPayload>(
     GATEWAY_SYNC_QUEUE,
-    bullJob => gatewaySync.perform(bullJob.data.syncRunId, bullJob.data.sessionId),
+    bullJob => {
+      if (bullJob.name === 'refresh-group-capability') {
+        const data = bullJob.data as GroupCapabilityRefreshPayload;
+        return gatewaySync.refreshGroupCapability(data.sessionId, data.groupId, data.expectedRevision);
+      }
+      const data = bullJob.data as FullGatewaySyncPayload;
+      return gatewaySync.perform(data.syncRunId, data.sessionId);
+    },
     { connection, concurrency: 1 },
   );
 

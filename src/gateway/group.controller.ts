@@ -1,5 +1,5 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
-import { ApiOkResponse, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
+import { ApiAcceptedResponse, ApiOkResponse, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { GroupDetailDto, GroupListDto, GroupMemberListDto } from '../contracts/groups/group.dto';
 import { GroupIdentityQueryDto, GroupQueryDto } from '../contracts/groups/group-query.dto';
 import { GroupService } from './group.service';
@@ -32,5 +32,13 @@ export class GroupController {
     @Query() query: GroupQueryDto,
   ) {
     return this.groups.members(query.sessionId, id, query.limit ?? 50, query.offset ?? 0);
+  }
+
+  @Post(':id/refresh-capability')
+  @HttpCode(202)
+  @ApiOperation({ summary: 'Request an asynchronous capability refresh for one group' })
+  @ApiAcceptedResponse({ schema: { example: { accepted: true } } })
+  refreshCapability(@Param('id') id: string, @Query() query: GroupIdentityQueryDto) {
+    return this.groups.refreshCapability(query.sessionId, id);
   }
 }

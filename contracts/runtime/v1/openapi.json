@@ -316,6 +316,54 @@
         ]
       }
     },
+    "/api/v1/groups/{id}/refresh-capability": {
+      "post": {
+        "operationId": "GroupController_refreshCapability",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "query",
+            "description": "Gateway session owning the group",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "example": {
+                    "accepted": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "runtime-key": []
+          }
+        ],
+        "summary": "Request an asynchronous capability refresh for one group",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
     "/api/v1/health/live": {
       "get": {
         "operationId": "HealthController_live",
@@ -640,6 +688,43 @@
           "completedAt"
         ]
       },
+      "GroupSendCapabilityDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ALLOWED",
+              "DENIED",
+              "UNKNOWN"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "invalidatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "revision": {
+            "type": "number",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "status",
+          "reason",
+          "checkedAt",
+          "invalidatedAt",
+          "revision"
+        ]
+      },
       "GroupDto": {
         "type": "object",
         "properties": {
@@ -697,6 +782,9 @@
           "syncedAt": {
             "format": "date-time",
             "type": "string"
+          },
+          "sendCapability": {
+            "$ref": "#/components/schemas/GroupSendCapabilityDto"
           }
         },
         "required": [
@@ -713,7 +801,8 @@
           "settingsLocked",
           "isActive",
           "detailsSyncedAt",
-          "syncedAt"
+          "syncedAt",
+          "sendCapability"
         ]
       },
       "PageMetaDto": {
@@ -839,6 +928,9 @@
             "format": "date-time",
             "type": "string"
           },
+          "sendCapability": {
+            "$ref": "#/components/schemas/GroupSendCapabilityDto"
+          },
           "members": {
             "type": "array",
             "items": {
@@ -861,6 +953,7 @@
           "isActive",
           "detailsSyncedAt",
           "syncedAt",
+          "sendCapability",
           "members"
         ]
       },

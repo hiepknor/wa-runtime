@@ -5,6 +5,7 @@ import type { SessionDto } from '../contracts/sessions/session.dto';
 import type { SyncRunDto, SyncRunStatus } from '../contracts/sessions/sync-run.dto';
 import { DatabaseService } from '../database/database.service';
 import type { OpenWAGroup, OpenWAGroupSummary, OpenWASession } from '../openwa/openwa.client';
+import { evaluateGroupCapability, type GroupSendCapabilityReason, type GroupSendCapabilityStatus } from './group-capability';
 
 interface SessionRow {
   id: string;
@@ -36,6 +37,11 @@ interface GroupRow {
   is_active: boolean;
   details_synced_at: Date | null;
   synced_at: Date;
+  send_capability: GroupSendCapabilityStatus;
+  send_capability_reason: string;
+  capability_checked_at: Date | null;
+  capability_invalidated_at: Date | null;
+  capability_revision: number;
 }
 
 interface MemberRow {
@@ -89,6 +95,13 @@ const mapGroup = (row: GroupRow): GroupDto => ({
   isActive: row.is_active,
   detailsSyncedAt: row.details_synced_at,
   syncedAt: row.synced_at,
+  sendCapability: {
+    status: row.send_capability,
+    reason: row.send_capability_reason,
+    checkedAt: row.capability_checked_at,
+    invalidatedAt: row.capability_invalidated_at,
+    revision: row.capability_revision,
+  },
 });
 
 const mapMember = (row: MemberRow): GroupMemberDto => ({
@@ -152,6 +165,15 @@ export class GatewayRepository {
     await this.database.transaction(async client => {
       await client.query('UPDATE gateway_groups SET is_active = false, updated_at = now() WHERE session_id = $1', [sessionId]);
       for (const group of groups) await this.upsertGroupSummary(client, sessionId, group);
+      await client.query(
+        `UPDATE gateway_groups SET
+           send_capability = 'DENIED', send_capability_reason = 'GROUP_INACTIVE',
+           capability_checked_at = now(), capability_invalidated_at = NULL,
+           capability_revision = capability_revision + 1, updated_at = now()
+         WHERE session_id = $1 AND is_active = false
+           AND (send_capability <> 'DENIED' OR send_capability_reason <> 'GROUP_INACTIVE')`,
+        [sessionId],
+      );
     });
   }
 
@@ -165,20 +187,48 @@ export class GatewayRepository {
          participants_count = COALESCE(EXCLUDED.participants_count, gateway_groups.participants_count),
          is_admin = COALESCE(EXCLUDED.is_admin, gateway_groups.is_admin),
          linked_parent_id = EXCLUDED.linked_parent_id,
+         send_capability = CASE WHEN gateway_groups.is_active = false THEN 'UNKNOWN' ELSE gateway_groups.send_capability END,
+         send_capability_reason = CASE WHEN gateway_groups.is_active = false THEN 'GROUP_CHANGED' ELSE gateway_groups.send_capability_reason END,
+         capability_invalidated_at = CASE WHEN gateway_groups.is_active = false THEN now() ELSE gateway_groups.capability_invalidated_at END,
+         capability_revision = CASE WHEN gateway_groups.is_active = false THEN gateway_groups.capability_revision + 1 ELSE gateway_groups.capability_revision END,
          is_active = true, synced_at = now(), updated_at = now()`,
       [sessionId, group.id, group.name, group.participantsCount ?? null, group.isAdmin ?? null, group.linkedParentJID ?? null],
     );
   }
 
-  async upsertGroupDetails(sessionId: string, group: OpenWAGroup): Promise<number> {
+  async upsertGroupDetails(
+    sessionId: string,
+    group: OpenWAGroup,
+    expectedRevision?: number,
+  ): Promise<{ members: number; applied: boolean }> {
     return this.database.transaction(async client => {
+      const existingResult = await client.query<GroupRow>(
+        'SELECT * FROM gateway_groups WHERE session_id = $1 AND id = $2 FOR UPDATE',
+        [sessionId, group.id],
+      );
+      const existing = existingResult.rows[0];
+      if (expectedRevision !== undefined && existing?.capability_revision !== expectedRevision) {
+        return { members: 0, applied: false };
+      }
+      const isAdmin = group.isAdmin ?? existing?.is_admin ?? null;
+      const isReadOnly = group.isReadOnly ?? null;
+      const isAnnounce = group.announce ?? group.isAnnounce ?? null;
+      const capability = evaluateGroupCapability({
+        isActive: true,
+        isReadOnly,
+        isAnnounce,
+        isAdmin,
+        hasDetails: true,
+      });
       await client.query(
         `INSERT INTO gateway_groups
            (session_id, id, name, description, owner_id, linked_parent_id, participants_count,
             is_admin, is_read_only, is_announce, settings_locked, ephemeral_seconds,
-            member_add_mode, gateway_created_at, details_synced_at)
+            member_add_mode, gateway_created_at, details_synced_at, send_capability,
+            send_capability_reason, capability_checked_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
-                 CASE WHEN $14::bigint IS NULL THEN NULL ELSE to_timestamp($14::bigint) END, now())
+                 CASE WHEN $14::bigint IS NULL THEN NULL ELSE to_timestamp($14::bigint) END,
+                 now(),$15,$16,now())
          ON CONFLICT (session_id, id) DO UPDATE SET
            name = EXCLUDED.name, description = EXCLUDED.description, owner_id = EXCLUDED.owner_id,
            linked_parent_id = EXCLUDED.linked_parent_id, participants_count = EXCLUDED.participants_count,
@@ -186,11 +236,21 @@ export class GatewayRepository {
            is_read_only = EXCLUDED.is_read_only, is_announce = EXCLUDED.is_announce,
            settings_locked = EXCLUDED.settings_locked, ephemeral_seconds = EXCLUDED.ephemeral_seconds,
            member_add_mode = EXCLUDED.member_add_mode, gateway_created_at = EXCLUDED.gateway_created_at,
+           send_capability = EXCLUDED.send_capability,
+           send_capability_reason = EXCLUDED.send_capability_reason,
+           capability_checked_at = now(), capability_invalidated_at = NULL,
+           capability_revision = CASE
+             WHEN gateway_groups.send_capability IS DISTINCT FROM EXCLUDED.send_capability
+               OR gateway_groups.send_capability_reason IS DISTINCT FROM EXCLUDED.send_capability_reason
+             THEN gateway_groups.capability_revision + 1
+             ELSE gateway_groups.capability_revision
+           END,
            is_active = true, details_synced_at = now(), synced_at = now(), updated_at = now()`,
         [sessionId, group.id, group.name, group.description ?? null, group.owner ?? null,
-          group.linkedParentJID ?? null, group.participants.length, group.isAdmin ?? null,
-          group.isReadOnly ?? null, group.announce ?? group.isAnnounce ?? null, group.locked ?? null,
-          group.ephemeralSeconds ?? null, group.memberAddMode ?? null, group.createdAt ?? null],
+          group.linkedParentJID ?? null, group.participants.length, isAdmin,
+          isReadOnly, isAnnounce, group.locked ?? null,
+          group.ephemeralSeconds ?? null, group.memberAddMode ?? null, group.createdAt ?? null,
+          capability.status, capability.reason],
       );
       await client.query('DELETE FROM group_members WHERE session_id = $1 AND group_id = $2', [sessionId, group.id]);
       for (const participant of group.participants) {
@@ -202,8 +262,54 @@ export class GatewayRepository {
             participant.isAdmin, participant.isSuperAdmin],
         );
       }
-      return group.participants.length;
+      return { members: group.participants.length, applied: true };
     });
+  }
+
+  async invalidateGroupCapability(
+    sessionId: string,
+    groupId: string,
+    reason: GroupSendCapabilityReason,
+  ): Promise<boolean> {
+    const result = await this.database.query(
+      `UPDATE gateway_groups SET send_capability = 'UNKNOWN', send_capability_reason = $3,
+         capability_invalidated_at = now(), capability_revision = capability_revision + 1,
+         updated_at = now()
+       WHERE session_id = $1 AND id = $2 AND is_active = true`,
+      [sessionId, groupId, reason],
+    );
+    return result.rowCount === 1;
+  }
+
+  async listGroupsNeedingCapabilityRefresh(limit: number): Promise<Array<{
+    sessionId: string;
+    groupId: string;
+    revision: number;
+  }>> {
+    const result = await this.database.query<{
+      session_id: string;
+      id: string;
+      capability_revision: number;
+    }>(
+      `SELECT session_id, id, capability_revision FROM gateway_groups
+       WHERE is_active = true AND capability_invalidated_at IS NOT NULL
+       ORDER BY capability_invalidated_at LIMIT $1`,
+      [limit],
+    );
+    return result.rows.map(row => ({
+      sessionId: row.session_id,
+      groupId: row.id,
+      revision: row.capability_revision,
+    }));
+  }
+
+  async markCapabilityRefreshFailed(sessionId: string, groupId: string, expectedRevision: number): Promise<void> {
+    await this.database.query(
+      `UPDATE gateway_groups SET send_capability = 'UNKNOWN', send_capability_reason = 'REFRESH_FAILED',
+         capability_checked_at = now(), capability_invalidated_at = NULL, updated_at = now()
+       WHERE session_id = $1 AND id = $2 AND capability_revision = $3`,
+      [sessionId, groupId, expectedRevision],
+    );
   }
 
   async listGroups(sessionId: string, limit: number, offset: number): Promise<{ data: GroupDto[]; total: number }> {
@@ -259,6 +365,6 @@ export class GatewayRepository {
          members_synced = COALESCE($4, members_synced), error = $5,
          started_at = CASE WHEN $2::gateway_sync_status = 'RUNNING' THEN now() ELSE started_at END,
          completed_at = CASE WHEN $2::gateway_sync_status IN ('COMPLETED','FAILED') THEN now() ELSE completed_at END
-       WHERE id = $1`, [id, input.status, input.groups ?? null, input.members ?? null, input.error ?? null]);
+      WHERE id = $1`, [id, input.status, input.groups ?? null, input.members ?? null, input.error ?? null]);
   }
 }

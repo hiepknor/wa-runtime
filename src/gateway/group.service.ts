@@ -22,4 +22,10 @@ export class GroupService {
     const result = await this.repository.listMembers(sessionId, groupId, limit, offset);
     return { data: result.data, meta: { total: result.total, limit, offset } };
   }
+
+  async refreshCapability(sessionId: string, groupId: string) {
+    if (!await this.repository.findGroup(sessionId, groupId)) throw new NotFoundException('Group not found');
+    await this.repository.invalidateGroupCapability(sessionId, groupId, 'MANUAL_REFRESH');
+    return { accepted: true };
+  }
 }

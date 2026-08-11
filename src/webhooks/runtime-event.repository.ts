@@ -8,13 +8,14 @@ export class RuntimeEventRepository {
 
   async store(event: RuntimeEvent): Promise<void> {
     await this.database.transaction(async client => {
-      await client.query(
+      const inserted = await client.query(
         `INSERT INTO runtime_events
            (event_id, source_event_type, event_type, event_version, session_id, occurred_at, payload)
          VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb) ON CONFLICT (event_id) DO NOTHING`,
         [event.eventId, event.sourceEventType, event.eventType, event.eventVersion,
           event.sessionId, event.occurredAt, JSON.stringify(event.payload)],
       );
+      if (inserted.rowCount !== 1) return;
 
       if (event.eventType === 'message.received' && event.payload.isGroup === true && event.payload.messageId) {
         await client.query(
@@ -41,6 +42,17 @@ export class RuntimeEventRepository {
           `UPDATE gateway_sessions SET status = $2, gateway_updated_at = GREATEST(gateway_updated_at, $3),
              synced_at = now(), updated_at = now() WHERE id = $1`,
           [event.sessionId, event.payload.status, event.occurredAt],
+        );
+      }
+
+
+      if (['group.join', 'group.leave', 'group.update'].includes(event.eventType) && event.payload.groupId) {
+        await client.query(
+          `UPDATE gateway_groups SET send_capability = 'UNKNOWN',
+             send_capability_reason = 'GROUP_CHANGED', capability_invalidated_at = now(),
+             capability_revision = capability_revision + 1, updated_at = now()
+           WHERE session_id = $1 AND id = $2 AND is_active = true`,
+          [event.sessionId, event.payload.groupId],
         );
       }
     });

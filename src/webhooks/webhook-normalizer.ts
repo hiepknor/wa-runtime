@@ -66,5 +66,19 @@ export function normalizeOpenWAWebhook(envelope: OpenWAWebhookEnvelope): Runtime
     return { ...base, eventType: 'session.status.changed', payload: { status: text(envelope.data.status) || 'unknown' } };
   }
 
+  if (['group.join', 'group.leave', 'group.update'].includes(envelope.event)) {
+    return {
+      ...base,
+      eventType: envelope.event,
+      payload: {
+        groupId: text(envelope.data.groupId),
+        participantIds: Array.isArray(envelope.data.participantIds) ? envelope.data.participantIds : [],
+        changes: typeof envelope.data.changes === 'object' && envelope.data.changes !== null
+          ? envelope.data.changes
+          : null,
+      },
+    };
+  }
+
   return { ...base, eventType: `gateway.${envelope.event}`, payload: envelope.data };
 }

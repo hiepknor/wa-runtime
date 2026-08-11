@@ -34,4 +34,17 @@ describe('normalizeOpenWAWebhook', () => {
     });
     expect(event).toMatchObject({ eventType: 'session.status.changed', eventVersion: 1, payload: { status: 'ready' } });
   });
+
+  it('keeps only capability-relevant group event fields', () => {
+    const event = normalizeOpenWAWebhook({
+      event: 'group.update', timestamp: '2026-08-11T05:00:00.000Z', sessionId: 'session-1',
+      idempotencyKey: 'group-1', deliveryId: 'delivery-1',
+      data: { groupId: '120363@g.us', participantIds: [], changes: { announce: true }, ignored: 'raw' },
+    });
+    expect(event).toMatchObject({
+      eventType: 'group.update',
+      payload: { groupId: '120363@g.us', participantIds: [], changes: { announce: true } },
+    });
+    expect(event.payload).not.toHaveProperty('ignored');
+  });
 });
