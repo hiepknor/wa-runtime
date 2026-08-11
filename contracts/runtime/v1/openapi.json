@@ -663,6 +663,276 @@
         ]
       }
     },
+    "/api/v1/campaigns/{id}/runs": {
+      "post": {
+        "operationId": "CampaignController_createRun",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCampaignRunDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignRunDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "runtime-key": []
+          }
+        ],
+        "summary": "Create an idempotent durable campaign run",
+        "tags": [
+          "campaigns"
+        ]
+      },
+      "get": {
+        "operationId": "CampaignController_listRuns",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50,
+              "type": "number"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignRunListDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "runtime-key": []
+          }
+        ],
+        "summary": "List runs of a campaign",
+        "tags": [
+          "campaigns"
+        ]
+      }
+    },
+    "/api/v1/campaign-runs/{id}": {
+      "get": {
+        "operationId": "CampaignRunController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignRunDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "runtime-key": []
+          }
+        ],
+        "summary": "Read a durable campaign run",
+        "tags": [
+          "campaign-runs"
+        ]
+      }
+    },
+    "/api/v1/campaign-runs/{id}/deliveries": {
+      "get": {
+        "operationId": "CampaignRunController_deliveries",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50,
+              "type": "number"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignDeliveryListDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "runtime-key": []
+          }
+        ],
+        "summary": "List per-group deliveries for a campaign run",
+        "tags": [
+          "campaign-runs"
+        ]
+      }
+    },
+    "/api/v1/message-jobs": {
+      "post": {
+        "operationId": "MessageJobController_create",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMessageJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "runtime-key": []
+          }
+        ],
+        "summary": "Create an idempotent scheduled text-message job",
+        "tags": [
+          "message-jobs"
+        ]
+      }
+    },
+    "/api/v1/message-jobs/{id}": {
+      "get": {
+        "operationId": "MessageJobController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "runtime-key": []
+          }
+        ],
+        "summary": "Read current durable message-job state",
+        "tags": [
+          "message-jobs"
+        ]
+      }
+    },
     "/api/v1/health/live": {
       "get": {
         "operationId": "HealthController_live",
@@ -755,74 +1025,6 @@
         "summary": "List normalized inbound group messages",
         "tags": [
           "messages"
-        ]
-      }
-    },
-    "/api/v1/message-jobs": {
-      "post": {
-        "operationId": "MessageJobController_create",
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateMessageJobDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "runtime-key": []
-          }
-        ],
-        "summary": "Create an idempotent scheduled text-message job",
-        "tags": [
-          "message-jobs"
-        ]
-      }
-    },
-    "/api/v1/message-jobs/{id}": {
-      "get": {
-        "operationId": "MessageJobController_get",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "runtime-key": []
-          }
-        ],
-        "summary": "Read current durable message-job state",
-        "tags": [
-          "message-jobs"
         ]
       }
     }
@@ -1601,6 +1803,227 @@
           "targetIssues"
         ]
       },
+      "CreateCampaignRunDto": {
+        "type": "object",
+        "properties": {
+          "executionMode": {
+            "type": "string",
+            "enum": [
+              "DRY_RUN",
+              "LIVE"
+            ],
+            "default": "DRY_RUN"
+          }
+        },
+        "required": [
+          "executionMode"
+        ]
+      },
+      "CampaignRunDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "campaignId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "executionMode": {
+            "type": "string",
+            "enum": [
+              "DRY_RUN",
+              "LIVE"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PREPARING",
+              "BLOCKED",
+              "SCHEDULED",
+              "RUNNING",
+              "PAUSED",
+              "COMPLETED",
+              "PARTIAL_FAILED",
+              "CANCELLED",
+              "FAILED"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "preflight": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CampaignPreflightDto"
+              }
+            ]
+          },
+          "totalTargets": {
+            "type": "number"
+          },
+          "scheduledAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "campaignId",
+          "sessionId",
+          "executionMode",
+          "status",
+          "text",
+          "preflight",
+          "totalTargets",
+          "scheduledAt",
+          "startedAt",
+          "completedAt",
+          "createdAt"
+        ]
+      },
+      "CampaignRunListDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CampaignRunDto"
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/PageMetaDto"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ]
+      },
+      "CampaignDeliveryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "groupId": {
+            "type": "string"
+          },
+          "groupName": {
+            "type": "string"
+          },
+          "messageJobId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "runId",
+          "groupId",
+          "groupName",
+          "messageJobId",
+          "status",
+          "failureReason",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "CampaignDeliveryListDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CampaignDeliveryDto"
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/PageMetaDto"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ]
+      },
+      "CreateMessageJobDto": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "example": "c4984920-cc62-4720-97ca-c46b4f3f9d80",
+            "description": "Must be in the Runtime session allowlist"
+          },
+          "recipientId": {
+            "type": "string",
+            "example": "120363000000000000@g.us"
+          },
+          "text": {
+            "type": "string",
+            "example": "Hello from WA Studio",
+            "maxLength": 4096
+          },
+          "scheduledAt": {
+            "type": "string",
+            "example": "2026-08-11T12:00:00.000Z",
+            "description": "Defaults to now"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": true,
+            "description": "Live sends also require ALLOW_LIVE_SENDS=true"
+          }
+        },
+        "required": [
+          "sessionId",
+          "recipientId",
+          "text"
+        ]
+      },
       "InboundMessageDto": {
         "type": "object",
         "properties": {
@@ -1658,40 +2081,6 @@
         "required": [
           "data",
           "meta"
-        ]
-      },
-      "CreateMessageJobDto": {
-        "type": "object",
-        "properties": {
-          "sessionId": {
-            "type": "string",
-            "example": "c4984920-cc62-4720-97ca-c46b4f3f9d80",
-            "description": "Must be in the Runtime session allowlist"
-          },
-          "recipientId": {
-            "type": "string",
-            "example": "120363000000000000@g.us"
-          },
-          "text": {
-            "type": "string",
-            "example": "Hello from WA Studio",
-            "maxLength": 4096
-          },
-          "scheduledAt": {
-            "type": "string",
-            "example": "2026-08-11T12:00:00.000Z",
-            "description": "Defaults to now"
-          },
-          "dryRun": {
-            "type": "boolean",
-            "default": true,
-            "description": "Live sends also require ALLOW_LIVE_SENDS=true"
-          }
-        },
-        "required": [
-          "sessionId",
-          "recipientId",
-          "text"
         ]
       }
     }

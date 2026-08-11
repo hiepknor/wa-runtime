@@ -64,6 +64,30 @@ export class MessageJobRepository {
     return { job: map(existing.rows[0]!), created: false };
   }
 
+  async createWithClient(client: PoolClient, input: {
+    idempotencyKey: string;
+    sessionId: string;
+    recipientId: string;
+    text: string;
+    scheduledAt: Date;
+    dryRun: boolean;
+  }): Promise<{ job: MessageJob; created: boolean }> {
+    const inserted = await client.query<MessageJobRow>(
+      `INSERT INTO message_jobs
+         (idempotency_key, session_id, recipient_id, payload, scheduled_at, dry_run)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+       ON CONFLICT (idempotency_key) DO NOTHING
+       RETURNING *`,
+      [input.idempotencyKey, input.sessionId, input.recipientId,
+        JSON.stringify({ text: input.text }), input.scheduledAt, input.dryRun],
+    );
+    if (inserted.rows[0]) return { job: map(inserted.rows[0]), created: true };
+    const existing = await client.query<MessageJobRow>(
+      'SELECT * FROM message_jobs WHERE idempotency_key = $1', [input.idempotencyKey],
+    );
+    return { job: map(existing.rows[0]!), created: false };
+  }
+
   async find(id: string): Promise<MessageJob | null> {
     const result = await this.database.query<MessageJobRow>('SELECT * FROM message_jobs WHERE id = $1', [id]);
     return result.rows[0] ? map(result.rows[0]) : null;

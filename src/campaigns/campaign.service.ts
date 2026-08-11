@@ -6,8 +6,7 @@ import type { CreateCampaignDto } from '../contracts/campaigns/create-campaign.d
 import { CampaignScheduleType } from '../contracts/campaigns/create-campaign.dto';
 import type { UpdateCampaignDto } from '../contracts/campaigns/update-campaign.dto';
 import { CampaignRepository } from './campaign.repository';
-import { evaluateCampaignPreflight } from './campaign-preflight';
-import { SessionStateCacheService } from './session-state-cache.service';
+import { CampaignPreflightService } from './campaign-preflight.service';
 
 @Injectable()
 export class CampaignService {
@@ -15,7 +14,7 @@ export class CampaignService {
 
   constructor(
     private readonly repository: CampaignRepository,
-    private readonly sessionStates: SessionStateCacheService,
+    private readonly preflights: CampaignPreflightService,
   ) {}
 
   async create(dto: CreateCampaignDto) {
@@ -84,16 +83,12 @@ export class CampaignService {
 
   async preflight(id: string, dto: CampaignPreflightRequestDto) {
     const campaign = await this.get(id);
-    const [targets, session] = await Promise.all([
-      this.repository.listTargets(id),
-      this.sessionStates.get(campaign.sessionId),
-    ]);
-    return evaluateCampaignPreflight({
+    const targets = await this.repository.listTargets(id);
+    return this.preflights.evaluate({
       executionMode: dto.executionMode,
+      sessionId: campaign.sessionId,
       text: campaign.text,
       targets,
-      session,
-      liveSendsEnabled: this.config.ALLOW_LIVE_SENDS,
     });
   }
 

@@ -2,7 +2,7 @@ import { Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
 import { runtimeConfig } from '../config/runtime-config';
-import { GATEWAY_SYNC_QUEUE, MESSAGE_SEND_QUEUE, WEBHOOK_QUEUE } from './queue.constants';
+import { CAMPAIGN_QUEUE, GATEWAY_SYNC_QUEUE, MESSAGE_SEND_QUEUE, WEBHOOK_QUEUE } from './queue.constants';
 
 @Injectable()
 export class QueueService implements OnApplicationShutdown {
@@ -10,9 +10,10 @@ export class QueueService implements OnApplicationShutdown {
   readonly messageSend = new Queue(MESSAGE_SEND_QUEUE, { connection: this.connection });
   readonly webhookIngress = new Queue(WEBHOOK_QUEUE, { connection: this.connection });
   readonly gatewaySync = new Queue(GATEWAY_SYNC_QUEUE, { connection: this.connection });
+  readonly campaign = new Queue(CAMPAIGN_QUEUE, { connection: this.connection });
 
   async onApplicationShutdown(): Promise<void> {
-    await Promise.all([this.messageSend.close(), this.webhookIngress.close(), this.gatewaySync.close()]);
+    await Promise.all([this.messageSend.close(), this.webhookIngress.close(), this.gatewaySync.close(), this.campaign.close()]);
     this.connection.disconnect();
   }
 }

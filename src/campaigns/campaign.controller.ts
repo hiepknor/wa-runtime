@@ -1,18 +1,25 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Put, Query } from '@nestjs/common';
-import { ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Headers, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res } from '@nestjs/common';
+import { ApiCreatedResponse, ApiHeader, ApiOkResponse, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
+import { PaginationQueryDto } from '../contracts/common/pagination.dto';
 import { CampaignDto, CampaignListDto } from '../contracts/campaigns/campaign.dto';
 import { CampaignQueryDto } from '../contracts/campaigns/campaign-query.dto';
 import { CampaignPreflightDto, CampaignPreflightRequestDto } from '../contracts/campaigns/campaign-preflight.dto';
 import { CampaignTargetListDto, ReplaceCampaignTargetsDto } from '../contracts/campaigns/campaign-target.dto';
 import { CreateCampaignDto } from '../contracts/campaigns/create-campaign.dto';
 import { UpdateCampaignDto } from '../contracts/campaigns/update-campaign.dto';
+import { CampaignRunDto, CampaignRunListDto, CreateCampaignRunDto } from '../contracts/campaigns/campaign-run.dto';
+import { CampaignRunService } from './campaign-run.service';
 import { CampaignService } from './campaign.service';
 
 @ApiTags('campaigns')
 @ApiSecurity('runtime-key')
 @Controller('campaigns')
 export class CampaignController {
-  constructor(private readonly campaigns: CampaignService) {}
+  constructor(
+    private readonly campaigns: CampaignService,
+    private readonly runs: CampaignRunService,
+  ) {}
 
   @Post()
   @ApiOperation({ summary: 'Create a text campaign draft' })
@@ -59,5 +66,31 @@ export class CampaignController {
     @Body() dto: CampaignPreflightRequestDto,
   ) {
     return this.campaigns.preflight(id, dto);
+  }
+
+  @Post(':id/runs')
+  @ApiOperation({ summary: 'Create an idempotent durable campaign run' })
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
+  @ApiCreatedResponse({ type: CampaignRunDto })
+  async createRun(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Body() dto: CreateCampaignRunDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    if (!idempotencyKey?.trim()) {
+      response.status(400);
+      return { statusCode: 400, message: 'Idempotency-Key header is required' };
+    }
+    const result = await this.runs.create(id, idempotencyKey.trim(), dto.executionMode);
+    response.status(result.created ? 201 : 200);
+    return result.run;
+  }
+
+  @Get(':id/runs')
+  @ApiOperation({ summary: 'List runs of a campaign' })
+  @ApiOkResponse({ type: CampaignRunListDto })
+  listRuns(@Param('id', ParseUUIDPipe) id: string, @Query() query: PaginationQueryDto) {
+    return this.runs.list(id, query.limit, query.offset);
   }
 }

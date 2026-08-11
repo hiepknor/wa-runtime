@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { AppModule } from './app.module';
+import { CampaignRunService } from './campaigns/campaign-run.service';
 import { runtimeConfig } from './config/runtime-config';
 import { DatabaseService } from './database/database.service';
 import { GatewaySyncService } from './gateway/gateway-sync.service';
@@ -10,7 +11,7 @@ import type { FullGatewaySyncPayload, GroupCapabilityRefreshPayload } from './ga
 import { MessageJobRepository } from './messages/message-job.repository';
 import type { MessageSendQueuePayload, MessageJobStatus } from './messages/message-job.types';
 import { OpenWAClient, OpenWAHttpError } from './openwa/openwa.client';
-import { GATEWAY_SYNC_QUEUE, MESSAGE_SEND_QUEUE, WEBHOOK_QUEUE } from './queue/queue.constants';
+import { CAMPAIGN_QUEUE, GATEWAY_SYNC_QUEUE, MESSAGE_SEND_QUEUE, WEBHOOK_QUEUE } from './queue/queue.constants';
 import { WebhookRepository } from './webhooks/webhook.repository';
 import { normalizeOpenWAWebhook } from './webhooks/webhook-normalizer';
 import { RuntimeEventRepository } from './webhooks/runtime-event.repository';
@@ -34,6 +35,7 @@ async function bootstrap(): Promise<void> {
   const runtimeEvents = app.get(RuntimeEventRepository);
   const openwa = app.get(OpenWAClient);
   const gatewaySync = app.get(GatewaySyncService);
+  const campaignRuns = app.get(CampaignRunService);
   const connection = new IORedis(config.REDIS_URL, { maxRetriesPerRequest: null });
 
   const messageWorker = new Worker<MessageSendQueuePayload>(
@@ -114,8 +116,19 @@ async function bootstrap(): Promise<void> {
     { connection, concurrency: 1 },
   );
 
+  const campaignWorker = new Worker<{ runId: string }>(
+    CAMPAIGN_QUEUE,
+    bullJob => campaignRuns.prepare(bullJob.data.runId),
+    { connection, concurrency: 2 },
+  );
+  campaignWorker.on('failed', (job) => {
+    if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
+      void campaignRuns.markPreparationFailed(job.data.runId).catch(error => console.error(error));
+    }
+  });
+
   const shutdown = async () => {
-    await Promise.all([messageWorker.close(), webhookWorker.close(), gatewaySyncWorker.close()]);
+    await Promise.all([messageWorker.close(), webhookWorker.close(), gatewaySyncWorker.close(), campaignWorker.close()]);
     connection.disconnect();
     await app.close();
   };

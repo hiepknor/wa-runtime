@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { CampaignRunRepository } from './campaigns/campaign-run.repository';
 import { GatewayRepository } from './gateway/gateway.repository';
 import { MessageJobRepository } from './messages/message-job.repository';
 import { QueueService } from './queue/queue.service';
@@ -13,6 +14,7 @@ async function bootstrap(): Promise<void> {
   const repository = app.get(MessageJobRepository);
   const queues = app.get(QueueService);
   const gateway = app.get(GatewayRepository);
+  const campaignRuns = app.get(CampaignRunRepository);
   let stopping = false;
 
   const stop = () => {
@@ -68,6 +70,27 @@ async function bootstrap(): Promise<void> {
         );
       } catch {
         // Invalidation remains durable in PostgreSQL; a later pass retries the enqueue.
+      }
+    }
+    const preparingRuns = await campaignRuns.listPreparing(BATCH_SIZE);
+    for (const run of preparingRuns) {
+      try {
+        await queues.campaign.add(
+          'prepare-run',
+          { runId: run.id },
+          { jobId: `prepare-run-${run.id}`, attempts: 3, backoff: { type: 'exponential', delay: 3000 }, removeOnComplete: true, removeOnFail: 5000 },
+        );
+      } catch {
+        // PREPARING remains durable; a later scheduler pass retries the enqueue.
+      }
+    }
+    await campaignRuns.activateDueRuns();
+    const runningRunIds = await campaignRuns.listRunningIds(BATCH_SIZE);
+    for (const runId of runningRunIds) {
+      try {
+        await campaignRuns.materializePending(runId, 5);
+      } catch {
+        // The run and pending deliveries remain durable for the next scheduler pass.
       }
     }
     await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
