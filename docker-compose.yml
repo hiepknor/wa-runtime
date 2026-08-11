@@ -1,0 +1,97 @@
+name: automation-runtime
+
+x-runtime: &runtime
+  build: .
+  restart: unless-stopped
+  env_file: .env
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks:
+    - automation-internal
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: automation_runtime
+      POSTGRES_USER: automation
+      POSTGRES_PASSWORD: automation
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - automation-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U automation -d automation_runtime"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - automation-internal
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - automation-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - automation-internal
+
+  migrate:
+    <<: *runtime
+    restart: "no"
+    command: ["node", "dist/scripts/migrate.js"]
+
+  api:
+    <<: *runtime
+    command: ["node", "dist/src/main.js"]
+    ports:
+      - "127.0.0.1:3100:3100"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    <<: *runtime
+    command: ["node", "dist/src/worker.js"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    <<: *runtime
+    command: ["node", "dist/src/scheduler.js"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  automation-postgres:
+  automation-redis:
+
+networks:
+  automation-internal:
+    driver: bridge
