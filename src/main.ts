@@ -1,9 +1,10 @@
 import 'reflect-metadata';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { runtimeConfig } from './config/runtime-config';
+import { createOpenApiDocument } from './openapi';
 
 async function bootstrap(): Promise<void> {
   const config = runtimeConfig();
@@ -19,15 +20,7 @@ async function bootstrap(): Promise<void> {
   );
 
   if (config.enableRuntimeDocs) {
-    const document = SwaggerModule.createDocument(
-      app,
-      new DocumentBuilder()
-        .setTitle('Automation Runtime API')
-        .setDescription('Stable API contract consumed by WA Studio')
-        .setVersion('0.1.0')
-        .addApiKey({ type: 'apiKey', in: 'header', name: 'X-Runtime-Key' }, 'runtime-key')
-        .build(),
-    );
+    const document = createOpenApiDocument(app);
     SwaggerModule.setup('api/v1/docs', app, document, { jsonDocumentUrl: 'api/v1/openapi.json' });
   }
 

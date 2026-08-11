@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { GatewayRepository } from './gateway/gateway.repository';
 import { MessageJobRepository } from './messages/message-job.repository';
 import { QueueService } from './queue/queue.service';
 
@@ -9,9 +10,9 @@ const BATCH_SIZE = 100;
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.createApplicationContext(AppModule);
-  app.enableShutdownHooks();
   const repository = app.get(MessageJobRepository);
   const queues = app.get(QueueService);
+  const gateway = app.get(GatewayRepository);
   let stopping = false;
 
   const stop = () => {
@@ -32,6 +33,18 @@ async function bootstrap(): Promise<void> {
         );
       } catch (error) {
         await repository.resetQueued(job.id, error instanceof Error ? error.message : String(error));
+      }
+    }
+    const syncRuns = await gateway.listPendingSyncRuns(BATCH_SIZE);
+    for (const run of syncRuns) {
+      try {
+        await queues.gatewaySync.add(
+          'full-session-sync',
+          { syncRunId: run.id, sessionId: run.sessionId },
+          { jobId: run.id, attempts: 3, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: 1000, removeOnFail: 5000 },
+        );
+      } catch {
+        // Leave the durable run pending; the next scheduler pass retries the enqueue.
       }
     }
     await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));

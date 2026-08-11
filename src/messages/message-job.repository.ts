@@ -144,9 +144,22 @@ export class MessageJobRepository {
 
   async updateStatusByOpenWAMessageId(openwaMessageId: string, status: MessageJobStatus): Promise<void> {
     await this.database.query(
-      `UPDATE message_jobs SET status = $2, updated_at = now()
+      `UPDATE message_jobs SET status = $2::message_job_status, updated_at = now()
        WHERE openwa_message_id = $1
-         AND status NOT IN ('FAILED', 'CANCELLED', 'DRY_RUN_COMPLETED')`,
+         AND status NOT IN ('FAILED', 'CANCELLED', 'DRY_RUN_COMPLETED')
+         AND (
+           ($2 = 'FAILED' AND status IN ('SCHEDULED','QUEUED','PROCESSING','ACCEPTED','UNKNOWN'))
+           OR
+           ($2 <> 'FAILED' AND
+             CASE $2
+               WHEN 'ACCEPTED' THEN 10 WHEN 'SENT' THEN 20 WHEN 'DELIVERED' THEN 30 WHEN 'READ' THEN 40
+               ELSE 0
+             END >
+             CASE status
+               WHEN 'ACCEPTED' THEN 10 WHEN 'SENT' THEN 20 WHEN 'DELIVERED' THEN 30 WHEN 'READ' THEN 40
+               ELSE 0
+             END)
+         )`,
       [openwaMessageId, status],
     );
   }

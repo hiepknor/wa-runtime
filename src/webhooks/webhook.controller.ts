@@ -30,6 +30,7 @@ export class WebhookController {
     const envelope = request.body as Partial<OpenWAWebhookEnvelope>;
     if (
       !envelope.event ||
+      !envelope.timestamp ||
       !envelope.sessionId ||
       !envelope.idempotencyKey ||
       !envelope.deliveryId ||

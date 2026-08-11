@@ -18,6 +18,8 @@
     "start:scheduler": "node dist/src/scheduler.js",
     "migrate": "tsx scripts/migrate.ts",
     "migrate:prod": "node dist/scripts/migrate.js",
+    "contract:generate": "npm run build --silent && node dist/scripts/generate-runtime-contract.js",
+    "contract:check": "npm run contract:generate && git diff --exit-code -- contracts/runtime/v1/openapi.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test && npm run build"

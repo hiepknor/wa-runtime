@@ -5,11 +5,14 @@ import IORedis from 'ioredis';
 import { AppModule } from './app.module';
 import { runtimeConfig } from './config/runtime-config';
 import { DatabaseService } from './database/database.service';
+import { GatewaySyncService } from './gateway/gateway-sync.service';
 import { MessageJobRepository } from './messages/message-job.repository';
 import type { MessageSendQueuePayload, MessageJobStatus } from './messages/message-job.types';
 import { OpenWAClient, OpenWAHttpError } from './openwa/openwa.client';
-import { MESSAGE_SEND_QUEUE, WEBHOOK_QUEUE } from './queue/queue.constants';
+import { GATEWAY_SYNC_QUEUE, MESSAGE_SEND_QUEUE, WEBHOOK_QUEUE } from './queue/queue.constants';
 import { WebhookRepository } from './webhooks/webhook.repository';
+import { normalizeOpenWAWebhook } from './webhooks/webhook-normalizer';
+import { RuntimeEventRepository } from './webhooks/runtime-event.repository';
 
 const webhookStatus = (event: string, data: Record<string, unknown>): MessageJobStatus | null => {
   if (event === 'message.sent') return 'SENT';
@@ -24,11 +27,12 @@ const randomDelay = (min: number, max: number) => min + Math.floor(Math.random()
 async function bootstrap(): Promise<void> {
   const config = runtimeConfig();
   const app = await NestFactory.createApplicationContext(AppModule);
-  app.enableShutdownHooks();
   const database = app.get(DatabaseService);
   const messages = app.get(MessageJobRepository);
   const webhooks = app.get(WebhookRepository);
+  const runtimeEvents = app.get(RuntimeEventRepository);
   const openwa = app.get(OpenWAClient);
+  const gatewaySync = app.get(GatewaySyncService);
   const connection = new IORedis(config.REDIS_URL, { maxRetriesPerRequest: null });
 
   const messageWorker = new Worker<MessageSendQueuePayload>(
@@ -79,6 +83,7 @@ async function bootstrap(): Promise<void> {
       const envelope = await webhooks.find(bullJob.data.idempotencyKey);
       if (!envelope) return { missing: true };
       try {
+        await runtimeEvents.store(normalizeOpenWAWebhook(envelope));
         const status = webhookStatus(envelope.event, envelope.data);
         const messageId = String(envelope.data.messageId ?? envelope.data.id ?? '');
         if (status && messageId) await messages.updateStatusByOpenWAMessageId(messageId, status);
@@ -95,8 +100,14 @@ async function bootstrap(): Promise<void> {
     { connection, concurrency: 10 },
   );
 
+  const gatewaySyncWorker = new Worker<{ syncRunId: string; sessionId: string }>(
+    GATEWAY_SYNC_QUEUE,
+    bullJob => gatewaySync.perform(bullJob.data.syncRunId, bullJob.data.sessionId),
+    { connection, concurrency: 1 },
+  );
+
   const shutdown = async () => {
-    await Promise.all([messageWorker.close(), webhookWorker.close()]);
+    await Promise.all([messageWorker.close(), webhookWorker.close(), gatewaySyncWorker.close()]);
     connection.disconnect();
     await app.close();
   };

@@ -6,13 +6,18 @@ OpenWA directly or store its API key.
 
 ## Current milestone
 
-The first vertical slice is implemented:
+The Runtime now owns both the outbound pipeline and the durable Gateway read model:
 
 ```text
 POST message job -> PostgreSQL -> scheduler -> Redis -> worker
                                               -> OpenWA (live mode only)
-OpenWA webhook -> HMAC verification -> PostgreSQL -> Redis -> delivery state
+POST session sync -> PostgreSQL -> Redis -> worker -> OpenWA adapter -> sessions/groups/members
+OpenWA webhook -> HMAC verification -> raw event -> normalized v1 event -> group inbox/delivery state
 ```
+
+The initial product target is groups only. Group participants are stored in `group_members` without
+a foreign-key dependency on contacts. A contacts module can therefore be added later without
+changing the existing groups contract.
 
 Live delivery is protected by two independent controls:
 
@@ -41,7 +46,7 @@ curl http://localhost:3100/api/v1/health/ready
 Swagger is available locally at <http://localhost:3100/api/v1/docs>. Protected API routes require:
 
 ```http
-X-Runtime-Key: local-runtime-key-change-before-production-2026
+X-Runtime-Key: <value from the ignored .env file>
 ```
 
 Create a safe dry-run job:
@@ -49,7 +54,7 @@ Create a safe dry-run job:
 ```bash
 curl -X POST http://localhost:3100/api/v1/message-jobs \
   -H 'Content-Type: application/json' \
-  -H 'X-Runtime-Key: local-runtime-key-change-before-production-2026' \
+  -H 'X-Runtime-Key: <value from .env>' \
   -H 'Idempotency-Key: local-test-001' \
   -d '{
     "sessionId": "35b45e89-3647-45bd-b756-3df53523f431",
@@ -62,7 +67,31 @@ curl -X POST http://localhost:3100/api/v1/message-jobs \
 Repeating the exact request with the same `Idempotency-Key` returns the original job instead of
 creating a duplicate.
 
-## OpenWA contract
+## Contract ownership
+
+Each contract has one source of truth:
+
+```text
+OpenWA Swagger snapshot -> OpenWAClient adapter -> Runtime DTOs -> Runtime OpenAPI -> WA Studio client
+```
+
+- `src/contracts` contains the stable DTOs exposed to WA Studio.
+- `contracts/runtime/v1/openapi.json` is generated from those DTOs; never edit it by hand.
+- `src/openwa/openwa.client.ts` is the anti-corruption boundary for upstream OpenWA payloads.
+- PostgreSQL rows, BullMQ jobs and raw OpenWA webhook bodies are never public API responses.
+
+Regenerate and verify the Runtime contract with:
+
+```bash
+set -a; source .env; set +a
+npm run contract:generate
+npm run contract:check
+```
+
+CI should run `contract:check` from a clean checkout. A breaking change requires `/api/v2`; adding
+an optional response field or a new endpoint can remain in `/api/v1`.
+
+## OpenWA upstream contract
 
 The pinned upstream contract is stored at:
 
@@ -71,7 +100,27 @@ contracts/openwa/0.15.0/openapi.json
 ```
 
 When OpenWA is upgraded, add a new directory rather than overwriting the old snapshot, review the
-OpenAPI diff, and run adapter integration tests before changing `OPENWA_RELEASE_TAG`.
+OpenAPI diff, and run adapter integration tests before changing `OPENWA_RELEASE_TAG`. A full sync
+checks `/api/health` and fails closed when the live Gateway version differs from that reviewed tag.
+
+## Gateway read-model API
+
+The desktop-facing endpoints are:
+
+```text
+GET  /api/v1/sessions
+GET  /api/v1/sessions/:id
+POST /api/v1/sessions/:id/sync
+GET  /api/v1/sessions/:id/sync-runs/:runId
+GET  /api/v1/groups?sessionId=:sessionId
+GET  /api/v1/groups/:groupId?sessionId=:sessionId
+GET  /api/v1/groups/:groupId/members?sessionId=:sessionId
+GET  /api/v1/messages?sessionId=:sessionId&groupId=:groupId
+```
+
+Full synchronization is asynchronous. The POST returns `202` and a durable sync run; WA Studio
+polls the corresponding sync-run endpoint. This avoids long HTTP requests when production contains
+hundreds of groups.
 
 ## Webhook registration
 
