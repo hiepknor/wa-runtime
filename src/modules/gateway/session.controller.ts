@@ -5,6 +5,7 @@ import { SyncRunDto } from '../../contracts/sessions/sync-run.dto';
 import { GatewayRepository } from './gateway.repository';
 import { GatewaySyncService } from './gateway-sync.service';
 import { SessionService } from './session.service';
+import { SessionScopeService } from './session-scope.service';
 
 @ApiTags('sessions')
 @ApiSecurity('runtime-key')
@@ -14,6 +15,7 @@ export class SessionController {
     private readonly sessions: SessionService,
     private readonly sync: GatewaySyncService,
     private readonly repository: GatewayRepository,
+    private readonly sessionScope: SessionScopeService,
   ) {}
 
   @Get()
@@ -39,6 +41,7 @@ export class SessionController {
     @Param('id', ParseUUIDPipe) id: string,
     @Param('runId', ParseUUIDPipe) runId: string,
   ) {
+    this.sessionScope.assertVisible(id);
     const run = await this.repository.findSyncRun(runId);
     if (!run || run.sessionId !== id) throw new NotFoundException('Sync run not found');
     return run;
