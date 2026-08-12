@@ -21,10 +21,14 @@
     "migrate:prod": "node dist/scripts/migrate.js",
     "contract:generate": "npm run build --silent && node dist/scripts/generate-runtime-contract.js",
     "contract:check": "npm run contract:generate && git diff --exit-code -- contracts/runtime/v1/openapi.json",
-    "test": "vitest run",
+    "load-test:dry-run": "tsx scripts/load-test-dry-run.ts",
+    "test": "npm run test:unit",
+    "test:unit": "vitest run test/unit",
+    "test:integration": "npm run build --silent && vitest run --config vitest.integration.config.ts",
     "test:group-members": "npm run build --silent && vitest run --config vitest.group-members.config.ts",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm test && npm run build"
+    "check": "npm run typecheck && npm test && npm run build",
+    "check:all": "npm run check && npm run test:integration"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",

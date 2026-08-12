@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { CampaignExecutionMode } from '../src/contracts/campaigns/campaign-preflight.dto';
-import type { CampaignTargetDto } from '../src/contracts/campaigns/campaign-target.dto';
-import { evaluateCampaignPreflight } from '../src/modules/campaigns/campaign-preflight';
+import { CampaignExecutionMode } from '../../src/contracts/campaigns/campaign-preflight.dto';
+import type { CampaignTargetDto } from '../../src/contracts/campaigns/campaign-target.dto';
+import { evaluateCampaignPreflight } from '../../src/modules/campaigns/campaign-preflight';
 
 const target = (status: 'ALLOWED' | 'DENIED' | 'UNKNOWN'): CampaignTargetDto => ({
   groupId: `${status.toLowerCase()}@g.us`,
