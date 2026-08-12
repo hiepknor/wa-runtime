@@ -103,6 +103,14 @@ describe('durable attempt fencing', () => {
     await gateway.invalidateGroupCapability(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, 'MANUAL_REFRESH');
     const group = await gateway.findGroup(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
+
+    expect(await gateway.listGroupsNeedingCapabilityRefresh(10)).toEqual([]);
+    expect(await gateway.claimCapabilityRefresh(
+      INTEGRATION_SESSION_ID,
+      INTEGRATION_GROUP_ID,
+      group!.sendCapability.revision,
+    )).toBeNull();
+
     const syncClaim = await gateway.claimSyncRun(run.id);
     expect(syncClaim).not.toBeNull();
 
