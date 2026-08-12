@@ -2,13 +2,14 @@ import 'reflect-metadata';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule } from '@nestjs/swagger';
-import { AppModule } from '../app.module';
+import { ApiAppModule } from '../app/api-app.module';
 import { runtimeConfig } from '../core/config/runtime-config';
 import { createOpenApiDocument } from '../core/openapi';
+import { JsonLogger } from '../core/observability/json-logger';
 
 async function bootstrap(): Promise<void> {
   const config = runtimeConfig();
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const app = await NestFactory.create(ApiAppModule, { rawBody: true, logger: new JsonLogger('api') });
   app.setGlobalPrefix('api/v1');
   app.enableShutdownHooks();
   app.useGlobalPipes(
