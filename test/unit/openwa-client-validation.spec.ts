@@ -95,16 +95,24 @@ describe('OpenWAClient response validation', () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ message: 'rate limited' }, 429))
+      .mockResolvedValueOnce(jsonResponse({ message: 'rate limited' }, 429))
       .mockResolvedValueOnce(jsonResponse({
         id: 'session-1', name: 'Session', status: 'ready', engineLoaded: true,
         restriction: null, createdAt: '2026-08-12T00:00:00Z', updatedAt: '2026-08-12T00:00:00Z',
       }));
     vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
 
     const request = new OpenWAClient().getSession('session-1');
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(249);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(499);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
 
     await expect(request).resolves.toMatchObject({ id: 'session-1', status: 'ready' });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

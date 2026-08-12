@@ -88,7 +88,7 @@ const webhookSchema = z.object({
 });
 const healthSchema = z.object({ status: nonEmptyString, timestamp: dateTimeString, version: nonEmptyString });
 const sendTextResultSchema = z.object({ messageId: nonEmptyString, timestamp: z.number().int().nonnegative() });
-const maxRateLimitRetries = 8;
+const maxRateLimitRetries = 12;
 
 export type OpenWASendTextResult = z.infer<typeof sendTextResultSchema>;
 export type OpenWASession = z.infer<typeof sessionSchema>;
@@ -239,10 +239,6 @@ export class OpenWAClient {
 }
 
 function rateLimitDelayMs(headers: Headers, attempt: number): number {
-  const retryAfter = Number(headers.get('retry-after'));
-  if (Number.isFinite(retryAfter) && retryAfter >= 0) {
-    return Math.min(60_000, Math.max(250, Math.ceil(retryAfter * 1000)));
-  }
   const exhaustedResets = ['short', 'medium', 'long']
     .filter(tier => headers.get(`x-ratelimit-remaining-${tier}`) === '0')
     .map(tier => Number(headers.get(`x-ratelimit-reset-${tier}`)))
@@ -250,5 +246,11 @@ function rateLimitDelayMs(headers: Headers, attempt: number): number {
   if (exhaustedResets.length > 0) {
     return Math.min(60_000, Math.max(250, Math.ceil(Math.max(...exhaustedResets) * 1000)));
   }
-  return Math.min(10_000, 250 * 2 ** attempt);
+  const retryAfterHeader = headers.get('retry-after');
+  const retryAfter = retryAfterHeader === null ? Number.NaN : Number(retryAfterHeader);
+  if (Number.isFinite(retryAfter) && retryAfter >= 0) {
+    return Math.min(60_000, Math.max(250, Math.ceil(retryAfter * 1000)));
+  }
+  const backoff = Math.min(60_000, 250 * 2 ** attempt);
+  return Math.ceil(backoff * (0.75 + Math.random() * 0.5));
 }
