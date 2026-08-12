@@ -8,11 +8,12 @@ import { SessionController } from './session.controller';
 import { SessionService } from './session.service';
 import { SessionStateCacheService } from './session-state-cache.service';
 import { SessionScopeService } from './session-scope.service';
+import { GatewaySyncProcessorService } from './gateway-sync-processor.service';
 
 @Module({
   imports: [OpenWAModule],
   controllers: [SessionController, GroupController],
-  providers: [GatewayRepository, GatewaySyncService, SessionService, GroupService, SessionStateCacheService, SessionScopeService],
-  exports: [GatewayRepository, GatewaySyncService, SessionStateCacheService, SessionScopeService],
+  providers: [GatewayRepository, GatewaySyncService, GatewaySyncProcessorService, SessionService, GroupService, SessionStateCacheService, SessionScopeService],
+  exports: [GatewayRepository, GatewaySyncService, GatewaySyncProcessorService, SessionStateCacheService, SessionScopeService],
 })
 export class GatewayModule {}

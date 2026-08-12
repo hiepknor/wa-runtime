@@ -30,11 +30,17 @@ export class GatewaySyncService {
       await this.repository.upsertSession(session);
       const groups = await this.openwa.listGroups(sessionId);
       await this.repository.replaceGroupSummaries(sessionId, groups);
-      for (const summary of groups) {
-        const group = await this.openwa.getGroup(sessionId, summary.id);
-        const result = await this.repository.upsertGroupDetails(sessionId, group);
-        membersSynced += result.members;
-        if (result.applied) groupsSynced += 1;
+      const concurrency = 4;
+      for (let offset = 0; offset < groups.length; offset += concurrency) {
+        const batch = groups.slice(offset, offset + concurrency);
+        const results = await Promise.all(batch.map(async summary => {
+          const group = await this.openwa.getGroup(sessionId, summary.id);
+          return this.repository.upsertGroupDetails(sessionId, group);
+        }));
+        for (const result of results) {
+          membersSynced += result.members;
+          if (result.applied) groupsSynced += 1;
+        }
       }
       await this.repository.updateSyncRun(syncRunId, {
         status: 'COMPLETED', groups: groupsSynced, members: membersSynced,

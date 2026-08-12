@@ -26,8 +26,11 @@ const schema = z
       .transform(value => value.split(',').map(item => item.trim()).filter(Boolean))
       .pipe(z.array(z.uuid()).min(1)),
     ALLOW_LIVE_SENDS: booleanString,
-    OUTBOUND_MIN_DELAY_MS: z.coerce.number().int().min(0).default(3000),
-    OUTBOUND_MAX_DELAY_MS: z.coerce.number().int().min(0).default(7000),
+    OUTBOUND_MIN_DELAY_MS: z.coerce.number().int().min(0).max(60_000).default(3000),
+    OUTBOUND_MAX_DELAY_MS: z.coerce.number().int().min(0).max(60_000).default(7000),
+    RUNTIME_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(90),
+    RUNTIME_RETENTION_INTERVAL_MS: z.coerce.number().int().min(60_000).default(3_600_000),
+    RUNTIME_RETENTION_BATCH_SIZE: z.coerce.number().int().min(100).max(10_000).default(5000),
   })
   .superRefine((value, context) => {
     if (value.OUTBOUND_MAX_DELAY_MS < value.OUTBOUND_MIN_DELAY_MS) {

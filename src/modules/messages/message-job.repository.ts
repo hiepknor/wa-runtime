@@ -40,52 +40,60 @@ export class MessageJobRepository {
   constructor(private readonly database: DatabaseService) {}
 
   async create(input: {
+    idempotencyScope: string;
     idempotencyKey: string;
+    requestHash: string;
     sessionId: string;
     recipientId: string;
     text: string;
     scheduledAt: Date;
     dryRun: boolean;
-  }): Promise<{ job: MessageJob; created: boolean }> {
+  }): Promise<{ job: MessageJob; created: boolean; idempotencyConflict: boolean }> {
     const inserted = await this.database.query<MessageJobRow>(
       `INSERT INTO message_jobs
-         (idempotency_key, session_id, recipient_id, payload, scheduled_at, dry_run)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6)
-       ON CONFLICT (idempotency_key) DO NOTHING
+         (idempotency_scope, idempotency_key, request_hash, session_id, recipient_id, payload, scheduled_at, dry_run)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+       ON CONFLICT (idempotency_scope, idempotency_key) DO NOTHING
        RETURNING *`,
-      [input.idempotencyKey, input.sessionId, input.recipientId, JSON.stringify({ text: input.text }), input.scheduledAt, input.dryRun],
+      [input.idempotencyScope, input.idempotencyKey, input.requestHash, input.sessionId, input.recipientId,
+        JSON.stringify({ text: input.text }), input.scheduledAt, input.dryRun],
     );
-    if (inserted.rows[0]) return { job: map(inserted.rows[0]), created: true };
+    if (inserted.rows[0]) return { job: map(inserted.rows[0]), created: true, idempotencyConflict: false };
 
-    const existing = await this.database.query<MessageJobRow>(
-      'SELECT * FROM message_jobs WHERE idempotency_key = $1',
-      [input.idempotencyKey],
+    const existing = await this.database.query<MessageJobRow & { request_hash: string }>(
+      'SELECT * FROM message_jobs WHERE idempotency_scope = $1 AND idempotency_key = $2',
+      [input.idempotencyScope, input.idempotencyKey],
     );
-    return { job: map(existing.rows[0]!), created: false };
+    const row = existing.rows[0]!;
+    return { job: map(row), created: false, idempotencyConflict: row.request_hash !== input.requestHash };
   }
 
   async createWithClient(client: PoolClient, input: {
+    idempotencyScope: string;
     idempotencyKey: string;
+    requestHash: string;
     sessionId: string;
     recipientId: string;
     text: string;
     scheduledAt: Date;
     dryRun: boolean;
-  }): Promise<{ job: MessageJob; created: boolean }> {
+  }): Promise<{ job: MessageJob; created: boolean; idempotencyConflict: boolean }> {
     const inserted = await client.query<MessageJobRow>(
       `INSERT INTO message_jobs
-         (idempotency_key, session_id, recipient_id, payload, scheduled_at, dry_run)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6)
-       ON CONFLICT (idempotency_key) DO NOTHING
+         (idempotency_scope, idempotency_key, request_hash, session_id, recipient_id, payload, scheduled_at, dry_run)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+       ON CONFLICT (idempotency_scope, idempotency_key) DO NOTHING
        RETURNING *`,
-      [input.idempotencyKey, input.sessionId, input.recipientId,
+      [input.idempotencyScope, input.idempotencyKey, input.requestHash, input.sessionId, input.recipientId,
         JSON.stringify({ text: input.text }), input.scheduledAt, input.dryRun],
     );
-    if (inserted.rows[0]) return { job: map(inserted.rows[0]), created: true };
-    const existing = await client.query<MessageJobRow>(
-      'SELECT * FROM message_jobs WHERE idempotency_key = $1', [input.idempotencyKey],
+    if (inserted.rows[0]) return { job: map(inserted.rows[0]), created: true, idempotencyConflict: false };
+    const existing = await client.query<MessageJobRow & { request_hash: string }>(
+      'SELECT * FROM message_jobs WHERE idempotency_scope = $1 AND idempotency_key = $2',
+      [input.idempotencyScope, input.idempotencyKey],
     );
-    return { job: map(existing.rows[0]!), created: false };
+    const row = existing.rows[0]!;
+    return { job: map(row), created: false, idempotencyConflict: row.request_hash !== input.requestHash };
   }
 
   async find(id: string): Promise<MessageJob | null> {
@@ -116,12 +124,22 @@ export class MessageJobRepository {
   async markProcessing(id: string): Promise<MessageJob | null> {
     const result = await this.database.query<MessageJobRow>(
       `UPDATE message_jobs
-       SET status = 'PROCESSING', attempt_count = attempt_count + 1, updated_at = now()
+       SET status = 'PROCESSING', attempt_count = attempt_count + 1,
+         processing_started_at = now(), lease_expires_at = now() + interval '2 minutes', updated_at = now()
        WHERE id = $1 AND status = 'QUEUED'
        RETURNING *`,
       [id],
     );
     return result.rows[0] ? map(result.rows[0]) : null;
+  }
+
+  async refreshProcessingLease(id: string): Promise<boolean> {
+    const result = await this.database.query(
+      `UPDATE message_jobs SET lease_expires_at = now() + interval '2 minutes', updated_at = now()
+       WHERE id = $1 AND status = 'PROCESSING'`,
+      [id],
+    );
+    return result.rowCount === 1;
   }
 
   async resetQueued(id: string, error: string): Promise<void> {
@@ -142,6 +160,25 @@ export class MessageJobRepository {
     return result.rowCount ?? 0;
   }
 
+  async markExpiredProcessingUnknown(): Promise<number> {
+    const result = await this.database.query<{ count: string }>(
+      `WITH expired AS (
+         UPDATE message_jobs SET status = 'UNKNOWN',
+           last_error = 'Processing lease expired; delivery outcome is unknown',
+           lease_expires_at = NULL, updated_at = now()
+         WHERE status = 'PROCESSING' AND lease_expires_at < now()
+         RETURNING id, attempt_count
+       ), attempts AS (
+         INSERT INTO message_attempts (message_job_id, attempt_number, outcome, error)
+         SELECT id, attempt_count, 'UNKNOWN', 'Processing lease expired; delivery outcome is unknown'
+         FROM expired ON CONFLICT (message_job_id, attempt_number) DO NOTHING
+         RETURNING 1
+       )
+       SELECT count(*)::text AS count FROM expired`,
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
   async updateResult(
     client: PoolClient,
     id: string,
@@ -150,8 +187,9 @@ export class MessageJobRepository {
   ): Promise<void> {
     const updated = await client.query<MessageJobRow>(
       `UPDATE message_jobs
-       SET status = $2, openwa_message_id = COALESCE($3, openwa_message_id), last_error = $4, updated_at = now()
-       WHERE id = $1
+       SET status = $2, openwa_message_id = COALESCE($3, openwa_message_id), last_error = $4,
+         lease_expires_at = NULL, updated_at = now()
+       WHERE id = $1 AND status = 'PROCESSING'
        RETURNING attempt_count`,
       [id, status, options.openwaMessageId ?? null, options.error ?? null],
     );

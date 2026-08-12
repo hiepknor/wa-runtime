@@ -5,6 +5,8 @@ import type { Request } from 'express';
 import { Public } from '../../core/auth/public.decorator';
 import { runtimeConfig } from '../../core/config/runtime-config';
 import { QueueService } from '../../core/queue/queue.service';
+import { stableQueueJobId } from '../../core/queue/queue-job-id';
+import { SessionScopeService } from '../gateway/session-scope.service';
 import { verifyOpenWASignature } from './webhook-signature';
 import { OpenWAWebhookEnvelope, WebhookRepository } from './webhook.repository';
 
@@ -14,6 +16,7 @@ export class WebhookController {
   constructor(
     private readonly repository: WebhookRepository,
     private readonly queues: QueueService,
+    private readonly sessions: SessionScopeService,
   ) {}
 
   @Public()
@@ -40,14 +43,13 @@ export class WebhookController {
     }
 
     const typed = envelope as OpenWAWebhookEnvelope;
+    this.sessions.assertAllowed(typed.sessionId);
     const created = await this.repository.insert(typed);
-    if (created) {
-      await this.queues.webhookIngress.add(
-        'process-openwa-webhook',
-        { idempotencyKey: typed.idempotencyKey },
-        { jobId: typed.idempotencyKey.replace(/[^a-zA-Z0-9_-]/g, '_'), removeOnComplete: 1000, removeOnFail: 5000 },
-      );
-    }
+    await this.queues.webhookIngress.add(
+      'process-openwa-webhook',
+      { idempotencyKey: typed.idempotencyKey },
+      { jobId: stableQueueJobId('webhook', typed.idempotencyKey), attempts: 1, removeOnComplete: true, removeOnFail: true },
+    );
     return { accepted: true, duplicate: !created };
   }
 }

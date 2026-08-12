@@ -1,0 +1,92 @@
+import { Injectable } from '@nestjs/common';
+import type { PoolClient } from 'pg';
+import { runtimeConfig } from '../../core/config/runtime-config';
+import { DatabaseService } from '../../core/database/database.service';
+import { QueueService } from '../../core/queue/queue.service';
+import { OpenWAClient, OpenWAHttpError } from '../../integrations/openwa/openwa.client';
+import { GatewayRepository } from '../gateway/gateway.repository';
+import { MessageJobRepository } from './message-job.repository';
+import { MessageSendPolicyService } from './message-send-policy.service';
+import type { MessageJobStatus, MessageSendQueuePayload } from './message-job.types';
+
+const randomDelay = (min: number, max: number) => min + Math.floor(Math.random() * (max - min + 1));
+
+class MessageJobNoLongerProcessingError extends Error {}
+
+@Injectable()
+export class MessageJobProcessorService {
+  private readonly config = runtimeConfig();
+
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly messages: MessageJobRepository,
+    private readonly policy: MessageSendPolicyService,
+    private readonly openwa: OpenWAClient,
+    private readonly gateway: GatewayRepository,
+    private readonly queues: QueueService,
+  ) {}
+
+  async process(payload: MessageSendQueuePayload): Promise<unknown> {
+    const job = await this.messages.markProcessing(payload.messageJobId);
+    if (!job) return { skipped: true };
+
+    if (job.dryRun) {
+      await this.update(job.id, 'DRY_RUN_COMPLETED', { response: { dryRun: true } });
+      return { dryRun: true };
+    }
+
+    if (!this.config.ALLOW_LIVE_SENDS) {
+      const error = 'Live send blocked: ALLOW_LIVE_SENDS=false';
+      await this.update(job.id, 'FAILED', { error });
+      throw new Error(error);
+    }
+
+    const blockReason = await this.policy.liveBlockReason(job.sessionId, job.recipientId);
+    if (blockReason) {
+      await this.update(job.id, 'FAILED', { error: `Live send blocked: ${blockReason}` });
+      throw new Error(`Live send blocked: ${blockReason}`);
+    }
+
+    let upstreamStarted = false;
+    try {
+      return await this.queues.withOutboundSessionLock(
+        job.sessionId,
+        async () => {
+          if (!await this.messages.refreshProcessingLease(job.id)) {
+            throw new MessageJobNoLongerProcessingError();
+          }
+        },
+        async () => {
+          await new Promise(resolve =>
+            setTimeout(resolve, randomDelay(this.config.OUTBOUND_MIN_DELAY_MS, this.config.OUTBOUND_MAX_DELAY_MS)),
+          );
+          upstreamStarted = true;
+          const result = await this.openwa.sendText(job.sessionId, job.recipientId, job.payload.text);
+          await this.update(job.id, 'ACCEPTED', { openwaMessageId: result.messageId, response: result });
+          return result;
+        },
+      );
+    } catch (error) {
+      if (error instanceof MessageJobNoLongerProcessingError) return { skipped: true };
+      const status: MessageJobStatus = error instanceof OpenWAHttpError || !upstreamStarted ? 'FAILED' : 'UNKNOWN';
+      const description = error instanceof Error ? error.message : String(error);
+      await this.update(job.id, status, { error: description });
+      if (error instanceof OpenWAHttpError && job.recipientId.endsWith('@g.us')) {
+        if (error.status === 403) {
+          await this.gateway.invalidateGroupCapability(job.sessionId, job.recipientId, 'GATEWAY_PERMISSION_DENIED');
+        } else if (error.status === 404) {
+          await this.gateway.invalidateGroupCapability(job.sessionId, job.recipientId, 'GROUP_CHANGED');
+        }
+      }
+      throw error;
+    }
+  }
+
+  private update(
+    id: string,
+    status: MessageJobStatus,
+    options: { openwaMessageId?: string; error?: string; response?: unknown },
+  ): Promise<void> {
+    return this.database.transaction((client: PoolClient) => this.messages.updateResult(client, id, status, options));
+  }
+}

@@ -8,11 +8,12 @@ import { CampaignService } from './campaign.service';
 import { CampaignPreflightService } from './campaign-preflight.service';
 import { CampaignRunRepository } from './campaign-run.repository';
 import { CampaignRunService } from './campaign-run.service';
+import { CampaignRunProcessorService } from './campaign-run-processor.service';
 
 @Module({
   imports: [GatewayModule, MessagesModule],
   controllers: [CampaignController, CampaignRunController],
-  providers: [CampaignRepository, CampaignService, CampaignPreflightService, CampaignRunRepository, CampaignRunService],
-  exports: [CampaignRepository, CampaignService, CampaignRunRepository, CampaignRunService],
+  providers: [CampaignRepository, CampaignService, CampaignPreflightService, CampaignRunRepository, CampaignRunService, CampaignRunProcessorService],
+  exports: [CampaignRepository, CampaignService, CampaignRunRepository, CampaignRunService, CampaignRunProcessorService],
 })
 export class CampaignsModule {}

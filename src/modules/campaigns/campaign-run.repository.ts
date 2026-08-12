@@ -7,6 +7,7 @@ import type { CampaignTargetDto } from '../../contracts/campaigns/campaign-targe
 import { DatabaseService } from '../../core/database/database.service';
 import type { GroupSendCapabilityStatus } from '../gateway/group-capability';
 import { MessageJobRepository } from '../messages/message-job.repository';
+import { messageRequestHash } from '../messages/message-idempotency';
 
 interface CampaignRunRow {
   id: string;
@@ -510,7 +511,15 @@ export class CampaignRunRepository {
           continue;
         }
         const message = await this.messageJobs.createWithClient(client, {
-          idempotencyKey: `campaign-${runId}-group-${delivery.group_id}`,
+          idempotencyScope: `campaign-run:${runId}`,
+          idempotencyKey: delivery.group_id,
+          requestHash: messageRequestHash({
+            sessionId: run.session_id,
+            recipientId: delivery.group_id,
+            text: run.payload_snapshot.text,
+            scheduledAt: null,
+            dryRun: run.execution_mode === 'DRY_RUN',
+          }),
           sessionId: run.session_id,
           recipientId: delivery.group_id,
           text: run.payload_snapshot.text,

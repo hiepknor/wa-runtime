@@ -399,12 +399,25 @@ export class GatewayRepository {
     return result.rows.map(mapSyncRun);
   }
 
+  async recoverExpiredSyncRuns(): Promise<number> {
+    const result = await this.database.query(
+      `UPDATE sync_runs SET status = 'PENDING', lease_expires_at = NULL,
+         error = 'Recovered expired sync lease', updated_at = now()
+       WHERE status = 'RUNNING' AND lease_expires_at < now()`,
+    );
+    return result.rowCount ?? 0;
+  }
+
   async updateSyncRun(id: string, input: { status: SyncRunStatus; groups?: number; members?: number; error?: string }): Promise<void> {
     await this.database.query(
       `UPDATE sync_runs SET status = $2::gateway_sync_status, groups_synced = COALESCE($3, groups_synced),
          members_synced = COALESCE($4, members_synced), error = $5,
          started_at = CASE WHEN $2::gateway_sync_status = 'RUNNING' THEN now() ELSE started_at END,
-         completed_at = CASE WHEN $2::gateway_sync_status IN ('COMPLETED','FAILED') THEN now() ELSE completed_at END
+         completed_at = CASE WHEN $2::gateway_sync_status IN ('COMPLETED','FAILED') THEN now() ELSE completed_at END,
+         attempt_count = attempt_count + CASE WHEN $2::gateway_sync_status = 'RUNNING' THEN 1 ELSE 0 END,
+         lease_expires_at = CASE WHEN $2::gateway_sync_status = 'RUNNING'
+           THEN now() + interval '1 hour' ELSE NULL END,
+         updated_at = now()
       WHERE id = $1`, [id, input.status, input.groups ?? null, input.members ?? null, input.error ?? null]);
   }
 }

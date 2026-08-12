@@ -1,9 +1,16 @@
 name: automation-runtime
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 x-runtime: &runtime
   build: .
   restart: unless-stopped
   env_file: .env
+  logging: *default-logging
   depends_on:
     postgres:
       condition: service_healthy
@@ -17,6 +24,7 @@ services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_DB: automation_runtime
       POSTGRES_USER: automation
@@ -36,6 +44,7 @@ services:
   redis:
     image: redis:8-alpine
     restart: unless-stopped
+    logging: *default-logging
     command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
     ports:
       - "127.0.0.1:6380:6379"
@@ -64,6 +73,12 @@ services:
           - automation-api
     ports:
       - "127.0.0.1:3100:3100"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/api/v1/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -75,6 +90,12 @@ services:
   worker:
     <<: *runtime
     command: ["node", "dist/src/entrypoints/worker.js"]
+    healthcheck:
+      test: ["CMD", "node", "dist/scripts/process-healthcheck.js", "worker"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -86,6 +107,12 @@ services:
   scheduler:
     <<: *runtime
     command: ["node", "dist/src/entrypoints/scheduler.js"]
+    healthcheck:
+      test: ["CMD", "node", "dist/scripts/process-healthcheck.js", "scheduler"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
     depends_on:
       migrate:
         condition: service_completed_successfully
