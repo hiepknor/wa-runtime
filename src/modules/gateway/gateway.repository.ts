@@ -4,7 +4,12 @@ import type { GroupDto, GroupMemberDto } from '../../contracts/groups/group.dto'
 import type { SessionDto } from '../../contracts/sessions/session.dto';
 import type { SyncRunDto, SyncRunStatus } from '../../contracts/sessions/sync-run.dto';
 import { DatabaseService } from '../../core/database/database.service';
-import type { OpenWAGroup, OpenWAGroupSummary, OpenWASession } from '../../integrations/openwa/openwa.client';
+import {
+  pendingGroupName,
+  type OpenWAGroup,
+  type OpenWAGroupSummary,
+  type OpenWASession,
+} from '../../integrations/openwa/openwa.client';
 import { evaluateGroupCapability, type GroupSendCapabilityReason, type GroupSendCapabilityStatus } from './group-capability';
 
 interface SessionRow {
@@ -223,7 +228,8 @@ export class GatewayRepository {
              id text, name text, participants_count integer, is_admin boolean, linked_parent_id text
            )
            ON CONFLICT (session_id, id) DO UPDATE SET
-             name = EXCLUDED.name,
+             name = CASE WHEN EXCLUDED.name = $3 AND gateway_groups.details_synced_at IS NOT NULL
+               THEN gateway_groups.name ELSE EXCLUDED.name END,
              participants_count = COALESCE(EXCLUDED.participants_count, gateway_groups.participants_count),
              is_admin = COALESCE(EXCLUDED.is_admin, gateway_groups.is_admin),
              linked_parent_id = EXCLUDED.linked_parent_id,
@@ -242,7 +248,7 @@ export class GatewayRepository {
             participants_count: group.participantsCount ?? null,
             is_admin: group.isAdmin ?? null,
             linked_parent_id: group.linkedParentJID ?? null,
-          })))],
+          }))), pendingGroupName],
         );
       }
       await client.query(
@@ -543,6 +549,29 @@ export class GatewayRepository {
     const result = await this.database.query<SyncRunRow>(
       `INSERT INTO sync_runs (session_id, sync_type) VALUES ($1, 'FULL') RETURNING *`, [sessionId]);
     return mapSyncRun(result.rows[0]!);
+  }
+
+  async findSyncRunProgress(id: string, sessionId: string): Promise<{
+    groupIds: Set<string>;
+    groups: number;
+    members: number;
+  }> {
+    const result = await this.database.query<{ id: string; members: string }>(
+      `SELECT groups.id, count(members.participant_id)::text AS members
+       FROM sync_runs runs
+       JOIN gateway_groups groups ON groups.session_id = runs.session_id AND groups.is_active = true
+       LEFT JOIN group_members members
+         ON members.session_id = groups.session_id AND members.group_id = groups.id
+       WHERE runs.id = $1 AND runs.session_id = $2 AND runs.started_at IS NOT NULL
+         AND groups.details_synced_at >= runs.started_at
+       GROUP BY groups.id`,
+      [id, sessionId],
+    );
+    return {
+      groupIds: new Set(result.rows.map(row => row.id)),
+      groups: result.rows.length,
+      members: result.rows.reduce((total, row) => total + Number(row.members), 0),
+    };
   }
 
   async findSyncRun(id: string): Promise<SyncRunDto | null> {

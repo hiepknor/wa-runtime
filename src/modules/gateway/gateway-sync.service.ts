@@ -47,18 +47,16 @@ export class GatewaySyncService {
       const groups = await this.openwa.listGroups(sessionId);
       await this.assertSyncOwnership(syncRunId, leaseToken, ownershipLost);
       await this.repository.replaceGroupSummaries(sessionId, groups, syncFence);
-      const concurrency = 4;
-      for (let offset = 0; offset < groups.length; offset += concurrency) {
+      const progress = await this.repository.findSyncRunProgress(syncRunId, sessionId);
+      groupsSynced = progress.groups;
+      membersSynced = progress.members;
+      const remainingGroups = groups.filter(group => !progress.groupIds.has(group.id));
+      for (const summary of remainingGroups) {
         await this.assertSyncOwnership(syncRunId, leaseToken, ownershipLost);
-        const batch = groups.slice(offset, offset + concurrency);
-        const results = await Promise.all(batch.map(async summary => {
-          const group = await this.openwa.getGroup(sessionId, summary.id);
-          return this.repository.upsertGroupDetails(sessionId, group, { syncFence });
-        }));
-        for (const result of results) {
-          membersSynced += result.members;
-          if (result.applied) groupsSynced += 1;
-        }
+        const group = await this.openwa.getGroup(sessionId, summary.id);
+        const result = await this.repository.upsertGroupDetails(sessionId, group, { syncFence });
+        membersSynced += result.members;
+        if (result.applied) groupsSynced += 1;
       }
       if (!await this.repository.completeSyncRun(syncRunId, leaseToken, groupsSynced, membersSynced)) {
         return { skipped: true };

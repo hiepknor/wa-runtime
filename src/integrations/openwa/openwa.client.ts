@@ -34,7 +34,7 @@ const sessionSchema = z.object({
   restriction: z.record(z.string(), z.unknown()).nullable().optional(),
   engineLoaded: z.boolean(),
 });
-const pendingGroupName = 'Group subject pending sync';
+export const pendingGroupName = 'Group subject pending sync';
 const groupSummaryBaseSchema = z.object({
   id: nonEmptyString,
   name: z.string().optional(),
