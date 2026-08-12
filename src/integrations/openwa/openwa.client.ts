@@ -34,13 +34,18 @@ const sessionSchema = z.object({
   restriction: z.record(z.string(), z.unknown()).nullable().optional(),
   engineLoaded: z.boolean(),
 });
-const groupSummarySchema = z.object({
+const pendingGroupName = 'Group subject pending sync';
+const groupSummaryBaseSchema = z.object({
   id: nonEmptyString,
-  name: nonEmptyString,
+  name: z.string().optional(),
   participantsCount: z.number().int().nonnegative().optional(),
   isAdmin: z.boolean().optional(),
   linkedParentJID: nullableString,
 });
+const groupSummarySchema = groupSummaryBaseSchema.transform(summary => ({
+  ...summary,
+  name: summary.name?.trim() ? summary.name : pendingGroupName,
+}));
 const participantSchema = z.object({
   id: nonEmptyString,
   number: nonEmptyString,
@@ -48,7 +53,8 @@ const participantSchema = z.object({
   isAdmin: z.boolean(),
   isSuperAdmin: z.boolean(),
 });
-const groupSchema = groupSummarySchema.extend({
+const groupSchema = groupSummaryBaseSchema.extend({
+  name: nonEmptyString,
   description: nullableString,
   owner: nullableString,
   createdAt: z.number().int().optional(),
