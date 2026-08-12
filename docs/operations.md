@@ -123,10 +123,10 @@ Store backup scripts and archives outside the OpenWA project. A suitable separat
 /var/backups/wa-runtime/      backup archives
 ```
 
-Existing installations may retain the legacy `automation-runtime` paths, Compose project, volumes
-and `automation_runtime` PostgreSQL database. Treat them as storage identifiers and migrate them
-only in a separately backed-up maintenance window; the product rename does not require moving
-business state.
+Existing installations may retain the legacy `automation_runtime` PostgreSQL database. Before
+changing an existing Compose project to `wa-runtime`, take a logical PostgreSQL backup, stop the old
+project, and copy or explicitly reattach its PostgreSQL and Redis volumes. Keep the source volumes
+until the new stack passes readiness and application-level smoke tests.
 
 The minimum Runtime backup is a PostgreSQL logical dump plus the exact application release tag and
 environment inventory. Never put secrets into the backup filename or command output.

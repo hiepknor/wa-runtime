@@ -1,5 +1,4 @@
-# Kept during ADR 002 so existing Compose volumes remain attached after the product rename.
-name: automation-runtime
+name: wa-runtime
 
 x-logging: &default-logging
   driver: json-file
@@ -19,7 +18,7 @@ x-runtime: &runtime
     redis:
       condition: service_healthy
   networks:
-    - automation-internal
+    - runtime-internal
     - wa-dev-network
 
 services:
@@ -41,7 +40,7 @@ services:
       timeout: 3s
       retries: 20
     networks:
-      - automation-internal
+      - runtime-internal
 
   redis:
     image: redis:8-alpine
@@ -58,7 +57,7 @@ services:
       timeout: 3s
       retries: 20
     networks:
-      - automation-internal
+      - runtime-internal
 
   migrate:
     <<: *runtime
@@ -69,7 +68,7 @@ services:
     <<: *runtime
     command: ["node", "dist/src/entrypoints/api.js"]
     networks:
-      automation-internal:
+      runtime-internal:
       wa-dev-network:
         aliases:
           - wa-runtime-api
@@ -129,7 +128,7 @@ volumes:
   automation-redis:
 
 networks:
-  automation-internal:
+  runtime-internal:
     driver: bridge
   wa-dev-network:
     external: true

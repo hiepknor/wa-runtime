@@ -45,7 +45,8 @@ change must still be regenerated and synchronized to WA Studio.
 | Container image | Publish as `wa-runtime`; Compose accepts `WA_RUNTIME_IMAGE` and defaults to `wa-runtime:local`. |
 | API paths, DTOs and `contracts/runtime` directory | Keep stable. |
 | PostgreSQL database `automation_runtime`, roles, tables and applied migrations | Keep as legacy storage identifiers; rename only through a separately backed-up database migration. |
-| Existing Docker Compose project and persistent volume names | Keep the `automation-runtime` project default during this migration so existing local and deployed data is reused. |
+| Docker Compose project and network names | Use `wa-runtime`; migrate existing installations in a backed-up maintenance window. |
+| Existing persistent volume names | Reattach or copy them explicitly during the Compose project migration; never rely on an implicit empty-volume replacement. New installations use the `wa-runtime` prefix. |
 | Docker network alias | Add `wa-runtime-api`; retain `automation-api` during the compatibility window. |
 | Redis heartbeat and scheduler telemetry | Dual-write `wa-runtime:*` and legacy `automation-runtime:*`; read the new key first and fall back to legacy. |
 | BullMQ queue names and stable job IDs | Keep unchanged so queued transport work survives rolling deployment. |
@@ -53,16 +54,20 @@ change must still be regenerated and synchronized to WA Studio.
 
 Legacy Redis writes and the `automation-api` network alias may be removed only after every deployed
 API, scheduler, worker and operational probe uses the new namespace. The legacy PostgreSQL and
-Compose storage identifiers have no scheduled removal.
+database identifiers have no scheduled removal. Existing Compose storage is migrated operationally;
+the source volumes are retained until backup and post-migration verification complete.
 
 ## Rollout
 
 1. Merge and publish WA Runtime source and regenerated OpenAPI metadata.
 2. Synchronize the Runtime OpenAPI snapshot and generated client in WA Studio.
 3. Build immutable images under the `wa-runtime` name.
-4. Deploy API, scheduler and workers together or roll them while dual Redis writes are active.
-5. Verify readiness through both Redis namespaces, queue rediscovery and existing PostgreSQL state.
-6. Rename the Git repository and deployment directory only after remote references and automation
+4. Back up PostgreSQL, stop the old Compose project, and copy or reattach its persistent volumes to
+   the `wa-runtime` project before starting any service against them.
+5. Deploy API, scheduler and workers together or roll them while dual Redis writes are active.
+6. Verify readiness through both Redis namespaces, queue rediscovery and existing PostgreSQL state.
+7. Retain the stopped source volumes until restore evidence and application-level smoke tests pass.
+8. Rename the Git repository and deployment directory only after remote references and automation
    have been updated.
 
 ## Consequences
