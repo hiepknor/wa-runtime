@@ -28,15 +28,15 @@ services:
     restart: unless-stopped
     logging: *default-logging
     environment:
-      POSTGRES_DB: automation_runtime
-      POSTGRES_USER: automation
-      POSTGRES_PASSWORD: automation
+      POSTGRES_DB: ${WA_RUNTIME_DB_NAME:-automation_runtime}
+      POSTGRES_USER: ${WA_RUNTIME_DB_USER:-automation}
+      POSTGRES_PASSWORD: ${WA_RUNTIME_DB_PASSWORD:-automation}
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
       - automation-postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U automation -d automation_runtime"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 3s
       retries: 20

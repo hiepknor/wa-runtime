@@ -12,6 +12,9 @@
 Development and production must not share credentials, databases, Redis instances, webhook secrets,
 session IDs or Docker volumes.
 
+Set `WA_RUNTIME_DB_PASSWORD` to an independently generated staging/production secret and use the
+same URL-encoded credential in `DATABASE_URL`. The Compose defaults are development-only.
+
 ## Container topology
 
 Production needs these Runtime services:
