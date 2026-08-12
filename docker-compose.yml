@@ -40,7 +40,9 @@ services:
       timeout: 3s
       retries: 20
     networks:
-      - runtime-internal
+      runtime-internal:
+        aliases:
+          - wa-runtime-postgres
 
   redis:
     image: redis:8-alpine
@@ -57,7 +59,9 @@ services:
       timeout: 3s
       retries: 20
     networks:
-      - runtime-internal
+      runtime-internal:
+        aliases:
+          - wa-runtime-redis
 
   migrate:
     <<: *runtime

@@ -47,6 +47,7 @@ change must still be regenerated and synchronized to WA Studio.
 | PostgreSQL database `automation_runtime`, roles, tables and applied migrations | Keep as legacy storage identifiers; rename only through a separately backed-up database migration. |
 | Docker Compose project and network names | Use `wa-runtime`; migrate existing installations in a backed-up maintenance window. |
 | Existing persistent volume names | Reattach or copy them explicitly during the Compose project migration; never rely on an implicit empty-volume replacement. New installations use the `wa-runtime` prefix. |
+| Runtime PostgreSQL and Redis hostnames | Use the private aliases `wa-runtime-postgres` and `wa-runtime-redis`; generic aliases can collide with OpenWA services on the shared gateway network. |
 | Docker network alias | Add `wa-runtime-api`; retain `automation-api` during the compatibility window. |
 | Redis heartbeat and scheduler telemetry | Dual-write `wa-runtime:*` and legacy `automation-runtime:*`; read the new key first and fall back to legacy. |
 | BullMQ queue names and stable job IDs | Keep unchanged so queued transport work survives rolling deployment. |

@@ -128,6 +128,10 @@ changing an existing Compose project to `wa-runtime`, take a logical PostgreSQL 
 project, and copy or explicitly reattach its PostgreSQL and Redis volumes. Keep the source volumes
 until the new stack passes readiness and application-level smoke tests.
 
+Use `wa-runtime-postgres` and `wa-runtime-redis` in container connection URLs. Runtime processes also
+join the OpenWA gateway network, where generic `postgres` and `redis` DNS names may resolve to the
+gateway's dependencies instead of WA Runtime storage.
+
 The minimum Runtime backup is a PostgreSQL logical dump plus the exact application release tag and
 environment inventory. Never put secrets into the backup filename or command output.
 
