@@ -13,7 +13,7 @@ Milestone 3 is complete. The Runtime currently provides:
 - durable campaign runs, per-group deliveries, progress and recovery after restart;
 - pause, resume and cancel controls;
 - PostgreSQL-backed state, Redis/BullMQ queues and HMAC-verified OpenWA webhooks;
-- Redis-coordinated per-session outbound pacing and bounded PostgreSQL retention;
+- PostgreSQL-coordinated per-session outbound pacing and bounded PostgreSQL retention;
 - correlated, redacted JSON logs across API, scheduler and worker.
 
 Live delivery is disabled by default and requires both a `LIVE` run and
@@ -98,7 +98,7 @@ The exact lifecycle and state meanings are documented in
 - [Operations](docs/operations.md) — production safety, deploy, recovery, backup and upgrade.
 - [Failure model](docs/failure-model.md) — durable dispatch, leases, retry and ambiguous delivery semantics.
 - [Observability](docs/observability.md) — JSON logs, correlation IDs, health checks and manual diagnosis.
-- [Latest local acceptance](docs/acceptance/2026-08-11-local.md) — sync, dry-run and Redis recovery evidence.
+- [Latest local acceptance](docs/acceptance/2026-08-12-durable-execution-local.md) — durable retries, sync epochs and PostgreSQL lease evidence.
 - [API contract](docs/api-contract.md) — authentication, idempotency, endpoint groups and versioning.
 
 ## Common commands
