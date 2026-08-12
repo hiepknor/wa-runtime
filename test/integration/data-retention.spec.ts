@@ -62,8 +62,14 @@ describe('data retention', () => {
       [old],
     );
     await pool.query(
-      `INSERT INTO sync_runs (session_id, sync_type, status, requested_at, completed_at)
-       VALUES ($1,'full','COMPLETED',$2,$2), ($1,'full','RUNNING',$2,NULL)`,
+      `INSERT INTO gateway_sync_fences (session_id, current_epoch) VALUES ($1, 1)`,
+      [INTEGRATION_SESSION_ID],
+    );
+    await pool.query(
+      `INSERT INTO sync_runs
+         (session_id, sync_type, status, requested_at, completed_at, sync_epoch, lease_token, lease_expires_at)
+       VALUES ($1,'full','COMPLETED',$2,$2,NULL,NULL,NULL),
+              ($1,'full','RUNNING',$2,NULL,1,gen_random_uuid(),now() + interval '2 minutes')`,
       [INTEGRATION_SESSION_ID, old],
     );
     const campaign = await pool.query<{ id: string }>(

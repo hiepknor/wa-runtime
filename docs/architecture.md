@@ -44,9 +44,9 @@ PostgreSQL, and BullMQ job IDs make re-enqueueing safe.
 
 The accepted target execution model is defined by
 [ADR 001](adr/001-postgresql-owned-durable-work-execution.md). Its implementation is in progress.
-Database-owned retry and lease-token fencing are implemented; session sync-epoch and
-outbound-session-lease phases remain. Production is restricted to one scheduler and one worker until
-those phases are complete.
+Database-owned retry, lease-token fencing and session sync epochs are implemented. The
+outbound-session-lease phase remains. Production is restricted to one scheduler and one worker until
+that phase is complete.
 
 ## Infrastructure responsibilities
 
@@ -67,8 +67,8 @@ leases so crashed work is recovered according to its side-effect semantics.
 Under the accepted execution model, PostgreSQL also owns retry timing, retry exhaustion and attempt
 ownership. Retryable attempts receive database lease tokens, and a stale token cannot renew,
 complete or fail its durable attempt. Capability-refresh writes are also token-guarded. Full-sync
-group/member writes require the pending sync-epoch phase before they are safe across worker replicas.
-BullMQ does not own business retries.
+group/member writes are protected by a session-scoped epoch and database ownership checks. BullMQ
+does not own business retries.
 
 ### Redis and BullMQ
 
@@ -138,8 +138,8 @@ Client -> POST session sync -> sync_runs(PENDING)
 
 Full sync is asynchronous so hundreds of groups do not hold an HTTP request open. Group details are
 used to calculate current send capability. The read model is incrementally published: each group
-and member replacement is atomic, but a session-wide sync is not an atomic snapshot. ADR 001 adds a
-monotonic session epoch so a recovered or superseded attempt cannot overwrite a newer attempt.
+and member replacement is atomic, but a session-wide sync is not an atomic snapshot. A monotonic
+session epoch prevents a recovered or superseded attempt from overwriting a newer attempt.
 
 ### OpenWA events
 

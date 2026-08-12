@@ -8,10 +8,11 @@ scheduler.
 
 [ADR 001](adr/001-postgresql-owned-durable-work-execution.md) accepts PostgreSQL-owned retry and
 attempt fencing as the target model. Database-owned retry and lease-token fencing are implemented
-for webhook processing, gateway synchronization, campaign preparation and capability refresh. The
-gateway sync-epoch and PostgreSQL outbound-session-lease changes remain pending. Until they are
-complete and verified, production is restricted to one scheduler and one worker; the existing Redis
-outbound lock must not be treated as a multi-replica correctness guarantee.
+for webhook processing, gateway synchronization, campaign preparation and capability refresh.
+Session-scoped sync epochs now fence full-sync domain writes. The PostgreSQL
+outbound-session-lease change remains pending. Until it is complete and verified, production is
+restricted to one scheduler and one worker; the existing Redis outbound lock must not be treated as
+a multi-replica correctness guarantee.
 
 ## Processing guarantees
 

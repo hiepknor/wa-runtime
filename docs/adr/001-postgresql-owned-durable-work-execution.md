@@ -209,13 +209,14 @@ Implementation is split into reviewable phases:
 
 1. **Implemented:** add database-owned retries and lease-token fencing for webhook, gateway sync,
    campaign preparation and capability refresh;
-2. add session-scoped sync epochs and fence all full-sync domain writes;
+2. **Implemented:** add session-scoped sync epochs, enforce one running sync per session and fence
+   all full-sync domain writes;
 3. add PostgreSQL outbound-session leases, load test them across worker replicas, then remove the
    Redis outbound lock;
 4. bulk group/member synchronization and validate OpenWA response schemas;
 5. isolate scheduler tick timing and add operational alerts.
 
-Until phases 1–3 pass integration and multi-process tests, production must run one scheduler and one
+Until phase 3 passes integration and multi-process tests, production must run one scheduler and one
 worker. Live sends remain disabled during the migration and staging validation.
 
 The public Runtime contract is not intentionally changed. Every implementation phase must run

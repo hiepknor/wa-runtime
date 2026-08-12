@@ -2,7 +2,7 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { runtimeConfig } from '../../core/config/runtime-config';
 import type { SyncRunDto } from '../../contracts/sessions/sync-run.dto';
 import { OpenWAClient } from '../../integrations/openwa/openwa.client';
-import { GatewayRepository } from './gateway.repository';
+import { GatewayRepository, type SyncWriteFence } from './gateway.repository';
 
 @Injectable()
 export class GatewaySyncService {
@@ -23,7 +23,8 @@ export class GatewaySyncService {
   async perform(syncRunId: string): Promise<{ groups?: number; members?: number; skipped?: boolean }> {
     const claim = await this.repository.claimSyncRun(syncRunId);
     if (!claim) return { skipped: true };
-    const { sessionId, leaseToken } = claim;
+    const { sessionId, leaseToken, syncEpoch } = claim;
+    const syncFence: SyncWriteFence = { syncRunId, leaseToken, syncEpoch };
     let groupsSynced = 0;
     let membersSynced = 0;
     let ownershipLost = false;
@@ -41,18 +42,18 @@ export class GatewaySyncService {
       await this.openwa.assertCompatibleRelease();
       await this.assertSyncOwnership(syncRunId, leaseToken, ownershipLost);
       const session = await this.openwa.getSession(sessionId);
-      await this.repository.upsertSession(session);
+      await this.repository.upsertSession(session, syncFence);
       await this.assertSyncOwnership(syncRunId, leaseToken, ownershipLost);
       const groups = await this.openwa.listGroups(sessionId);
       await this.assertSyncOwnership(syncRunId, leaseToken, ownershipLost);
-      await this.repository.replaceGroupSummaries(sessionId, groups);
+      await this.repository.replaceGroupSummaries(sessionId, groups, syncFence);
       const concurrency = 4;
       for (let offset = 0; offset < groups.length; offset += concurrency) {
         await this.assertSyncOwnership(syncRunId, leaseToken, ownershipLost);
         const batch = groups.slice(offset, offset + concurrency);
         const results = await Promise.all(batch.map(async summary => {
           const group = await this.openwa.getGroup(sessionId, summary.id);
-          return this.repository.upsertGroupDetails(sessionId, group);
+          return this.repository.upsertGroupDetails(sessionId, group, { syncFence });
         }));
         for (const result of results) {
           membersSynced += result.members;
@@ -103,8 +104,7 @@ export class GatewaySyncService {
       const result = await this.repository.upsertGroupDetails(
         sessionId,
         group,
-        expectedRevision,
-        claim.leaseToken,
+        { expectedRevision, capabilityLeaseToken: claim.leaseToken },
       );
       return { applied: result.applied };
     } catch (error) {

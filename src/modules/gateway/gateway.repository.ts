@@ -74,6 +74,13 @@ export interface ClaimedSyncRun {
   sessionId: string;
   leaseToken: string;
   attemptNumber: number;
+  syncEpoch: string;
+}
+
+export interface SyncWriteFence {
+  syncRunId: string;
+  leaseToken: string;
+  syncEpoch: string;
 }
 
 export type SyncAttemptResult = 'PENDING' | 'FAILED' | 'LOST_OWNERSHIP';
@@ -150,9 +157,8 @@ const mapSyncRun = (row: SyncRunRow): SyncRunDto => ({
 export class GatewayRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  async upsertSession(session: OpenWASession): Promise<SessionDto> {
-    const result = await this.database.query<SessionRow>(
-      `INSERT INTO gateway_sessions
+  async upsertSession(session: OpenWASession, syncFence?: SyncWriteFence): Promise<SessionDto> {
+    const sql = `INSERT INTO gateway_sessions
          (id, name, status, phone, push_name, connected_at, last_active_at, engine_loaded,
          last_error, restriction, gateway_created_at, gateway_updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12)
@@ -163,12 +169,19 @@ export class GatewayRepository {
          last_error = EXCLUDED.last_error, restriction = EXCLUDED.restriction,
          gateway_updated_at = EXCLUDED.gateway_updated_at,
          synced_at = now(), updated_at = now()
-       RETURNING *`,
-      [session.id, session.name, session.status, session.phone ?? null, session.pushName ?? null,
-        session.connectedAt ?? null, session.lastActive ?? null, session.engineLoaded,
-        session.lastError ?? null, session.restriction == null ? null : JSON.stringify(session.restriction),
-        session.createdAt, session.updatedAt],
-    );
+       RETURNING *`;
+    const values = [session.id, session.name, session.status, session.phone ?? null, session.pushName ?? null,
+      session.connectedAt ?? null, session.lastActive ?? null, session.engineLoaded,
+      session.lastError ?? null, session.restriction == null ? null : JSON.stringify(session.restriction),
+      session.createdAt, session.updatedAt];
+    if (syncFence) {
+      return this.database.transaction(async client => {
+        await this.assertSyncWriteOwnership(client, session.id, syncFence);
+        const result = await client.query<SessionRow>(sql, values);
+        return mapSession(result.rows[0]!);
+      });
+    }
+    const result = await this.database.query<SessionRow>(sql, values);
     return mapSession(result.rows[0]!);
   }
 
@@ -192,8 +205,13 @@ export class GatewayRepository {
     return result.rows[0]?.sendable === true;
   }
 
-  async replaceGroupSummaries(sessionId: string, groups: OpenWAGroupSummary[]): Promise<void> {
+  async replaceGroupSummaries(
+    sessionId: string,
+    groups: OpenWAGroupSummary[],
+    syncFence: SyncWriteFence,
+  ): Promise<void> {
     await this.database.transaction(async client => {
+      await this.assertSyncWriteOwnership(client, sessionId, syncFence);
       await client.query('UPDATE gateway_groups SET is_active = false, updated_at = now() WHERE session_id = $1', [sessionId]);
       for (const group of groups) await this.upsertGroupSummary(client, sessionId, group);
       await client.query(
@@ -230,21 +248,25 @@ export class GatewayRepository {
   async upsertGroupDetails(
     sessionId: string,
     group: OpenWAGroup,
-    expectedRevision?: number,
-    capabilityLeaseToken?: string,
+    options: {
+      expectedRevision?: number;
+      capabilityLeaseToken?: string;
+      syncFence?: SyncWriteFence;
+    } = {},
   ): Promise<{ members: number; applied: boolean }> {
     return this.database.transaction(async client => {
+      if (options.syncFence) await this.assertSyncWriteOwnership(client, sessionId, options.syncFence);
       const existingResult = await client.query<GroupRow>(
         `SELECT *, capability_refresh_lease_expires_at > now() AS capability_refresh_lease_valid
          FROM gateway_groups WHERE session_id = $1 AND id = $2 FOR UPDATE`,
         [sessionId, group.id],
       );
       const existing = existingResult.rows[0];
-      if (expectedRevision !== undefined && existing?.capability_revision !== expectedRevision) {
+      if (options.expectedRevision !== undefined && existing?.capability_revision !== options.expectedRevision) {
         return { members: 0, applied: false };
       }
-      if (capabilityLeaseToken !== undefined
-        && (existing?.capability_refresh_lease_token !== capabilityLeaseToken
+      if (options.capabilityLeaseToken !== undefined
+        && (existing?.capability_refresh_lease_token !== options.capabilityLeaseToken
           || existing.capability_refresh_lease_valid !== true)) {
         return { members: 0, applied: false };
       }
@@ -510,6 +532,7 @@ export class GatewayRepository {
       `UPDATE sync_runs SET
          status = CASE WHEN attempt_count >= 3 THEN 'FAILED'::gateway_sync_status
            ELSE 'PENDING'::gateway_sync_status END,
+         sync_epoch = CASE WHEN attempt_count >= 3 THEN sync_epoch ELSE NULL END,
          next_attempt_at = CASE WHEN attempt_count >= 3 THEN next_attempt_at ELSE now() END,
          lease_token = NULL, lease_expires_at = NULL,
          error = 'Recovered expired sync lease',
@@ -521,21 +544,48 @@ export class GatewayRepository {
   }
 
   async claimSyncRun(id: string): Promise<ClaimedSyncRun | null> {
-    const result = await this.database.query<{
-      session_id: string;
-      lease_token: string;
-      attempt_count: number;
-    }>(
-      `UPDATE sync_runs SET status = 'RUNNING', attempt_count = attempt_count + 1,
-         lease_token = gen_random_uuid(), lease_expires_at = now() + interval '2 minutes',
-         groups_synced = 0, members_synced = 0, error = NULL,
-         started_at = COALESCE(started_at, now()), completed_at = NULL, updated_at = now()
-       WHERE id = $1 AND status = 'PENDING' AND attempt_count < 3 AND next_attempt_at <= now()
-       RETURNING session_id, lease_token, attempt_count`,
-      [id],
-    );
-    const row = result.rows[0];
-    return row ? { sessionId: row.session_id, leaseToken: row.lease_token, attemptNumber: row.attempt_count } : null;
+    return this.database.transaction(async client => {
+      const candidate = await client.query<{ session_id: string }>(
+        'SELECT session_id FROM sync_runs WHERE id = $1',
+        [id],
+      );
+      const sessionId = candidate.rows[0]?.session_id;
+      if (!sessionId) return null;
+      await client.query(
+        `INSERT INTO gateway_sync_fences (session_id) VALUES ($1)
+         ON CONFLICT (session_id) DO NOTHING`,
+        [sessionId],
+      );
+      const fence = await client.query<{ current_epoch: string }>(
+        'SELECT current_epoch FROM gateway_sync_fences WHERE session_id = $1 FOR UPDATE',
+        [sessionId],
+      );
+      const syncEpoch = (BigInt(fence.rows[0]!.current_epoch) + 1n).toString();
+      const result = await client.query<{
+        lease_token: string;
+        attempt_count: number;
+      }>(
+        `UPDATE sync_runs target SET status = 'RUNNING', attempt_count = attempt_count + 1,
+           sync_epoch = $2::bigint, lease_token = gen_random_uuid(),
+           lease_expires_at = now() + interval '2 minutes',
+           groups_synced = 0, members_synced = 0, error = NULL,
+           started_at = COALESCE(started_at, now()), completed_at = NULL, updated_at = now()
+         WHERE id = $1 AND status = 'PENDING' AND attempt_count < 3 AND next_attempt_at <= now()
+           AND NOT EXISTS (
+             SELECT 1 FROM sync_runs active
+             WHERE active.session_id = target.session_id AND active.status = 'RUNNING'
+           )
+         RETURNING lease_token, attempt_count`,
+        [id, syncEpoch],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      await client.query(
+        'UPDATE gateway_sync_fences SET current_epoch = $2::bigint, updated_at = now() WHERE session_id = $1',
+        [sessionId, syncEpoch],
+      );
+      return { sessionId, leaseToken: row.lease_token, attemptNumber: row.attempt_count, syncEpoch };
+    });
   }
 
   async renewSyncLease(id: string, leaseToken: string): Promise<boolean> {
@@ -569,6 +619,7 @@ export class GatewayRepository {
       `UPDATE sync_runs SET
          status = CASE WHEN attempt_count >= 3 THEN 'FAILED'::gateway_sync_status
            ELSE 'PENDING'::gateway_sync_status END,
+         sync_epoch = CASE WHEN attempt_count >= 3 THEN sync_epoch ELSE NULL END,
          groups_synced = $3, members_synced = $4, error = $5,
          next_attempt_at = CASE WHEN attempt_count >= 3 THEN next_attempt_at
            ELSE now() + LEAST(300, 5 * power(2, attempt_count - 1)) * interval '1 second' END,
@@ -580,5 +631,27 @@ export class GatewayRepository {
       [id, leaseToken, groups, members, error],
     );
     return result.rows[0]?.status ?? 'LOST_OWNERSHIP';
+  }
+
+  private async assertSyncWriteOwnership(
+    client: PoolClient,
+    sessionId: string,
+    fence: SyncWriteFence,
+  ): Promise<void> {
+    const ownership = await client.query(
+      `SELECT 1 FROM gateway_sync_fences
+       WHERE session_id = $1 AND current_epoch = $2::bigint
+       FOR SHARE`,
+      [sessionId, fence.syncEpoch],
+    );
+    if (ownership.rowCount !== 1) throw new Error('Gateway sync attempt lost write ownership');
+    const run = await client.query(
+      `SELECT 1 FROM sync_runs
+       WHERE id = $1 AND session_id = $2 AND status = 'RUNNING' AND sync_epoch = $4::bigint
+         AND lease_token = $3 AND lease_expires_at > now()
+       FOR SHARE`,
+      [fence.syncRunId, sessionId, fence.leaseToken, fence.syncEpoch],
+    );
+    if (run.rowCount !== 1) throw new Error('Gateway sync attempt lost write ownership');
   }
 }
