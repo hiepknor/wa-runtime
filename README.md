@@ -12,7 +12,9 @@ Milestone 3 is complete. The Runtime currently provides:
 - campaign drafts, group targets and versioned preflight checks;
 - durable campaign runs, per-group deliveries, progress and recovery after restart;
 - pause, resume and cancel controls;
-- PostgreSQL-backed state, Redis/BullMQ queues and HMAC-verified OpenWA webhooks.
+- PostgreSQL-backed state, Redis/BullMQ queues and HMAC-verified OpenWA webhooks;
+- Redis-coordinated per-session outbound pacing and bounded PostgreSQL retention;
+- correlated, redacted JSON logs across API, scheduler and worker.
 
 Live delivery is disabled by default and requires both a `LIVE` run and
 `ALLOW_LIVE_SENDS=true`. Develop against `dev-session` with this switch kept off.
@@ -94,12 +96,16 @@ The exact lifecycle and state meanings are documented in
 - [Campaign lifecycle](docs/campaign-lifecycle.md) — capabilities, preflight, runs and deliveries.
 - [Development](docs/development.md) — local OpenWA, configuration, tests and contract generation.
 - [Operations](docs/operations.md) — production safety, deploy, recovery, backup and upgrade.
+- [Failure model](docs/failure-model.md) — durable dispatch, leases, retry and ambiguous delivery semantics.
+- [Observability](docs/observability.md) — JSON logs, correlation IDs, health checks and manual diagnosis.
+- [Latest local acceptance](docs/acceptance/2026-08-11-local.md) — sync, dry-run and Redis recovery evidence.
 - [API contract](docs/api-contract.md) — authentication, idempotency, endpoint groups and versioning.
 
 ## Common commands
 
 ```bash
 npm run check
+npm run test:integration
 
 set -a
 source .env

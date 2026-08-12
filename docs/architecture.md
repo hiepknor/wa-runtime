@@ -35,7 +35,7 @@ The same image runs three long-lived processes and one one-shot migration proces
 | Process | Responsibility | Durable state mutation |
 | --- | --- | --- |
 | `api` | HTTP API, validation, authentication, webhook ingress | PostgreSQL and queue enqueue |
-| `scheduler` | Claims due work, recovers stale queue state, activates and reconciles runs | PostgreSQL and BullMQ |
+| `scheduler` | Claims due work, recovers stale queue state, activates/reconciles runs and cleans terminal history | PostgreSQL and BullMQ |
 | `worker` | Processes sends, syncs, campaign preparation and webhooks | PostgreSQL through repositories |
 | `migrate` | Applies ordered SQL migrations once | `schema_migrations` and schema |
 
@@ -55,7 +55,8 @@ PostgreSQL is the source of truth. It stores:
 - campaigns, target selections, immutable run snapshots and per-group deliveries.
 
 Business state is committed before queue work is published. If Redis is unavailable after a commit,
-the scheduler retries publication from the durable row.
+the scheduler retries publication from the durable row. Webhooks, message jobs and sync runs use
+leases so crashed work is recovered according to its side-effect semantics.
 
 ### Redis and BullMQ
 
@@ -68,7 +69,14 @@ Redis is transport and short-lived cache, not the business source of truth. Four
 
 Redis also caches OpenWA session sendability for preflight for 10 seconds. Session-status and
 session-restriction webhooks invalidate that cache. Redis is configured with AOF and
-`maxmemory-policy=noeviction`, but losing the queue does not erase durable campaign state.
+`maxmemory-policy=noeviction`. A token-checked Redis lock serializes outbound calls per session
+across worker replicas; different sessions remain independent. Losing Redis does not erase durable
+campaign state, but outbound processing pauses until Redis is available.
+
+The scheduler removes terminal operational history older than `RUNTIME_RETENTION_DAYS` in bounded,
+indexed batches. Active rows are never retention candidates. Campaign run graphs are removed before
+their message jobs, and normalized event children are removed with their parent event. Retention
+therefore also defines how long old idempotency keys remain reusable-proof records.
 
 ### OpenWA adapter
 
@@ -81,11 +89,12 @@ stop there and are mapped into Runtime-owned types. A full sync verifies OpenWA'
 ```text
 src/
   app.module.ts          Nest composition root
+  app/                   Worker and scheduler composition roots
   entrypoints/           API, scheduler and worker bootstraps
   contracts/             public request/response DTOs
-  core/                  auth, config, database, queue and OpenAPI setup
+  core/                  auth, config, database, queue, observability and OpenAPI setup
   integrations/openwa/   upstream anti-corruption adapter
-  modules/               campaigns, gateway, health, inbox, messages, webhooks
+  modules/               campaigns, gateway, health, inbox, messages, webhooks and orchestration
 ```
 
 Dependencies flow inward from entrypoints and the composition root:
@@ -99,6 +108,10 @@ entrypoints -> app.module -> modules -> core / integrations
 feature controllers. Feature-to-feature dependencies use exported Nest providers; currently
 Campaigns and Webhooks depend on Gateway, while Campaigns also depends on Messages. Public DTOs stay
 centralized so all supported clients generate from one contract rather than module-internal types.
+
+Every process writes JSON logs. The API creates or preserves a bounded `X-Request-ID`; BullMQ
+workers create correlation context from durable and queue IDs. These identifiers are the supported
+way to correlate HTTP, scheduler, worker and OpenWA activity across process logs.
 
 ## Main flows
 
@@ -162,6 +175,8 @@ those shapes to consumers.
   an existing run.
 - A live delivery rechecks the group's capability revision before materialization.
 - A live worker checks durable session sendability immediately before its OpenWA call.
+- A live worker acquires the distributed session lock, refreshes its processing lease, waits the
+  configured random delay and holds the lock through the OpenWA response.
 - HTTP 403/404 group-send failures invalidate the affected capability for targeted refresh.
 - `UNKNOWN` means the worker cannot prove whether a non-HTTP failure sent the message; it is never
   silently retried as a new send.
@@ -169,3 +184,6 @@ those shapes to consumers.
   cancelled durably.
 
 This design prefers visible partial failure over hidden duplication.
+
+The exact retry, lease and ambiguous-delivery rules are documented in
+[Failure model](failure-model.md).

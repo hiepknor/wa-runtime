@@ -23,7 +23,7 @@ Production needs these Runtime services:
 | migrate | One-shot before application processes start. |
 | API | One initially; scale only with shared rate/auth policy. |
 | scheduler | One initially to keep dispatch behavior simple. |
-| worker | One initially because outbound concurrency is deliberately 1. |
+| worker | One initially. Multiple replicas are supported; a Redis lock still serializes sends per session. |
 
 OpenWA is a separate Gateway deployment with its own PostgreSQL, Redis, storage and release
 lifecycle. Do not merge the two databases or Redis instances merely because both products use the
@@ -55,9 +55,12 @@ GET /api/v1/health/live
 GET /api/v1/health/ready
 ```
 
-Readiness checks PostgreSQL and reports the live-send interlock, pinned OpenWA release and number of
-allowlisted sessions. It does not prove that OpenWA is currently paired; session sendability is
-visible through the session API and campaign preflight.
+Readiness checks PostgreSQL, Redis and fresh worker/scheduler heartbeats, then reports the live-send
+interlock, pinned OpenWA release and number of allowlisted sessions. It does not prove that OpenWA
+is currently paired; session sendability is visible through the session API and campaign preflight.
+
+All processes emit correlated JSON logs. The deployment has no trace store, metrics database,
+dashboard or alert engine. See [Observability](observability.md) for log fields and manual diagnosis.
 
 Useful container checks:
 
@@ -68,9 +71,23 @@ docker compose exec -T postgres pg_isready -U automation -d automation_runtime
 docker compose exec -T redis redis-cli ping
 ```
 
-Alert on repeated worker failures, runs stuck in `PREPARING`, unexpected `UNKNOWN` deliveries,
-session restrictions, increasing capability refresh failures, database storage pressure and Redis
-`noeviction` write failures.
+Regularly inspect repeated worker failures, runs stuck in `PREPARING`, unexpected `UNKNOWN`
+deliveries, dead or increasingly old webhook events, expired processing leases, session
+restrictions, capability refresh failures, database storage pressure and Redis `noeviction` write
+failures.
+
+## Outbound pacing and retention
+
+`OUTBOUND_MIN_DELAY_MS` and `OUTBOUND_MAX_DELAY_MS` apply inside a distributed per-session lock.
+For a 500-group campaign on one session, messages are intentionally serialized; adding workers helps
+other sessions and non-send queues but does not increase that session's send rate. Keep the maximum
+at or below 60 seconds so the lock and processing lease remain bounded.
+
+Terminal rows are retained for `RUNTIME_RETENTION_DAYS` (90 by default). The scheduler runs cleanup
+every `RUNTIME_RETENTION_INTERVAL_MS` and deletes at most `RUNTIME_RETENTION_BATCH_SIZE` rows from
+each data family per pass. Seven days is the enforced minimum. Choose the period from audit,
+incident-response and storage requirements; it is also the effective historical idempotency window.
+Backups remain governed by their own retention policy and are not deleted by this job.
 
 ## Backup and restore
 
@@ -101,6 +118,9 @@ model before production launch.
 
 Redis AOF is useful for short outages but is not a substitute for PostgreSQL backup. After Redis
 loss, start Redis, then scheduler and worker; durable pending rows will be enqueued again.
+Webhook retries, pending syncs, campaign preparation and scheduled message jobs are rediscovered
+from PostgreSQL. A live message left in `PROCESSING` past its lease becomes `UNKNOWN` and is never
+resent automatically.
 
 ## Restart and recovery
 

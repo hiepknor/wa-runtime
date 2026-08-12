@@ -48,7 +48,9 @@ These creation endpoints require an `Idempotency-Key` header:
 
 Keys describe one operator intent and should be stable across HTTP retry, timeout and client
 restart. Do not generate a new key merely because the response was lost. Reusing a campaign-run key
-with a different execution mode returns HTTP 409.
+with a different execution mode returns HTTP 409. Message-job keys are scoped separately from
+campaign delivery keys and are bound to a request fingerprint; reusing one with different content,
+recipient, schedule or execution mode also returns HTTP 409.
 
 ## Endpoint groups
 
@@ -122,7 +124,8 @@ GET  /message-jobs/{id}
 
 Campaign management clients should use campaign-run endpoints. Low-level message jobs remain useful
 for diagnostics and narrowly scoped automation, but they do not provide campaign target snapshots
-or campaign progress.
+or campaign progress. A low-level live job must target an active synchronized group with current
+`ALLOWED` capability; the worker rechecks this policy immediately before delivery.
 
 ## Pagination and polling
 

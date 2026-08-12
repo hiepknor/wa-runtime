@@ -22,7 +22,9 @@ separate PostgreSQL, Redis and volumes.
 | `scripts` | Migration, contract-generation and development proxy executables. |
 | `migrations` | Ordered, forward-only PostgreSQL migrations. |
 | `contracts` | Committed generated Runtime and pinned upstream OpenWA specifications. |
-| `test` | Unit tests for policy and normalization boundaries. |
+| `test/unit` | Unit tests for policy, idempotency, processing and normalization boundaries. |
+| `test/integration` | PostgreSQL, Redis, fake-OpenWA, recovery and HTTP authorization tests. |
+| `test/support` | Isolated Docker harness, database reset helpers and fake upstream server. |
 
 Run `codegraph sync` after moving symbols or files. Use `codegraph explore` before text search when
 locating implementations or evaluating blast radius.
@@ -102,7 +104,15 @@ npm run typecheck
 npm test
 npm run build
 npm run check
+npm run test:integration
+npm run check:all
 ```
+
+`npm test` runs only the fast unit suite. `npm run test:integration` builds the production artifact,
+starts temporary PostgreSQL 17 and Redis 8 containers on random loopback ports, applies every
+migration and runs against an in-process fake OpenWA server. Docker must be running; the harness
+removes its containers during teardown and never connects to the development database, Redis or
+paired OpenWA session.
 
 The development entry points are available when individual host processes are useful:
 
@@ -114,6 +124,20 @@ npm run dev:scheduler
 
 Do not run host and Docker schedulers/workers simultaneously against the same database unless the
 test explicitly targets multi-process concurrency.
+
+### Repeatable 500-target dry-run load test
+
+The load test refuses to run when live sends are enabled, creates uniquely prefixed synthetic groups,
+verifies campaign delivery invariants and removes its test data afterward. Against the Compose stack:
+
+```bash
+docker compose run --rm \
+  -e LOAD_TEST_API_URL=http://api:3100/api/v1 \
+  api node dist/scripts/load-test-dry-run.js
+```
+
+Set `LOAD_TEST_TARGET_COUNT`, `LOAD_TEST_TIMEOUT_MS` or `LOAD_TEST_POLL_MS` only when testing another
+profile. Worker and scheduler may be restarted while the command is running to exercise recovery.
 
 ## Contract workflow
 
