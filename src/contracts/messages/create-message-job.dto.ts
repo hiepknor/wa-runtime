@@ -12,7 +12,7 @@ export class CreateMessageJobDto {
   @IsNotEmpty()
   recipientId!: string;
 
-  @ApiProperty({ example: 'Hello from Automation Runtime', maxLength: 4096 })
+  @ApiProperty({ example: 'Hello from WA Runtime', maxLength: 4096 })
   @IsString()
   @IsNotEmpty()
   @MaxLength(4096)

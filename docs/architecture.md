@@ -2,19 +2,18 @@
 
 ## Purpose and boundary
 
-Automation Runtime is the control plane for group automation. It converts client intent into
+WA Runtime is the control plane for group automation. It converts client intent into
 durable, observable work while isolating every consumer from OpenWA details.
 
 ```text
-Desktop / Mobile / Web / integrations
-    -> Runtime contract -> Automation Runtime -> OpenWA adapter -> OpenWA Gateway
+WA Studio -> Runtime contract -> WA Runtime -> OpenWA adapter -> OpenWA Gateway
 ```
 
 The boundary is intentional:
 
 - Client applications own presentation and platform-specific interaction. WA Studio is the first
   client, not a privileged or hard-coded dependency.
-- Automation Runtime owns campaigns, scheduling, idempotency, policy, queues and delivery state.
+- WA Runtime owns campaigns, scheduling, idempotency, policy, queues and delivery state.
 - OpenWA owns the WhatsApp connection and low-level send/read operations.
 - WhatsApp remains the external authority for account, group and message-delivery facts.
 

@@ -13,6 +13,12 @@ vi.mock('../../src/core/config/runtime-config', () => ({
 }));
 
 describe('HealthController readiness', () => {
+  it('reports the WA Runtime service identity', () => {
+    const controller = new HealthController({} as DatabaseService, {} as QueueService);
+
+    expect(controller.live()).toEqual({ status: 'ok', service: 'wa-runtime', version: '0.1.0' });
+  });
+
   it('requires PostgreSQL, Redis, worker and scheduler', async () => {
     const database = { query: vi.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] }) };
     const queues = { readiness: vi.fn().mockResolvedValue({ redis: true, worker: true, scheduler: true }) };

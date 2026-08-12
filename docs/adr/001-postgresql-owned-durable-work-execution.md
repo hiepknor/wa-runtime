@@ -2,11 +2,11 @@
 
 - Status: Accepted — implementation in progress
 - Date: 2026-08-12
-- Owners: Automation Runtime maintainers
+- Owners: WA Runtime maintainers
 
 ## Context
 
-Automation Runtime persists business intent in PostgreSQL and uses BullMQ as recoverable transport.
+WA Runtime persists business intent in PostgreSQL and uses BullMQ as recoverable transport.
 The API and scheduler can therefore republish work after Redis loss. This boundary is sound, but at
 the time of this decision the implementation divided execution ownership and retry policy between
 PostgreSQL and BullMQ:

@@ -27,7 +27,7 @@ describe('observability context and logging', () => {
 
     const entry = JSON.parse(String(write.mock.calls[0]?.[0])) as Record<string, unknown>;
     expect(entry).toMatchObject({
-      level: 'error', process: 'worker', messageJobId: 'job-1', message: 'send.failed',
+      level: 'error', service: 'wa-runtime', process: 'worker', messageJobId: 'job-1', message: 'send.failed',
       details: { event: 'send.failed', apiKey: '[redacted]', nested: { body: '[redacted]' } },
     });
   });

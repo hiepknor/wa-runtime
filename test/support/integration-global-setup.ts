@@ -69,8 +69,8 @@ async function waitForDatabase(databaseUrl: string): Promise<void> {
 export default async function setup(): Promise<() => Promise<void>> {
   docker(['info']);
   const suffix = randomUUID().slice(0, 8);
-  const postgres = `automation-runtime-test-postgres-${suffix}`;
-  const redis = `automation-runtime-test-redis-${suffix}`;
+  const postgres = `wa-runtime-test-postgres-${suffix}`;
+  const redis = `wa-runtime-test-redis-${suffix}`;
   const containers: string[] = [];
 
   try {

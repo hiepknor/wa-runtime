@@ -16,7 +16,13 @@ export interface SchedulerTickState {
 }
 
 export const runtimeHeartbeatKey = (processName: RuntimeProcessName): string =>
+  `wa-runtime:heartbeat:${processName}`;
+
+export const legacyRuntimeHeartbeatKey = (processName: RuntimeProcessName): string =>
   `automation-runtime:heartbeat:${processName}`;
 
 export const schedulerTickStateKey = (tick: string): string =>
+  `wa-runtime:scheduler-tick:${tick}`;
+
+export const legacySchedulerTickStateKey = (tick: string): string =>
   `automation-runtime:scheduler-tick:${tick}`;

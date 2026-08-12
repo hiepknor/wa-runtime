@@ -1,9 +1,9 @@
-# Automation Runtime
+# WA Runtime
 
-Durable automation service between **client applications** and the existing **OpenWA Gateway**.
-WA Studio is the first client, but the Runtime contract is client-neutral and can also serve future
-mobile apps, web dashboards and trusted integrations. No client calls OpenWA directly or receives an
-OpenWA operator key.
+Durable control plane between **WA Studio** and the existing **OpenWA Gateway**. The Runtime contract
+remains client-neutral for future trusted clients, but the product architecture is deliberately
+named `WA Studio -> WA Runtime -> OpenWA`. No client calls OpenWA directly or receives an OpenWA
+operator key.
 
 Milestone 3 is complete. The Runtime currently provides:
 
@@ -26,7 +26,7 @@ Client applications (Desktop / Mobile / Web / integrations)
     |
     | Runtime API v1 + X-Runtime-Key
     v
-Automation Runtime API ---- PostgreSQL (source of truth)
+WA Runtime API ----------- PostgreSQL (source of truth)
            |                       ^
            v                       |
        Redis/BullMQ --> scheduler/worker --> OpenWA Gateway
@@ -93,6 +93,7 @@ The exact lifecycle and state meanings are documented in
 ## Documentation
 
 - [Architecture](docs/architecture.md) — boundaries, components, data ownership and flows.
+- [ADR 002](docs/adr/002-rename-to-wa-runtime.md) — product rename and operational compatibility identifiers.
 - [Campaign lifecycle](docs/campaign-lifecycle.md) — capabilities, preflight, runs and deliveries.
 - [Development](docs/development.md) — local OpenWA, configuration, tests and contract generation.
 - [Operations](docs/operations.md) — production safety, deploy, recovery, backup and upgrade.

@@ -1,8 +1,8 @@
 {
-  "name": "automation-runtime",
+  "name": "wa-runtime",
   "version": "0.1.0",
   "private": true,
-  "description": "Control plane and durable automation runtime for WA Studio",
+  "description": "Durable control plane between WA Studio and OpenWA",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=22"

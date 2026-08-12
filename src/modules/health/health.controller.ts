@@ -18,7 +18,7 @@ export class HealthController {
   @Public()
   @Get('live')
   live() {
-    return { status: 'ok', service: 'automation-runtime', version: '0.1.0' };
+    return { status: 'ok', service: 'wa-runtime', version: '0.1.0' };
   }
 
   @Public()

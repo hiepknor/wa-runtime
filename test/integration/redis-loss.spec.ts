@@ -4,6 +4,13 @@ import type { Pool } from 'pg';
 import { DatabaseService } from '../../src/core/database/database.service';
 import { QueueService } from '../../src/core/queue/queue.service';
 import { stableQueueJobId } from '../../src/core/queue/queue-job-id';
+import {
+  legacyRuntimeHeartbeatKey,
+  legacySchedulerTickStateKey,
+  runtimeHeartbeatKey,
+  schedulerTickStateKey,
+  type SchedulerTickState,
+} from '../../src/core/queue/runtime-heartbeat';
 import { MessageJobRepository } from '../../src/modules/messages/message-job.repository';
 import { MessageDispatchTick } from '../../src/modules/orchestration/message-dispatch.tick';
 import { WebhookDispatchTick } from '../../src/modules/orchestration/webhook-dispatch.tick';
@@ -73,5 +80,35 @@ describe('Redis loss recovery', () => {
     await new WebhookDispatchTick(webhooks, queues).run();
 
     expect(await queues.webhookIngress.getJob(stableQueueJobId('webhook', envelope.idempotencyKey))).not.toBeUndefined();
+  });
+
+  it('dual-writes process and scheduler telemetry during the namespace migration', async () => {
+    const state: SchedulerTickState = {
+      name: 'messages', running: false, timedOut: false, consecutiveFailures: 0,
+      lastStartedAt: null, lastSuccessAt: new Date().toISOString(), lastFailureAt: null,
+      lastDurationMs: 1, nextRunAt: null,
+    };
+
+    await queues.publishHeartbeat('worker');
+    await queues.publishSchedulerTickState(state);
+
+    const values = await redis.mget(
+      runtimeHeartbeatKey('worker'),
+      legacyRuntimeHeartbeatKey('worker'),
+      schedulerTickStateKey('messages'),
+      legacySchedulerTickStateKey('messages'),
+    );
+    expect(values.every(Boolean)).toBe(true);
+    expect(values[0]).toBe(values[1]);
+    expect(values[2]).toBe(values[3]);
+  });
+
+  it('accepts legacy-only process heartbeats during a rolling deployment', async () => {
+    await redis.set(legacyRuntimeHeartbeatKey('worker'), new Date().toISOString(), 'EX', 15);
+    await redis.set(legacyRuntimeHeartbeatKey('scheduler'), new Date().toISOString(), 'EX', 15);
+
+    await expect(queues.readiness()).resolves.toEqual({ redis: true, worker: true, scheduler: true });
+    expect(await redis.get(runtimeHeartbeatKey('worker'))).toBeNull();
+    expect(await redis.get(runtimeHeartbeatKey('scheduler'))).toBeNull();
   });
 });

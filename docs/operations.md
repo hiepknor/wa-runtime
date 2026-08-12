@@ -2,7 +2,7 @@
 
 ## Production principles
 
-- Pin both Automation Runtime and OpenWA to reviewed release tags.
+- Pin both WA Runtime and OpenWA to reviewed release tags.
 - Use `prod-session` only in production and allowlist only its UUID.
 - Keep PostgreSQL and Redis on private networks; expose only the Runtime API through TLS.
 - Give the Runtime a session-scoped OpenWA operator key with only required permissions.
@@ -72,7 +72,7 @@ docker compose ps
 docker compose logs --since=15m api worker scheduler migrate
 docker compose exec -T postgres pg_isready -U automation -d automation_runtime
 docker compose exec -T redis redis-cli ping
-docker compose exec -T redis redis-cli --scan --pattern 'automation-runtime:scheduler-tick:*'
+docker compose exec -T redis redis-cli --scan --pattern 'wa-runtime:scheduler-tick:*'
 ```
 
 Regularly inspect repeated worker failures, runs stuck in `PREPARING`, unexpected `UNKNOWN`
@@ -115,10 +115,15 @@ Backups remain governed by their own retention policy and are not deleted by thi
 Store backup scripts and archives outside the OpenWA project. A suitable separation is:
 
 ```text
-/opt/automation-runtime/              deployment
-/opt/automation-runtime/scripts/      Runtime maintenance scripts
-/var/backups/automation-runtime/      backup archives
+/opt/wa-runtime/              deployment
+/opt/wa-runtime/scripts/      Runtime maintenance scripts
+/var/backups/wa-runtime/      backup archives
 ```
+
+Existing installations may retain the legacy `automation-runtime` paths, Compose project, volumes
+and `automation_runtime` PostgreSQL database. Treat them as storage identifiers and migrate them
+only in a separately backed-up maintenance window; the product rename does not require moving
+business state.
 
 The minimum Runtime backup is a PostgreSQL logical dump plus the exact application release tag and
 environment inventory. Never put secrets into the backup filename or command output.
@@ -129,7 +134,7 @@ Example logical backup:
 umask 077
 docker compose exec -T postgres \
   pg_dump -U automation -d automation_runtime -Fc \
-  > /var/backups/automation-runtime/runtime-$(date -u +%Y%m%dT%H%M%SZ).dump
+  > /var/backups/wa-runtime/runtime-$(date -u +%Y%m%dT%H%M%SZ).dump
 ```
 
 Test restoration periodically into an isolated database. A restore replaces or merges durable

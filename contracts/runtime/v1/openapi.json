@@ -1148,7 +1148,7 @@
     }
   },
   "info": {
-    "title": "Automation Runtime API",
+    "title": "WA Runtime API",
     "description": "Stable, versioned API contract consumed by WA Studio",
     "version": "1.0.0",
     "contact": {}
@@ -2214,7 +2214,7 @@
           },
           "text": {
             "type": "string",
-            "example": "Hello from Automation Runtime",
+            "example": "Hello from WA Runtime",
             "maxLength": 4096
           },
           "scheduledAt": {

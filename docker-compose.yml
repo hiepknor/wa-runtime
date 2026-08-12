@@ -1,3 +1,4 @@
+# Kept during ADR 002 so existing Compose volumes remain attached after the product rename.
 name: automation-runtime
 
 x-logging: &default-logging
@@ -8,6 +9,7 @@ x-logging: &default-logging
 
 x-runtime: &runtime
   build: .
+  image: ${WA_RUNTIME_IMAGE:-wa-runtime:local}
   restart: unless-stopped
   env_file: .env
   logging: *default-logging
@@ -70,6 +72,7 @@ services:
       automation-internal:
       wa-dev-network:
         aliases:
+          - wa-runtime-api
           - automation-api
     ports:
       - "127.0.0.1:3100:3100"

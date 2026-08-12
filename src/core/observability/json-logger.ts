@@ -64,7 +64,7 @@ export class JsonLogger implements LoggerService {
     const entry = {
       timestamp: new Date().toISOString(),
       level,
-      service: 'automation-runtime',
+      service: 'wa-runtime',
       process: this.processName,
       ...correlationContext(),
       ...(context ? { context } : {}),
