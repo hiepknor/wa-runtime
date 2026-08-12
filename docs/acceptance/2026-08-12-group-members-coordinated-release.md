@@ -45,11 +45,23 @@ the coordinated staging smoke test below.
 
 ## Staging smoke-test checklist
 
-Overall staging status: **PENDING**.
+Staging deployment preflight on 2026-08-12 found:
+
+- local Runtime `9591e42` contains the approved contract commit `5d8613a`, and the OpenAPI SHA-256
+  remains the approved hash, but this revision is 21 commits ahead of `origin/main`;
+- WA Studio `acd2b34` contains migration commit `adee01d`, matches `origin/main`, regenerates the same
+  OpenAPI hash and passes `npm run check` (8 test files/37 tests, frontend build, Rust formatting and
+  Cargo clippy);
+- neither repository defines a staging deployment pipeline or target;
+- WA Studio's Tauri HTTP capability permits only `127.0.0.1:3100` and `localhost:3100`. The exact
+  staging HTTPS Runtime origin has not been supplied, so a staging-capable immutable desktop build
+  cannot yet be produced safely.
+
+Overall staging status: **BLOCKED**.
 
 | Scenario | Expected result | Evidence | Status |
 | --- | --- | --- | --- |
-| Deployment revisions | Runtime contains `5d8613a`; WA Studio contains `adee01d` | Not run | PENDING |
+| Deployment revisions | Runtime contains `5d8613a`; WA Studio contains `adee01d` | WA Studio revision is published; Runtime `9591e42` is local-only and the staging target is undefined | BLOCKED |
 | Runtime contract | Served/generated OpenAPI hash matches the approved SHA-256 above | Not run | PENDING |
 | Small group | Detail returns metadata without `members`; member page returns all synchronized rows | Not run | PENDING |
 | Group over three pages | Each page payload is bounded by `limit`; aggregate walk has no duplicates or omissions on an unchanged dataset | Not run | PENDING |
@@ -70,9 +82,11 @@ request telemetry without response bodies containing member data.
 
 ## Gate decision
 
-Release gate: **PENDING**.
+Release gate: **BLOCKED**.
 
 Pre-staging contract compatibility is confirmed for Runtime `34d9faf..5d8613a`, WA Studio
-`adee01d`, and the approved OpenAPI hash above. The remaining blocker is execution and recording of
-all staging smoke tests. Change the gate to **PASS** only after every row is successful. Any failed
-scenario makes the gate **BLOCKED** until corrected and rerun.
+`adee01d`, and the approved OpenAPI hash above. To resume the coordinated staging deployment, supply
+the exact HTTPS Runtime staging origin and deployment target, add that exact origin to the WA Studio
+Tauri capability, publish immutable Runtime and WA Studio revisions, and provide access to the
+staging deployment mechanism. Then deploy both revisions together and execute every remaining smoke
+row. Change the gate to **PASS** only after every row is successful.
