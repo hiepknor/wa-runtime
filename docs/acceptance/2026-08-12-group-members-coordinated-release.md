@@ -60,8 +60,12 @@ Staging infrastructure verification on 2026-08-12 found:
   origins. `npm run check` passed, and `npm run tauri build` produced the arm64 DMG with SHA-256
   `475271c85d7b5db88ee8665c14991fff54c8e13991679664fc8a84b612bf8a04`;
 - the approved Runtime OpenAPI SHA-256 remains unchanged and matches the WA Studio snapshot;
-- no dedicated OpenWA staging session or synchronized group-member fixture exists yet. The existing
-  `prod-session` is intentionally excluded, so data-level and UI smoke tests cannot run safely.
+- a dedicated OpenWA `0.16.0` instance is healthy at `https://wa-staging.onio.cc`. It uses an
+  isolated SQLite/local-storage directory and Docker network, has no Docker socket/proxy access,
+  and exposes one Runtime-scoped staging session record;
+- the staging session is not connected to WhatsApp yet and has no synchronized group-member
+  fixtures. The existing `prod-session` remains excluded, so data-level and UI smoke tests cannot
+  run until an operator completes the staging QR login.
 
 Overall staging status: **BLOCKED**.
 
@@ -92,7 +96,7 @@ Release gate: **BLOCKED**.
 
 Contract compatibility and staging infrastructure are confirmed for WA Runtime
 `34d9faf..c89dbc3`, WA Studio `764f078`, and the approved OpenAPI hash above. The remaining blocker
-is a dedicated, non-production OpenWA staging session with representative group fixtures, followed
-by installation of the recorded WA Studio artifact and execution of every pending smoke row. Do not
-reuse the existing production session or enable live sends for these read-only checks. Change the
-gate to **PASS** only after every row is successful.
+is completing the QR login for the dedicated, non-production OpenWA staging session and preparing
+representative group fixtures, followed by installation of the recorded WA Studio artifact and
+execution of every pending smoke row. Do not reuse the existing production session or enable live
+sends for these read-only checks. Change the gate to **PASS** only after every row is successful.
