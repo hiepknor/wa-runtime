@@ -16,14 +16,17 @@ session IDs or Docker volumes.
 
 Production needs these Runtime services:
 
+The temporary replication limits below implement the rollout guard from
+[ADR 001](adr/001-postgresql-owned-durable-work-execution.md).
+
 | Service | Replication guidance |
 | --- | --- |
 | PostgreSQL | One primary with tested backups. |
 | Redis | One persistent private instance using `noeviction`. |
 | migrate | One-shot before application processes start. |
 | API | One initially; scale only with shared rate/auth policy. |
-| scheduler | One initially to keep dispatch behavior simple. |
-| worker | One initially. Multiple replicas are supported; a Redis lock still serializes sends per session. |
+| scheduler | Exactly one until ADR 001 database-owned retries and fencing pass staging. |
+| worker | Exactly one until sync epochs and PostgreSQL outbound-session leases pass multi-process tests. |
 
 OpenWA is a separate Gateway deployment with its own PostgreSQL, Redis, storage and release
 lifecycle. Do not merge the two databases or Redis instances merely because both products use the
@@ -76,12 +79,19 @@ deliveries, dead or increasingly old webhook events, expired processing leases, 
 restrictions, capability refresh failures, database storage pressure and Redis `noeviction` write
 failures.
 
+After [ADR 001](adr/001-postgresql-owned-durable-work-execution.md) is implemented, also alert on
+lost-ownership transitions, exhausted durable retry budgets, sync epoch rejections, expired
+outbound-session leases and scheduler lag. These events must not include message text, member search
+values, phone numbers or secrets.
+
 ## Outbound pacing and retention
 
-`OUTBOUND_MIN_DELAY_MS` and `OUTBOUND_MAX_DELAY_MS` apply inside a distributed per-session lock.
-For a 500-group campaign on one session, messages are intentionally serialized; adding workers helps
-other sessions and non-send queues but does not increase that session's send rate. Keep the maximum
-at or below 60 seconds so the lock and processing lease remain bounded.
+`OUTBOUND_MIN_DELAY_MS` and `OUTBOUND_MAX_DELAY_MS` apply inside a distributed per-session lease.
+The current lease is a Redis lock; [ADR 001](adr/001-postgresql-owned-durable-work-execution.md)
+replaces it with a PostgreSQL token-owned lease before multiple worker replicas are enabled. For a
+500-group campaign on one session, messages are intentionally serialized; adding workers helps other
+sessions and non-send queues but does not increase that session's send rate. Keep the maximum at or
+below 60 seconds so the session and message processing leases remain bounded.
 
 Terminal rows are retained for `RUNTIME_RETENTION_DAYS` (90 by default). The scheduler runs cleanup
 every `RUNTIME_RETENTION_INTERVAL_MS` and deletes at most `RUNTIME_RETENTION_BATCH_SIZE` rows from
@@ -138,6 +148,9 @@ After restart:
 4. verify `PREPARING` runs advance and stale queued jobs recover;
 5. do not manually duplicate a run to make it move.
 
+Before ADR 001 is fully implemented, do not start a second scheduler or worker as a recovery
+shortcut. Restart the single process and let PostgreSQL-backed discovery republish the durable rows.
+
 Pause a run before planned intervention when possible. Cancel stops only pending/queued work; it
 cannot recall a message already processing or accepted by OpenWA.
 
@@ -192,6 +205,10 @@ Application rollback means returning to a previous immutable Runtime tag. Databa
 automatically safe: migrations are forward-only and an older binary may not understand new schema
 or enum values. Before every release, classify migrations as backward-compatible or require a
 restore/forward-fix plan.
+
+Migrations implementing ADR 001 are additive but change execution semantics. Deploy them with live
+sends disabled, verify stale-attempt fencing and retry exhaustion in staging, then load test the
+PostgreSQL outbound-session lease before enabling multiple workers or live sends.
 
 Prefer a forward corrective release for additive migrations. Restore a database backup only after
 explicitly accepting that post-backup campaign and delivery state will be lost.

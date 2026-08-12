@@ -42,6 +42,12 @@ The same image runs three long-lived processes and one one-shot migration proces
 The API can restart without losing campaign work. The scheduler reconstructs pending work from
 PostgreSQL, and BullMQ job IDs make re-enqueueing safe.
 
+The accepted target execution model is defined by
+[ADR 001](adr/001-postgresql-owned-durable-work-execution.md). Its implementation is in progress.
+Database-owned retry and lease-token fencing are implemented; session sync-epoch and
+outbound-session-lease phases remain. Production is restricted to one scheduler and one worker until
+those phases are complete.
+
 ## Infrastructure responsibilities
 
 ### PostgreSQL
@@ -58,6 +64,12 @@ Business state is committed before queue work is published. If Redis is unavaila
 the scheduler retries publication from the durable row. Webhooks, message jobs and sync runs use
 leases so crashed work is recovered according to its side-effect semantics.
 
+Under the accepted execution model, PostgreSQL also owns retry timing, retry exhaustion and attempt
+ownership. Retryable attempts receive database lease tokens, and a stale token cannot renew,
+complete or fail its durable attempt. Capability-refresh writes are also token-guarded. Full-sync
+group/member writes require the pending sync-epoch phase before they are safe across worker replicas.
+BullMQ does not own business retries.
+
 ### Redis and BullMQ
 
 Redis is transport and short-lived cache, not the business source of truth. Four queues exist:
@@ -69,9 +81,10 @@ Redis is transport and short-lived cache, not the business source of truth. Four
 
 Redis also caches OpenWA session sendability for preflight for 10 seconds. Session-status and
 session-restriction webhooks invalidate that cache. Redis is configured with AOF and
-`maxmemory-policy=noeviction`. A token-checked Redis lock serializes outbound calls per session
-across worker replicas; different sessions remain independent. Losing Redis does not erase durable
-campaign state, but outbound processing pauses until Redis is available.
+`maxmemory-policy=noeviction`. The current implementation uses a token-checked Redis lock for
+outbound serialization. ADR 001 replaces that transitional lock with a token-owned PostgreSQL
+session lease so Redis remains transport and cache rather than a correctness boundary. Losing Redis
+does not erase durable campaign state, but outbound processing pauses until transport is restored.
 
 The scheduler removes terminal operational history older than `RUNTIME_RETENTION_DAYS` in bounded,
 indexed batches. Active rows are never retention candidates. Campaign run graphs are removed before
@@ -124,7 +137,9 @@ Client -> POST session sync -> sync_runs(PENDING)
 ```
 
 Full sync is asynchronous so hundreds of groups do not hold an HTTP request open. Group details are
-used to calculate current send capability.
+used to calculate current send capability. The read model is incrementally published: each group
+and member replacement is atomic, but a session-wide sync is not an atomic snapshot. ADR 001 adds a
+monotonic session epoch so a recovered or superseded attempt cannot overwrite a newer attempt.
 
 ### OpenWA events
 
@@ -175,8 +190,9 @@ those shapes to consumers.
   an existing run.
 - A live delivery rechecks the group's capability revision before materialization.
 - A live worker checks durable session sendability immediately before its OpenWA call.
-- A live worker acquires the distributed session lock, refreshes its processing lease, waits the
-  configured random delay and holds the lock through the OpenWA response.
+- A live worker acquires the per-session send lease, refreshes its processing lease, waits the
+  configured random delay and holds session ownership through the OpenWA response. The current
+  Redis implementation is transitional; ADR 001 moves this lease to PostgreSQL.
 - HTTP 403/404 group-send failures invalidate the affected capability for targeted refresh.
 - `UNKNOWN` means the worker cannot prove whether a non-HTTP failure sent the message; it is never
   silently retried as a new send.
