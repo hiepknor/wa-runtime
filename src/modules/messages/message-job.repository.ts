@@ -136,7 +136,7 @@ export class MessageJobRepository {
   async refreshProcessingLease(id: string): Promise<boolean> {
     const result = await this.database.query(
       `UPDATE message_jobs SET lease_expires_at = now() + interval '2 minutes', updated_at = now()
-       WHERE id = $1 AND status = 'PROCESSING'`,
+       WHERE id = $1 AND status = 'PROCESSING' AND lease_expires_at > now()`,
       [id],
     );
     return result.rowCount === 1;

@@ -2,7 +2,6 @@ import { Logger } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
 import { DatabaseService } from '../../src/core/database/database.service';
 import { runtimeConfig } from '../../src/core/config/runtime-config';
-import { QueueService } from '../../src/core/queue/queue.service';
 import { OpenWAClient } from '../../src/integrations/openwa/openwa.client';
 import { GatewayRepository } from '../../src/modules/gateway/gateway.repository';
 import { SessionScopeService } from '../../src/modules/gateway/session-scope.service';
@@ -10,6 +9,8 @@ import { messageRequestHash } from '../../src/modules/messages/message-idempoten
 import { MessageJobProcessorService } from '../../src/modules/messages/message-job-processor.service';
 import { MessageJobRepository } from '../../src/modules/messages/message-job.repository';
 import { MessageSendPolicyService } from '../../src/modules/messages/message-send-policy.service';
+import { OutboundSessionLeaseRepository } from '../../src/modules/messages/outbound-session-lease.repository';
+import { OutboundSessionLeaseService } from '../../src/modules/messages/outbound-session-lease.service';
 import {
   INTEGRATION_SESSION_ID,
   integrationPool,
@@ -28,9 +29,7 @@ describe('live outbound load', () => {
   it('sends 500 distinct jobs exactly once and serializes one session across worker replicas', async () => {
     Logger.overrideLogger([]);
     const pool = integrationPool();
-    const database = new DatabaseService();
-    const firstQueue = new QueueService();
-    const secondQueue = new QueueService();
+    const databases = [new DatabaseService(), new DatabaseService()];
     try {
       await resetIntegrationDatabase(pool);
       await seedSendableGroup(pool);
@@ -47,7 +46,7 @@ describe('live outbound load', () => {
         [INTEGRATION_SESSION_ID, groupIds],
       );
 
-      const messages = new MessageJobRepository(database);
+      const messages = new MessageJobRepository(databases[0]!);
       await Promise.all(groupIds.map((recipientId, index) => {
         const text = `live-load-${index + 1}`;
         return messages.create({
@@ -66,11 +65,21 @@ describe('live outbound load', () => {
       const claimed = await messages.claimDue(500);
       expect(claimed).toHaveLength(500);
 
-      const gateway = new GatewayRepository(database);
-      const policy = new MessageSendPolicyService(gateway, new SessionScopeService());
-      const processors = [firstQueue, secondQueue].map(queue => new MessageJobProcessorService(
-        database, messages, policy, new OpenWAClient(), gateway, queue,
-      ));
+      const processors = databases.map(database => {
+        const processorMessages = new MessageJobRepository(database);
+        const gateway = new GatewayRepository(database);
+        return new MessageJobProcessorService(
+          database,
+          processorMessages,
+          new MessageSendPolicyService(gateway, new SessionScopeService()),
+          new OpenWAClient(),
+          gateway,
+          new OutboundSessionLeaseService(
+            new OutboundSessionLeaseRepository(database),
+            processorMessages,
+          ),
+        );
+      });
       let next = 0;
       const consume = async (processor: MessageJobProcessorService): Promise<void> => {
         while (next < claimed.length) {
@@ -100,8 +109,7 @@ describe('live outbound load', () => {
       expect(durable.rows[0]).toEqual({ accepted: '500', attempts: '500', distinct_jobs: '500' });
       expect(durationMs).toBeLessThan(30_000);
     } finally {
-      await Promise.all([firstQueue.onApplicationShutdown(), secondQueue.onApplicationShutdown()]);
-      await database.onApplicationShutdown();
+      await Promise.all(databases.map(database => database.onApplicationShutdown()));
       await resetIntegrationDatabase(pool);
       await pool.end();
       Logger.overrideLogger(['log', 'error', 'warn', 'debug', 'verbose', 'fatal']);

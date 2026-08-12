@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
 import { DatabaseService } from '../../src/core/database/database.service';
-import type { QueueService } from '../../src/core/queue/queue.service';
 import { OpenWAClient, OpenWAHttpError } from '../../src/integrations/openwa/openwa.client';
 import { GatewayRepository } from '../../src/modules/gateway/gateway.repository';
 import { SessionScopeService } from '../../src/modules/gateway/session-scope.service';
@@ -9,21 +8,24 @@ import { messageRequestHash } from '../../src/modules/messages/message-idempoten
 import { MessageJobProcessorService } from '../../src/modules/messages/message-job-processor.service';
 import { MessageJobRepository } from '../../src/modules/messages/message-job.repository';
 import { MessageSendPolicyService } from '../../src/modules/messages/message-send-policy.service';
+import { OutboundSessionLeaseRepository } from '../../src/modules/messages/outbound-session-lease.repository';
+import { OutboundSessionLeaseService } from '../../src/modules/messages/outbound-session-lease.service';
 import { INTEGRATION_GROUP_ID, INTEGRATION_SESSION_ID, integrationPool, resetIntegrationDatabase, seedSendableGroup } from '../support/integration-database';
 
 describe('message durability and delivery', () => {
   let pool: Pool;
   let database: DatabaseService;
   let messages: MessageJobRepository;
-  const queues = {
-    withOutboundSessionLock: <T>(_sessionId: string, refreshLease: () => Promise<void>, operation: () => Promise<T>) =>
-      refreshLease().then(operation),
-  } as QueueService;
+  let outboundSessions: OutboundSessionLeaseService;
 
   beforeAll(() => {
     pool = integrationPool();
     database = new DatabaseService();
     messages = new MessageJobRepository(database);
+    outboundSessions = new OutboundSessionLeaseService(
+      new OutboundSessionLeaseRepository(database),
+      messages,
+    );
   });
 
   beforeEach(async () => {
@@ -95,7 +97,7 @@ describe('message durability and delivery', () => {
     const processor = new MessageJobProcessorService(
       database, messages,
       new MessageSendPolicyService(gateway, new SessionScopeService()),
-      new OpenWAClient(), gateway, queues,
+      new OpenWAClient(), gateway, outboundSessions,
     );
 
     const result = await processor.process({ messageJobId: created.job.id }) as { messageId: string };
@@ -111,7 +113,7 @@ describe('message durability and delivery', () => {
     const processor = new MessageJobProcessorService(
       database, messages,
       new MessageSendPolicyService(gateway, new SessionScopeService()),
-      new OpenWAClient(), gateway, queues,
+      new OpenWAClient(), gateway, outboundSessions,
     );
 
     await expect(processor.process({ messageJobId: created.job.id })).rejects.toBeInstanceOf(OpenWAHttpError);
@@ -128,7 +130,7 @@ describe('message durability and delivery', () => {
     const processor = new MessageJobProcessorService(
       database, messages,
       new MessageSendPolicyService(gateway, new SessionScopeService()),
-      new OpenWAClient(), gateway, queues,
+      new OpenWAClient(), gateway, outboundSessions,
     );
 
     await expect(processor.process({ messageJobId: created.job.id })).rejects.toMatchObject({ status: 404 });
@@ -145,7 +147,7 @@ describe('message durability and delivery', () => {
     const processor = new MessageJobProcessorService(
       database, messages,
       new MessageSendPolicyService(gateway, new SessionScopeService()),
-      new OpenWAClient(), gateway, queues,
+      new OpenWAClient(), gateway, outboundSessions,
     );
 
     await expect(processor.process({ messageJobId: created.job.id })).rejects.toBeInstanceOf(Error);

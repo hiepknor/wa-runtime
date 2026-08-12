@@ -44,9 +44,9 @@ PostgreSQL, and BullMQ job IDs make re-enqueueing safe.
 
 The accepted target execution model is defined by
 [ADR 001](adr/001-postgresql-owned-durable-work-execution.md). Its implementation is in progress.
-Database-owned retry, lease-token fencing and session sync epochs are implemented. The
-outbound-session-lease phase remains. Production is restricted to one scheduler and one worker until
-that phase is complete.
+Database-owned retry, lease-token fencing, session sync epochs and PostgreSQL outbound-session
+leases are implemented. Production remains restricted to one scheduler and one worker until the
+multi-process staging gate passes.
 
 ## Infrastructure responsibilities
 
@@ -81,10 +81,9 @@ Redis is transport and short-lived cache, not the business source of truth. Four
 
 Redis also caches OpenWA session sendability for preflight for 10 seconds. Session-status and
 session-restriction webhooks invalidate that cache. Redis is configured with AOF and
-`maxmemory-policy=noeviction`. The current implementation uses a token-checked Redis lock for
-outbound serialization. ADR 001 replaces that transitional lock with a token-owned PostgreSQL
-session lease so Redis remains transport and cache rather than a correctness boundary. Losing Redis
-does not erase durable campaign state, but outbound processing pauses until transport is restored.
+`maxmemory-policy=noeviction`. A token-owned PostgreSQL session lease serializes outbound sends, so
+Redis remains transport and cache rather than a correctness boundary. Losing Redis does not erase
+durable campaign state, but outbound processing pauses until transport is restored.
 
 The scheduler removes terminal operational history older than `RUNTIME_RETENTION_DAYS` in bounded,
 indexed batches. Active rows are never retention candidates. Campaign run graphs are removed before
@@ -191,8 +190,7 @@ those shapes to consumers.
 - A live delivery rechecks the group's capability revision before materialization.
 - A live worker checks durable session sendability immediately before its OpenWA call.
 - A live worker acquires the per-session send lease, refreshes its processing lease, waits the
-  configured random delay and holds session ownership through the OpenWA response. The current
-  Redis implementation is transitional; ADR 001 moves this lease to PostgreSQL.
+  configured random delay and holds PostgreSQL session ownership through the OpenWA response.
 - HTTP 403/404 group-send failures invalidate the affected capability for targeted refresh.
 - `UNKNOWN` means the worker cannot prove whether a non-HTTP failure sent the message; it is never
   silently retried as a new send.

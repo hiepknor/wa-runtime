@@ -9,10 +9,9 @@ scheduler.
 [ADR 001](adr/001-postgresql-owned-durable-work-execution.md) accepts PostgreSQL-owned retry and
 attempt fencing as the target model. Database-owned retry and lease-token fencing are implemented
 for webhook processing, gateway synchronization, campaign preparation and capability refresh.
-Session-scoped sync epochs now fence full-sync domain writes. The PostgreSQL
-outbound-session-lease change remains pending. Until it is complete and verified, production is
-restricted to one scheduler and one worker; the existing Redis outbound lock must not be treated as
-a multi-replica correctness guarantee.
+Session-scoped sync epochs now fence full-sync domain writes, and PostgreSQL session leases serialize
+outbound sends. Production remains restricted to one scheduler and one worker until the
+multi-process staging gate passes.
 
 ## Processing guarantees
 
@@ -26,11 +25,10 @@ Runtime request identifier. A live job is therefore attempted once. If the worke
 after entering `PROCESSING`, the Runtime records `UNKNOWN` and never schedules an automatic resend.
 An operator must resolve that ambiguity or create a new intent.
 
-The current implementation serializes outbound work with a token-owned Redis lock per session. ADR
-001 moves serialization to a token-owned PostgreSQL session lease. A waiting worker refreshes its
-message processing lease, and only the current session-lease owner may start the OpenWA request or
-release the lease. Lease loss cannot make an unproven OpenWA result safe to retry, so post-request
-transport failures still become `UNKNOWN`.
+The implementation serializes outbound work with a token-owned PostgreSQL lease per session. A
+waiting worker refreshes its message processing lease, and only the current session-lease owner may
+start the OpenWA request or release the lease. Lease loss cannot make an unproven OpenWA result safe
+to retry, so post-request transport failures still become `UNKNOWN`.
 
 ## Retry and ownership
 

@@ -5,6 +5,3 @@ export type RuntimeProcessName = 'worker' | 'scheduler';
 
 export const runtimeHeartbeatKey = (processName: RuntimeProcessName): string =>
   `automation-runtime:heartbeat:${processName}`;
-
-export const outboundSessionLockKey = (sessionId: string): string =>
-  `automation-runtime:outbound-lock:${sessionId}`;

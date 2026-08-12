@@ -26,7 +26,7 @@ The temporary replication limits below implement the rollout guard from
 | migrate | One-shot before application processes start. |
 | API | One initially; scale only with shared rate/auth policy. |
 | scheduler | Exactly one until ADR 001 database-owned retries and fencing pass staging. |
-| worker | Exactly one until sync epochs and PostgreSQL outbound-session leases pass multi-process tests. |
+| worker | Exactly one until the implemented PostgreSQL leases pass staging multi-process tests. |
 
 OpenWA is a separate Gateway deployment with its own PostgreSQL, Redis, storage and release
 lifecycle. Do not merge the two databases or Redis instances merely because both products use the
@@ -86,9 +86,9 @@ values, phone numbers or secrets.
 
 ## Outbound pacing and retention
 
-`OUTBOUND_MIN_DELAY_MS` and `OUTBOUND_MAX_DELAY_MS` apply inside a distributed per-session lease.
-The current lease is a Redis lock; [ADR 001](adr/001-postgresql-owned-durable-work-execution.md)
-replaces it with a PostgreSQL token-owned lease before multiple worker replicas are enabled. For a
+`OUTBOUND_MIN_DELAY_MS` and `OUTBOUND_MAX_DELAY_MS` apply inside a token-owned PostgreSQL
+per-session lease. Multiple worker replicas must remain disabled until the staging concurrency gate
+for [ADR 001](adr/001-postgresql-owned-durable-work-execution.md) passes. For a
 500-group campaign on one session, messages are intentionally serialized; adding workers helps other
 sessions and non-send queues but does not increase that session's send rate. Keep the maximum at or
 below 60 seconds so the session and message processing leases remain bounded.

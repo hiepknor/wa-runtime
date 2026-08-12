@@ -122,7 +122,7 @@ SCHEDULED -> QUEUED -> PROCESSING -> ACCEPTED | FAILED | UNKNOWN
 - A transport failure after the request starts, or an expired processing lease, becomes `UNKNOWN`.
 - `UNKNOWN` is never automatically returned to `SCHEDULED`.
 
-Outbound serialization will move from the Redis lock to a token-owned PostgreSQL session lease.
+Outbound serialization uses a token-owned PostgreSQL session lease.
 Acquisition and renewal use short queries; no database connection or transaction is held across the
 configured delay or the OpenWA request. A worker waiting for the session lease continues to renew
 its message processing lease. It verifies session-lease ownership immediately before the upstream
@@ -211,13 +211,13 @@ Implementation is split into reviewable phases:
    campaign preparation and capability refresh;
 2. **Implemented:** add session-scoped sync epochs, enforce one running sync per session and fence
    all full-sync domain writes;
-3. add PostgreSQL outbound-session leases, load test them across worker replicas, then remove the
-   Redis outbound lock;
+3. **Implemented:** add PostgreSQL outbound-session leases, verify independent database connections
+   serialize one session, load test 500 sends and remove the Redis outbound lock;
 4. bulk group/member synchronization and validate OpenWA response schemas;
 5. isolate scheduler tick timing and add operational alerts.
 
-Until phase 3 passes integration and multi-process tests, production must run one scheduler and one
-worker. Live sends remain disabled during the migration and staging validation.
+Until the implemented phases pass staging multi-process tests, production must run one scheduler and
+one worker. Live sends remain disabled during the migration and staging validation.
 
 The public Runtime contract is not intentionally changed. Every implementation phase must run
 contract generation and prove that the committed OpenAPI artifact is unchanged. Any actual contract

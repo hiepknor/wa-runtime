@@ -2,16 +2,14 @@ import { Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import { runtimeConfig } from '../../core/config/runtime-config';
 import { DatabaseService } from '../../core/database/database.service';
-import { QueueService } from '../../core/queue/queue.service';
 import { OpenWAClient, OpenWAHttpError } from '../../integrations/openwa/openwa.client';
 import { GatewayRepository } from '../gateway/gateway.repository';
 import { MessageJobRepository } from './message-job.repository';
 import { MessageSendPolicyService } from './message-send-policy.service';
 import type { MessageJobStatus, MessageSendQueuePayload } from './message-job.types';
+import { MessageJobNoLongerProcessingError, OutboundSessionLeaseService } from './outbound-session-lease.service';
 
 const randomDelay = (min: number, max: number) => min + Math.floor(Math.random() * (max - min + 1));
-
-class MessageJobNoLongerProcessingError extends Error {}
 
 @Injectable()
 export class MessageJobProcessorService {
@@ -23,7 +21,7 @@ export class MessageJobProcessorService {
     private readonly policy: MessageSendPolicyService,
     private readonly openwa: OpenWAClient,
     private readonly gateway: GatewayRepository,
-    private readonly queues: QueueService,
+    private readonly outboundSessions: OutboundSessionLeaseService,
   ) {}
 
   async process(payload: MessageSendQueuePayload): Promise<unknown> {
@@ -49,17 +47,14 @@ export class MessageJobProcessorService {
 
     let upstreamStarted = false;
     try {
-      return await this.queues.withOutboundSessionLock(
+      return await this.outboundSessions.withLease(
         job.sessionId,
-        async () => {
-          if (!await this.messages.refreshProcessingLease(job.id)) {
-            throw new MessageJobNoLongerProcessingError();
-          }
-        },
-        async () => {
+        job.id,
+        async verifyForSend => {
           await new Promise(resolve =>
             setTimeout(resolve, randomDelay(this.config.OUTBOUND_MIN_DELAY_MS, this.config.OUTBOUND_MAX_DELAY_MS)),
           );
+          await verifyForSend();
           upstreamStarted = true;
           const result = await this.openwa.sendText(job.sessionId, job.recipientId, job.payload.text);
           await this.update(job.id, 'ACCEPTED', { openwaMessageId: result.messageId, response: result });

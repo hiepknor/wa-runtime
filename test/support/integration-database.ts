@@ -10,7 +10,8 @@ export function integrationPool(): Pool {
 
 export async function resetIntegrationDatabase(pool: Pool): Promise<void> {
   await pool.query(
-    `TRUNCATE webhook_events, runtime_events, message_jobs, sync_runs, gateway_sync_fences, campaigns, gateway_sessions
+    `TRUNCATE webhook_events, runtime_events, outbound_session_leases, message_jobs, sync_runs,
+       gateway_sync_fences, campaigns, gateway_sessions
      RESTART IDENTITY CASCADE`,
   );
 }
