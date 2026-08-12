@@ -98,7 +98,7 @@ The exact lifecycle and state meanings are documented in
 - [Operations](docs/operations.md) — production safety, deploy, recovery, backup and upgrade.
 - [Failure model](docs/failure-model.md) — durable dispatch, leases, retry and ambiguous delivery semantics.
 - [Observability](docs/observability.md) — JSON logs, correlation IDs, health checks and manual diagnosis.
-- [Latest local acceptance](docs/acceptance/2026-08-12-durable-execution-local.md) — durable retries, sync epochs and PostgreSQL lease evidence.
+- [Latest local acceptance](docs/acceptance/2026-08-12-multiprocess-local.md) — two-worker concurrency, Redis recovery, dry-run load and group-member smoke evidence.
 - [API contract](docs/api-contract.md) — authentication, idempotency, endpoint groups and versioning.
 
 ## Common commands
