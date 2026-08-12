@@ -43,6 +43,10 @@ session may be `RUNNING`, and every full-sync write verifies its epoch. Group da
 published; a failed run can leave records with different synchronization timestamps, but an older
 attempt cannot write after a newer epoch begins.
 
+Malformed successful OpenWA responses fail before durable domain writes. Group pagination is
+bounded and treats duplicate IDs, oversized pages or a full page at the configured page limit as a
+compatibility failure, preventing an unbounded or non-progressing synchronization loop.
+
 ## Durable dispatch
 
 The scheduler rediscovers work from these PostgreSQL rows:

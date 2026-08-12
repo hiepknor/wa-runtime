@@ -213,7 +213,8 @@ Implementation is split into reviewable phases:
    all full-sync domain writes;
 3. **Implemented:** add PostgreSQL outbound-session leases, verify independent database connections
    serialize one session, load test 500 sends and remove the Redis outbound lock;
-4. bulk group/member synchronization and validate OpenWA response schemas;
+4. **Implemented:** bulk group/member synchronization, validate OpenWA response schemas and bound
+   group pagination with duplicate/progress detection;
 5. isolate scheduler tick timing and add operational alerts.
 
 Until the implemented phases pass staging multi-process tests, production must run one scheduler and

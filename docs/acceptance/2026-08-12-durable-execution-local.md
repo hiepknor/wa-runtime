@@ -30,15 +30,18 @@ Safety conditions:
 | Scenario | Result |
 | --- | --- |
 | Full Gateway sync | Run `dd4d7463-5ecf-443e-9b18-52023f13c721` completed; 8 groups and 16 members synchronized. |
+| Post-hardening compatibility sync | Run `851e447f-f873-4bf2-a32e-0c3713785806` completed against pinned OpenWA; 8 groups and 16 members passed runtime validation. |
 | Group detail contract | Response did not contain embedded `members`. |
 | Member page contract | `limit=1` returned one record with a filtered-dataset `meta.total` of 2. |
-| Unit suite | 12 files and 31 tests passed. |
-| Integration suite | 11 files and 43 tests passed. |
+| Unit suite | 14 files and 37 tests passed. |
+| Integration suite | 11 files and 44 tests passed. |
 | Sync epoch | Concurrent same-session claims produced one running run; superseded writes were rejected. |
 | PostgreSQL session lease | Independent database connections serialized one session and allowed different sessions concurrently. |
 | Lease takeover | Stale renew and release operations were rejected after expiry takeover. |
 | Live-path isolation | 500 fake-OpenWA sends produced 500 accepted jobs, no duplicates and maximum concurrency 1 for one session. |
 | OpenAPI contract | Regeneration produced no committed contract diff. |
+| OpenWA boundary | Malformed payloads, duplicate participants, repeated group pages and oversized pages were rejected without exposing payload data. |
+| Bulk synchronization | A 1,000-summary page used one upsert; a 3,000-member group persisted successfully with one member insert statement. |
 
 ## Gate status
 

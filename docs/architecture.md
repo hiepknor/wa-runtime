@@ -96,6 +96,12 @@ therefore also defines how long old idempotency keys remain reusable-proof recor
 stop there and are mapped into Runtime-owned types. A full sync verifies OpenWA's live release against
 `OPENWA_RELEASE_TAG` and fails closed on a mismatch.
 
+Successful OpenWA JSON is runtime-validated before it crosses this boundary. Session, group,
+participant, webhook, health and send responses reject malformed shapes without logging raw
+payloads. Group pagination accepts at most 100 pages of 1,000 records and rejects oversized pages or
+duplicate group IDs. Summary pages and member collections use one bulk statement per transaction
+while the sync epoch fence remains held.
+
 ## Source layout and dependency direction
 
 ```text

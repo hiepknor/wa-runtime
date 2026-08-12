@@ -84,6 +84,11 @@ lost-ownership transitions, exhausted durable retry budgets, sync epoch rejectio
 outbound-session leases and scheduler lag. These events must not include message text, member search
 values, phone numbers or secrets.
 
+Treat `OpenWAResponseValidationError` as an integration compatibility incident. Its log message
+contains only the operation and issue count; do not add raw response payloads while diagnosing it.
+Repeated group-pagination validation failures require checking the pinned OpenWA release and its
+pagination behavior before retrying full synchronization.
+
 ## Outbound pacing and retention
 
 `OUTBOUND_MIN_DELAY_MS` and `OUTBOUND_MAX_DELAY_MS` apply inside a token-owned PostgreSQL
