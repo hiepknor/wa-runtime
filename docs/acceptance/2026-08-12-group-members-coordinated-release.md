@@ -7,22 +7,23 @@ contract with the WA Studio migration to the paginated group-member endpoint.
 
 | Component | Release evidence |
 | --- | --- |
-| Automation Runtime | Commit range `34d9faf..5d8613a` (feature through release-gate documentation) |
-| WA Studio | Commit `adee01d` (`feat(groups): paginate and search synchronized members`) |
-| Runtime OpenAPI artifact | `contracts/runtime/v1/openapi.json` at `5d8613a` |
-| OpenAPI SHA-256 | `753f08cb6e7068b8d1c3715142337e8d89db154c9c5b97c92cc20556843b45df` |
+| WA Runtime | Commit range `34d9faf..35c5f40` (group-member feature through WA Runtime identity migration) |
+| WA Studio | Commit `d779fdb` (contains group-member migration `adee01d` and WA Runtime identity migration) |
+| Runtime OpenAPI artifact | `contracts/runtime/v1/openapi.json` at `35c5f40` |
+| OpenAPI SHA-256 | `f27f61b0177861e71a309877b2f238e25e80a30358d827f671c0d5738a0b7a79` |
 
-The Runtime artifact in the working tree was compared byte-for-byte with the artifact stored at
-`5d8613a`; no contract delta was present. This is the Runtime OpenAPI artifact approved for the
-coordinated staging deployment. Any later Runtime contract change invalidates this approval and
-requires a regenerated artifact, a new Runtime commit range and a corresponding WA Studio snapshot
-update.
+The identity migration changed only the OpenAPI title and one example; paths, schemas and endpoint
+semantics are unchanged. The artifact at `35c5f40` was compared byte-for-byte with the WA Studio
+snapshot at `d779fdb`. This is the artifact approved for the next coordinated staging deployment.
+Any later Runtime contract change invalidates this approval and requires a regenerated artifact, a
+new Runtime commit range and a corresponding WA Studio snapshot update.
 
 ## Client migration evidence
 
-WA Studio reports the following verification at `adee01d`:
+WA Studio verification at `d779fdb` confirms:
 
-- its OpenAPI snapshot matches Runtime `5d8613a` byte-for-byte;
+- its renamed `contracts/wa-runtime/v1/openapi.json` snapshot matches Runtime `35c5f40`
+  byte-for-byte;
 - generated TypeScript API types were refreshed with `npm run contract:generate`;
 - no runtime consumer reads `GroupDetailDto.members`;
 - member pagination and search use `GET /api/v1/groups/{id}/members` and `meta.total`;
@@ -36,7 +37,7 @@ the coordinated staging smoke test below.
 ## Deployment constraints
 
 - Deploy Runtime and WA Studio to staging as one coordinated change.
-- Do not production-deploy the Runtime contract independently or before WA Studio `adee01d`.
+- Do not production-deploy the Runtime contract independently or before WA Studio `d779fdb`.
 - Deploy immutable revisions; do not deploy either component from an uncommitted working tree.
 - Keep `ALLOW_LIVE_SENDS=false` during staging validation unless a separately approved test requires
   otherwise. The scenarios below require reads and capability refresh only.
@@ -47,11 +48,11 @@ the coordinated staging smoke test below.
 
 Staging deployment preflight on 2026-08-12 found:
 
-- local Runtime `9591e42` contains the approved contract commit `5d8613a`, and the OpenAPI SHA-256
-  remains the approved hash, but this revision is 21 commits ahead of `origin/main`;
-- WA Studio `acd2b34` contains migration commit `adee01d`, matches `origin/main`, regenerates the same
-  OpenAPI hash and passes `npm run check` (8 test files/37 tests, frontend build, Rust formatting and
-  Cargo clippy);
+- local WA Runtime `35c5f40` contains the group-member contract and identity migration, but it has
+  not been published to `origin`;
+- local WA Studio `d779fdb` contains migration commit `adee01d`, regenerates the approved OpenAPI
+  hash and passes `npm run check` (8 test files/37 tests, frontend build, Rust formatting and Cargo
+  clippy), but it has not been published to `origin`;
 - neither repository defines a staging deployment pipeline or target;
 - WA Studio's Tauri HTTP capability permits only `127.0.0.1:3100` and `localhost:3100`. The exact
   staging HTTPS Runtime origin has not been supplied, so a staging-capable immutable desktop build
@@ -61,7 +62,7 @@ Overall staging status: **BLOCKED**.
 
 | Scenario | Expected result | Evidence | Status |
 | --- | --- | --- | --- |
-| Deployment revisions | Runtime contains `5d8613a`; WA Studio contains `adee01d` | WA Studio revision is published; Runtime `9591e42` is local-only and the staging target is undefined | BLOCKED |
+| Deployment revisions | WA Runtime contains `35c5f40`; WA Studio contains `d779fdb` | Both coordinated identity revisions are local-only and the staging target is undefined | BLOCKED |
 | Runtime contract | Served/generated OpenAPI hash matches the approved SHA-256 above | Not run | PENDING |
 | Small group | Detail returns metadata without `members`; member page returns all synchronized rows | Not run | PENDING |
 | Group over three pages | Each page payload is bounded by `limit`; aggregate walk has no duplicates or omissions on an unchanged dataset | Not run | PENDING |
@@ -84,8 +85,8 @@ request telemetry without response bodies containing member data.
 
 Release gate: **BLOCKED**.
 
-Pre-staging contract compatibility is confirmed for Runtime `34d9faf..5d8613a`, WA Studio
-`adee01d`, and the approved OpenAPI hash above. To resume the coordinated staging deployment, supply
+Pre-staging contract compatibility is confirmed for WA Runtime `34d9faf..35c5f40`, WA Studio
+`d779fdb`, and the approved OpenAPI hash above. To resume the coordinated staging deployment, supply
 the exact HTTPS Runtime staging origin and deployment target, add that exact origin to the WA Studio
 Tauri capability, publish immutable Runtime and WA Studio revisions, and provide access to the
 staging deployment mechanism. Then deploy both revisions together and execute every remaining smoke
