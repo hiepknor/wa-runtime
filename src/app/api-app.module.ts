@@ -28,6 +28,6 @@ import { WebhooksModule } from '../modules/webhooks/webhooks.module';
 })
 export class ApiAppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(RequestContextMiddleware).forRoutes('*');
+    consumer.apply(RequestContextMiddleware).forRoutes('{*splat}');
   }
 }

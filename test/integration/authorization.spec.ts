@@ -42,8 +42,11 @@ describe('HTTP session authorization', () => {
   });
 
   it('hides group reads outside the deployment session scope', async () => {
-    const response = await fetch(`${baseUrl}/groups?sessionId=${DISALLOWED_SESSION_ID}`, { headers: runtimeHeaders });
+    const response = await fetch(`${baseUrl}/groups?sessionId=${DISALLOWED_SESSION_ID}`, {
+      headers: { ...runtimeHeaders, 'x-request-id': 'protected-route-request' },
+    });
     expect(response.status).toBe(404);
+    expect(response.headers.get('x-request-id')).toBe('protected-route-request');
   });
 
   it('rejects a validly signed webhook for a disallowed session', async () => {
