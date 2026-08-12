@@ -81,6 +81,14 @@ and participant ID. Member results are ordered deterministically, and `meta.tota
 synchronized member rows rather than the group's upstream participant count. Full sync and
 capability refresh endpoints are asynchronous.
 
+#### Group-member coordinated release gate
+
+The Runtime release that removes `GroupDetailDto.members` must not be deployed until every WA
+Studio client in the release has regenerated its Runtime client, reads members exclusively from
+`GET /groups/{id}/members`, and passes pagination/search integration tests. The release record must
+link the corresponding WA Studio change. If those conditions cannot be met, hold this Runtime
+release and use an API v2 or a time-bounded compatibility contract instead.
+
 ### Campaign definitions
 
 ```text
