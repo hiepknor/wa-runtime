@@ -6,7 +6,7 @@ vi.mock('../../src/core/config/runtime-config', () => ({
   runtimeConfig: () => ({
     OPENWA_BASE_URL: 'http://openwa.test',
     OPENWA_API_KEY: 'test-key',
-    OPENWA_RELEASE_TAG: '0.15.0',
+    OPENWA_RELEASE_TAG: '0.16.0',
   }),
 }));
 

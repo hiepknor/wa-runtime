@@ -133,4 +133,4 @@ networks:
     driver: bridge
   wa-dev-network:
     external: true
-    name: wa-dev-network
+    name: ${OPENWA_DOCKER_NETWORK:-wa-dev-network}

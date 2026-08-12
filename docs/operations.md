@@ -202,6 +202,9 @@ the group before resuming live work.
 OpenWA is pinned by `OPENWA_RELEASE_TAG`, and its reviewed Swagger snapshot lives under
 `contracts/openwa/<tag>/openapi.json`.
 
+The currently reviewed release is OpenWA `0.16.0`. A deployment using another release must update
+and review the pinned snapshot and adapter tests before changing `OPENWA_RELEASE_TAG`.
+
 For an upgrade:
 
 1. add the new upstream snapshot without overwriting the old one;

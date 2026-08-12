@@ -69,6 +69,9 @@ Required choices:
 - keep `ALLOW_LIVE_SENDS=false`;
 - keep `OPENWA_RELEASE_TAG` equal to the reviewed local OpenWA image tag.
 
+The current reviewed Gateway release is OpenWA `0.16.0`; its upstream contract snapshot is stored
+under `contracts/openwa/0.16.0`.
+
 The checked-in Compose file consumes `.env` inside containers, so its service hostnames are
 `postgres`, `redis` and `openwa-dev-api`.
 
