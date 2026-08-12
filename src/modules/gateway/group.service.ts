@@ -13,13 +13,12 @@ export class GroupService {
   async get(sessionId: string, groupId: string) {
     const group = await this.repository.findGroup(sessionId, groupId);
     if (!group) throw new NotFoundException('Group not found');
-    const members = await this.repository.listMembers(sessionId, groupId, 10_000, 0);
-    return { ...group, members: members.data };
+    return group;
   }
 
-  async members(sessionId: string, groupId: string, limit: number, offset: number) {
+  async members(sessionId: string, groupId: string, limit: number, offset: number, query?: string) {
     if (!await this.repository.findGroup(sessionId, groupId)) throw new NotFoundException('Group not found');
-    const result = await this.repository.listMembers(sessionId, groupId, limit, offset);
+    const result = await this.repository.listMembers(sessionId, groupId, limit, offset, query);
     return { data: result.data, meta: { total: result.total, limit, offset } };
   }
 

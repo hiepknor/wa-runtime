@@ -341,14 +341,39 @@ export class GatewayRepository {
     return result.rows[0] ? mapGroup(result.rows[0]) : null;
   }
 
-  async listMembers(sessionId: string, groupId: string, limit: number, offset: number): Promise<{ data: GroupMemberDto[]; total: number }> {
+  async listMembers(
+    sessionId: string,
+    groupId: string,
+    limit: number,
+    offset: number,
+    query?: string,
+  ): Promise<{ data: GroupMemberDto[]; total: number }> {
+    const normalizedQuery = query?.trim();
+    const searchPattern = normalizedQuery
+      ? `%${normalizedQuery.replace(/[\\%_]/g, '\\$&')}%`
+      : null;
     const [rows, count] = await Promise.all([
       this.database.query<MemberRow>(
         `SELECT participant_id, phone_number, display_name, is_admin, is_super_admin
-         FROM group_members WHERE session_id = $1 AND group_id = $2
-         ORDER BY display_name NULLS LAST, participant_id LIMIT $3 OFFSET $4`, [sessionId, groupId, limit, offset]),
+         FROM group_members
+         WHERE session_id = $1 AND group_id = $2
+           AND ($5::text IS NULL
+             OR display_name ILIKE $5 ESCAPE '\\'
+             OR phone_number ILIKE $5 ESCAPE '\\'
+             OR participant_id ILIKE $5 ESCAPE '\\')
+         ORDER BY is_super_admin DESC, is_admin DESC,
+           lower(coalesce(display_name, phone_number)) ASC, participant_id ASC
+         LIMIT $3 OFFSET $4`, [sessionId, groupId, limit, offset, searchPattern]),
       this.database.query<{ count: string }>(
-        'SELECT count(*)::text AS count FROM group_members WHERE session_id = $1 AND group_id = $2', [sessionId, groupId]),
+        `SELECT count(*)::text AS count
+         FROM group_members
+         WHERE session_id = $1 AND group_id = $2
+           AND ($3::text IS NULL
+             OR display_name ILIKE $3 ESCAPE '\\'
+             OR phone_number ILIKE $3 ESCAPE '\\'
+             OR participant_id ILIKE $3 ESCAPE '\\')`,
+        [sessionId, groupId, searchPattern],
+      ),
     ]);
     return { data: rows.rows.map(mapMember), total: Number(count.rows[0]?.count ?? 0) };
   }

@@ -1,7 +1,7 @@
 import { Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
 import { ApiAcceptedResponse, ApiOkResponse, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { GroupDetailDto, GroupListDto, GroupMemberListDto } from '../../contracts/groups/group.dto';
-import { GroupIdentityQueryDto, GroupQueryDto } from '../../contracts/groups/group-query.dto';
+import { GroupIdentityQueryDto, GroupMemberQueryDto, GroupQueryDto } from '../../contracts/groups/group-query.dto';
 import { GroupService } from './group.service';
 
 @ApiTags('groups')
@@ -18,20 +18,23 @@ export class GroupController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Read a group and its synchronized members' })
+  @ApiOperation({ summary: 'Read synchronized group metadata' })
   @ApiOkResponse({ type: GroupDetailDto })
   get(@Param('id') id: string, @Query() query: GroupIdentityQueryDto) {
     return this.groups.get(query.sessionId, id);
   }
 
   @Get(':id/members')
-  @ApiOperation({ summary: 'List synchronized group members without a contacts dependency' })
+  @ApiOperation({
+    summary: 'List synchronized group members without a contacts dependency',
+    description: 'Results use deterministic super-admin, admin, normalized display name, and participant ID ordering.',
+  })
   @ApiOkResponse({ type: GroupMemberListDto })
   members(
     @Param('id') id: string,
-    @Query() query: GroupQueryDto,
+    @Query() query: GroupMemberQueryDto,
   ) {
-    return this.groups.members(query.sessionId, id, query.limit ?? 50, query.offset ?? 0);
+    return this.groups.members(query.sessionId, id, query.limit, query.offset, query.query);
   }
 
   @Post(':id/refresh-capability')

@@ -82,10 +82,7 @@ export class GroupDto {
   sendCapability!: GroupSendCapabilityDto;
 }
 
-export class GroupDetailDto extends GroupDto {
-  @ApiProperty({ type: [GroupMemberDto] })
-  members!: GroupMemberDto[];
-}
+export class GroupDetailDto extends GroupDto {}
 
 export class GroupListDto {
   @ApiProperty({ type: [GroupDto] })
@@ -95,10 +92,18 @@ export class GroupListDto {
   meta!: PageMetaDto;
 }
 
+export class GroupMemberPageMetaDto extends PageMetaDto {
+  @ApiProperty({ description: 'Total synchronized member records matching the current search filter' })
+  declare total: number;
+}
+
 export class GroupMemberListDto {
   @ApiProperty({ type: [GroupMemberDto] })
   data!: GroupMemberDto[];
 
-  @ApiProperty({ type: PageMetaDto })
-  meta!: PageMetaDto;
+  @ApiProperty({
+    type: GroupMemberPageMetaDto,
+    description: 'Pagination metadata for the filtered synchronized member dataset',
+  })
+  meta!: GroupMemberPageMetaDto;
 }

@@ -243,7 +243,7 @@
             "runtime-key": []
           }
         ],
-        "summary": "Read a group and its synchronized members",
+        "summary": "Read synchronized group metadata",
         "tags": [
           "groups"
         ]
@@ -251,6 +251,7 @@
     },
     "/api/v1/groups/{id}/members": {
       "get": {
+        "description": "Results use deterministic super-admin, admin, normalized display name, and participant ID ordering.",
         "operationId": "GroupController_members",
         "parameters": [
           {
@@ -289,6 +290,15 @@
             "description": "Gateway session owning the read model",
             "schema": {
               "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "query",
+            "required": false,
+            "in": "query",
+            "description": "Case-insensitive literal substring search across display name, phone number, and participant ID",
+            "schema": {
               "type": "string"
             }
           }
@@ -1457,34 +1467,6 @@
           "meta"
         ]
       },
-      "GroupMemberDto": {
-        "type": "object",
-        "properties": {
-          "participantId": {
-            "type": "string"
-          },
-          "phoneNumber": {
-            "type": "string"
-          },
-          "displayName": {
-            "type": "string",
-            "nullable": true
-          },
-          "isAdmin": {
-            "type": "boolean"
-          },
-          "isSuperAdmin": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "participantId",
-          "phoneNumber",
-          "displayName",
-          "isAdmin",
-          "isSuperAdmin"
-        ]
-      },
       "GroupDetailDto": {
         "type": "object",
         "properties": {
@@ -1545,12 +1527,6 @@
           },
           "sendCapability": {
             "$ref": "#/components/schemas/GroupSendCapabilityDto"
-          },
-          "members": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/GroupMemberDto"
-            }
           }
         },
         "required": [
@@ -1568,8 +1544,55 @@
           "isActive",
           "detailsSyncedAt",
           "syncedAt",
-          "sendCapability",
-          "members"
+          "sendCapability"
+        ]
+      },
+      "GroupMemberDto": {
+        "type": "object",
+        "properties": {
+          "participantId": {
+            "type": "string"
+          },
+          "phoneNumber": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "isAdmin": {
+            "type": "boolean"
+          },
+          "isSuperAdmin": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "participantId",
+          "phoneNumber",
+          "displayName",
+          "isAdmin",
+          "isSuperAdmin"
+        ]
+      },
+      "GroupMemberPageMetaDto": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number",
+            "description": "Total synchronized member records matching the current search filter"
+          },
+          "limit": {
+            "type": "number"
+          },
+          "offset": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "total",
+          "limit",
+          "offset"
         ]
       },
       "GroupMemberListDto": {
@@ -1582,7 +1605,12 @@
             }
           },
           "meta": {
-            "$ref": "#/components/schemas/PageMetaDto"
+            "description": "Pagination metadata for the filtered synchronized member dataset",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GroupMemberPageMetaDto"
+              }
+            ]
           }
         },
         "required": [
