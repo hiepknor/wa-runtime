@@ -9,12 +9,13 @@ const envelope: OpenWAWebhookEnvelope = {
   idempotencyKey: 'event-1', deliveryId: 'delivery-1',
   data: { messageId: 'message-1', status: 'delivered' },
 };
+const claim = { envelope, leaseToken: 'lease-1', attemptNumber: 1 };
 
 describe('WebhookProcessorService', () => {
   it('persists, reconciles and marks a claimed event processed', async () => {
     const webhooks = {
-      claimForProcessing: vi.fn().mockResolvedValue(envelope),
-      markProcessed: vi.fn().mockResolvedValue(undefined), markFailed: vi.fn(),
+      claimForProcessing: vi.fn().mockResolvedValue(claim),
+      markProcessed: vi.fn().mockResolvedValue(true), markFailed: vi.fn(),
     };
     const runtimeEvents = { store: vi.fn().mockResolvedValue(undefined) };
     const messages = { updateStatusByOpenWAMessageId: vi.fn().mockResolvedValue(undefined) };
@@ -28,13 +29,13 @@ describe('WebhookProcessorService', () => {
 
     expect(runtimeEvents.store).toHaveBeenCalledOnce();
     expect(messages.updateStatusByOpenWAMessageId).toHaveBeenCalledWith('message-1', 'DELIVERED');
-    expect(webhooks.markProcessed).toHaveBeenCalledWith(envelope.idempotencyKey);
+    expect(webhooks.markProcessed).toHaveBeenCalledWith(envelope.idempotencyKey, claim.leaseToken);
     expect(webhooks.markFailed).not.toHaveBeenCalled();
   });
 
   it('records durable retry state when processing fails', async () => {
     const webhooks = {
-      claimForProcessing: vi.fn().mockResolvedValue(envelope), markProcessed: vi.fn(),
+      claimForProcessing: vi.fn().mockResolvedValue(claim), markProcessed: vi.fn(),
       markFailed: vi.fn().mockResolvedValue('RETRY'),
     };
     const runtimeEvents = { store: vi.fn().mockRejectedValue(new Error('database unavailable')) };
@@ -45,7 +46,11 @@ describe('WebhookProcessorService', () => {
     );
 
     await expect(processor.process(envelope.idempotencyKey)).rejects.toThrow('database unavailable');
-    expect(webhooks.markFailed).toHaveBeenCalledWith(envelope.idempotencyKey, 'database unavailable');
+    expect(webhooks.markFailed).toHaveBeenCalledWith(
+      envelope.idempotencyKey,
+      claim.leaseToken,
+      'database unavailable',
+    );
     expect(webhooks.markProcessed).not.toHaveBeenCalled();
   });
 });

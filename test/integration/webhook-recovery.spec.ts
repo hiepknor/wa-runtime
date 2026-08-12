@@ -67,7 +67,8 @@ describe('durable webhook processing', () => {
       sessionId: INTEGRATION_SESSION_ID, idempotencyKey: 'poison-event', deliveryId: 'delivery-2', data: {},
     };
     await webhooks.insert(envelope);
-    expect(await webhooks.claimForProcessing(envelope.idempotencyKey)).toEqual(envelope);
+    const firstClaim = await webhooks.claimForProcessing(envelope.idempotencyKey);
+    expect(firstClaim?.envelope).toEqual(envelope);
     await pool.query(
       `UPDATE webhook_events SET lease_expires_at = now() - interval '1 second'
        WHERE idempotency_key = $1`,
@@ -77,14 +78,47 @@ describe('durable webhook processing', () => {
     expect(await webhooks.recoverExpiredProcessing()).toBe(1);
     expect(await webhooks.listDispatchable(10)).toContainEqual({ idempotencyKey: envelope.idempotencyKey });
 
-    await webhooks.claimForProcessing(envelope.idempotencyKey);
+    const secondClaim = await webhooks.claimForProcessing(envelope.idempotencyKey);
+    expect(secondClaim).not.toBeNull();
     await pool.query('UPDATE webhook_events SET attempt_count = 5 WHERE idempotency_key = $1', [envelope.idempotencyKey]);
-    expect(await webhooks.markFailed(envelope.idempotencyKey, 'invalid payload')).toBe('DEAD');
+    expect(await webhooks.markFailed(
+      envelope.idempotencyKey,
+      secondClaim!.leaseToken,
+      'invalid payload',
+    )).toBe('DEAD');
     const state = await pool.query(
       'SELECT processing_state, processing_error, dead_at FROM webhook_events WHERE idempotency_key = $1',
       [envelope.idempotencyKey],
     );
     expect(state.rows[0]).toMatchObject({ processing_state: 'DEAD', processing_error: 'invalid payload' });
     expect(state.rows[0].dead_at).toBeInstanceOf(Date);
+  });
+
+  it('fences a stale attempt after the event is reclaimed', async () => {
+    const envelope: OpenWAWebhookEnvelope = {
+      event: 'session.status', timestamp: '2026-08-11T00:00:00.000Z',
+      sessionId: INTEGRATION_SESSION_ID, idempotencyKey: 'fenced-webhook',
+      deliveryId: 'delivery-fenced', data: { status: 'ready' },
+    };
+    await webhooks.insert(envelope);
+    const stale = await webhooks.claimForProcessing(envelope.idempotencyKey);
+    expect(stale).not.toBeNull();
+    await pool.query(
+      `UPDATE webhook_events SET lease_expires_at = now() - interval '1 second'
+       WHERE idempotency_key = $1`,
+      [envelope.idempotencyKey],
+    );
+    await webhooks.recoverExpiredProcessing();
+    const current = await webhooks.claimForProcessing(envelope.idempotencyKey);
+    expect(current).not.toBeNull();
+    expect(current!.leaseToken).not.toBe(stale!.leaseToken);
+
+    expect(await webhooks.markProcessed(envelope.idempotencyKey, stale!.leaseToken)).toBe(false);
+    expect(await webhooks.markFailed(
+      envelope.idempotencyKey,
+      stale!.leaseToken,
+      'stale failure',
+    )).toBe('LOST_OWNERSHIP');
+    expect(await webhooks.markProcessed(envelope.idempotencyKey, current!.leaseToken)).toBe(true);
   });
 });

@@ -39,6 +39,13 @@ interface DeliveryRow {
   updated_at: Date;
 }
 
+export interface ClaimedCampaignPreparation {
+  leaseToken: string;
+  attemptNumber: number;
+}
+
+export type CampaignPreparationResult = 'PREPARING' | 'FAILED' | 'LOST_OWNERSHIP';
+
 interface PreflightTargetRow {
   group_id: string;
   group_name: string;
@@ -213,9 +220,48 @@ export class CampaignRunRepository {
 
   async listPreparing(limit: number): Promise<Array<{ id: string }>> {
     const result = await this.database.query<{ id: string }>(
-      `SELECT id FROM campaign_runs WHERE status = 'PREPARING' ORDER BY created_at LIMIT $1`, [limit],
+      `SELECT id FROM campaign_runs
+       WHERE status = 'PREPARING' AND preparation_next_attempt_at <= now()
+         AND preparation_attempt_count < 3
+         AND (preparation_lease_token IS NULL OR preparation_lease_expires_at < now())
+       ORDER BY preparation_next_attempt_at, created_at LIMIT $1`, [limit],
     );
     return result.rows;
+  }
+
+  async claimPreparation(runId: string): Promise<ClaimedCampaignPreparation | null> {
+    const result = await this.database.query<{ preparation_lease_token: string; preparation_attempt_count: number }>(
+      `UPDATE campaign_runs SET preparation_attempt_count = preparation_attempt_count + 1,
+         preparation_lease_token = gen_random_uuid(),
+         preparation_lease_expires_at = now() + interval '2 minutes',
+         preparation_error = NULL, updated_at = now()
+       WHERE id = $1 AND status = 'PREPARING' AND preparation_next_attempt_at <= now()
+         AND preparation_attempt_count < 3
+         AND (preparation_lease_token IS NULL OR preparation_lease_expires_at < now())
+       RETURNING preparation_lease_token, preparation_attempt_count`,
+      [runId],
+    );
+    const row = result.rows[0];
+    return row ? { leaseToken: row.preparation_lease_token, attemptNumber: row.preparation_attempt_count } : null;
+  }
+
+  async recoverExpiredPreparations(): Promise<number> {
+    const result = await this.database.query(
+      `UPDATE campaign_runs SET
+         status = CASE WHEN preparation_attempt_count >= 3 THEN 'FAILED'::campaign_run_status
+           ELSE 'PREPARING'::campaign_run_status END,
+         status_reason = CASE WHEN preparation_attempt_count >= 3 THEN 'PREPARATION_FAILED' ELSE status_reason END,
+         preparation_next_attempt_at = now(), preparation_lease_token = NULL,
+         preparation_lease_expires_at = NULL,
+         preparation_error = 'Recovered expired campaign preparation lease',
+         completed_at = CASE WHEN preparation_attempt_count >= 3 THEN now() ELSE completed_at END,
+         updated_at = now()
+       WHERE status = 'PREPARING' AND (
+         (preparation_lease_token IS NOT NULL AND preparation_lease_expires_at < now())
+         OR (preparation_lease_token IS NULL AND preparation_attempt_count >= 3)
+       )`,
+    );
+    return result.rowCount ?? 0;
   }
 
   async getPreflightContext(runId: string): Promise<{
@@ -235,21 +281,25 @@ export class CampaignRunRepository {
     return { run, targets: result.rows.map(mapPreflightTarget) };
   }
 
-  async applyPreflight(runId: string, report: CampaignPreflightDto): Promise<void> {
-    await this.database.transaction(async client => {
+  async applyPreflight(runId: string, leaseToken: string, report: CampaignPreflightDto): Promise<boolean> {
+    return this.database.transaction(async client => {
       const locked = await client.query<{ status: string; scheduled_at: Date }>(
-        'SELECT status, scheduled_at FROM campaign_runs WHERE id = $1 FOR UPDATE', [runId],
+         `SELECT status, scheduled_at FROM campaign_runs
+         WHERE id = $1 AND status = 'PREPARING' AND preparation_lease_token = $2
+           AND preparation_lease_expires_at > now() FOR UPDATE`,
+        [runId, leaseToken],
       );
       const run = locked.rows[0];
-      if (!run || run.status !== 'PREPARING') return;
+      if (!run) return false;
       if (report.status === 'BLOCK') {
         await client.query(
           `UPDATE campaign_runs SET status = 'BLOCKED', status_reason = 'PREFLIGHT_BLOCKED', preflight_status = $2,
-             preflight_policy_version = $3, preflight_report = $4::jsonb, updated_at = now()
+             preflight_policy_version = $3, preflight_report = $4::jsonb,
+             preparation_lease_token = NULL, preparation_lease_expires_at = NULL, updated_at = now()
            WHERE id = $1`,
           [runId, report.status, report.policyVersion, JSON.stringify(report)],
         );
-        return;
+        return true;
       }
 
       await client.query(
@@ -271,19 +321,37 @@ export class CampaignRunRepository {
         `UPDATE campaign_runs SET status = $2::campaign_run_status, status_reason = NULL,
            preflight_status = $3, preflight_policy_version = $4, preflight_report = $5::jsonb,
            started_at = CASE WHEN $2::campaign_run_status = 'RUNNING' THEN now() ELSE NULL END,
+           preparation_lease_token = NULL, preparation_lease_expires_at = NULL,
            updated_at = now() WHERE id = $1`,
         [runId, startsNow ? 'RUNNING' : 'SCHEDULED', report.status,
           report.policyVersion, JSON.stringify(report)],
       );
+      return true;
     });
   }
 
-  async markPreparationFailed(runId: string): Promise<void> {
-    await this.database.query(
-      `UPDATE campaign_runs SET status = 'FAILED', status_reason = 'PREPARATION_FAILED', completed_at = now(), updated_at = now()
-       WHERE id = $1 AND status = 'PREPARING'`,
-      [runId],
+  async failPreparationAttempt(
+    runId: string,
+    leaseToken: string,
+    error: string,
+  ): Promise<CampaignPreparationResult> {
+    const result = await this.database.query<{ status: 'PREPARING' | 'FAILED' }>(
+      `UPDATE campaign_runs SET
+         status = CASE WHEN preparation_attempt_count >= 3 THEN 'FAILED'::campaign_run_status
+           ELSE 'PREPARING'::campaign_run_status END,
+         status_reason = CASE WHEN preparation_attempt_count >= 3 THEN 'PREPARATION_FAILED' ELSE status_reason END,
+         preparation_error = $3,
+         preparation_next_attempt_at = CASE WHEN preparation_attempt_count >= 3 THEN preparation_next_attempt_at
+           ELSE now() + LEAST(300, 5 * power(2, preparation_attempt_count - 1)) * interval '1 second' END,
+         preparation_lease_token = NULL, preparation_lease_expires_at = NULL,
+         completed_at = CASE WHEN preparation_attempt_count >= 3 THEN now() ELSE completed_at END,
+         updated_at = now()
+       WHERE id = $1 AND status = 'PREPARING' AND preparation_lease_token = $2
+         AND preparation_lease_expires_at > now()
+       RETURNING status`,
+      [runId, leaseToken, error],
     );
+    return result.rows[0]?.status ?? 'LOST_OWNERSHIP';
   }
 
   async activateDueRuns(): Promise<number> {

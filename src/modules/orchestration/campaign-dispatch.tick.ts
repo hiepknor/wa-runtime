@@ -12,12 +12,14 @@ export class CampaignDispatchTick {
   ) {}
 
   async run(): Promise<void> {
+    const recovered = await this.runs.recoverExpiredPreparations();
+    if (recovered > 0) this.logger.warn({ event: 'campaign_preparations.recovered', count: recovered });
     const preparing = await this.runs.listPreparing(100);
     for (const run of preparing) {
       try {
         await this.queues.campaign.add('prepare-run', { runId: run.id }, {
-          jobId: `prepare-run-${run.id}`, attempts: 3,
-          backoff: { type: 'exponential', delay: 3000 }, removeOnComplete: true, removeOnFail: 5000,
+          jobId: `prepare-run-${run.id}`, attempts: 1,
+          removeOnComplete: true, removeOnFail: true,
         });
       } catch (error) {
         this.logger.error({

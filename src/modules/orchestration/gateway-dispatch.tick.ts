@@ -14,13 +14,16 @@ export class GatewayDispatchTick {
 
   async run(): Promise<void> {
     const recovered = await this.gateway.recoverExpiredSyncRuns();
+    const recoveredCapabilities = await this.gateway.recoverExpiredCapabilityRefreshes();
     if (recovered > 0) this.logger.warn({ event: 'sync_runs.recovered', count: recovered });
+    if (recoveredCapabilities > 0) {
+      this.logger.warn({ event: 'group_capability_refreshes.recovered', count: recoveredCapabilities });
+    }
     const syncRuns = await this.gateway.listPendingSyncRuns(100);
     for (const run of syncRuns) {
       try {
         await this.queues.gatewaySync.add('full-session-sync', { syncRunId: run.id, sessionId: run.sessionId }, {
-          jobId: run.id, attempts: 3, backoff: { type: 'exponential', delay: 5000 },
-          removeOnComplete: 1000, removeOnFail: true,
+          jobId: run.id, attempts: 1, removeOnComplete: true, removeOnFail: true,
         });
       } catch (error) {
         this.logger.error({
@@ -40,8 +43,7 @@ export class GatewayDispatchTick {
           expectedRevision: refresh.revision,
         }, {
           jobId: stableQueueJobId('group-capability', `${refresh.sessionId}:${refresh.groupId}:${refresh.revision}`),
-          attempts: 3,
-          backoff: { type: 'exponential', delay: 3000 },
+          attempts: 1,
           removeOnComplete: true,
           removeOnFail: true,
         });

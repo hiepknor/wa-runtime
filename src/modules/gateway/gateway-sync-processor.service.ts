@@ -12,6 +12,6 @@ export class GatewaySyncProcessorService {
       return this.sync.refreshGroupCapability(refresh.sessionId, refresh.groupId, refresh.expectedRevision);
     }
     const full = payload as FullGatewaySyncPayload;
-    return this.sync.perform(full.syncRunId, full.sessionId);
+    return this.sync.perform(full.syncRunId);
   }
 }

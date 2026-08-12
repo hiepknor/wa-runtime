@@ -27,19 +27,26 @@ export class CampaignRunService {
   }
 
   async prepare(runId: string): Promise<void> {
-    const context = await this.repository.getPreflightContext(runId);
-    if (!context || context.run.status !== 'PREPARING') return;
-    const report = await this.preflights.evaluate({
-      executionMode: context.run.executionMode,
-      sessionId: context.run.sessionId,
-      text: context.run.text,
-      targets: context.targets,
-    });
-    await this.repository.applyPreflight(runId, report);
-  }
-
-  markPreparationFailed(runId: string) {
-    return this.repository.markPreparationFailed(runId);
+    const claim = await this.repository.claimPreparation(runId);
+    if (!claim) return;
+    try {
+      const context = await this.repository.getPreflightContext(runId);
+      if (!context || context.run.status !== 'PREPARING') return;
+      const report = await this.preflights.evaluate({
+        executionMode: context.run.executionMode,
+        sessionId: context.run.sessionId,
+        text: context.run.text,
+        targets: context.targets,
+      });
+      await this.repository.applyPreflight(runId, claim.leaseToken, report);
+    } catch (error) {
+      await this.repository.failPreparationAttempt(
+        runId,
+        claim.leaseToken,
+        error instanceof Error ? error.message : String(error),
+      );
+      throw error;
+    }
   }
 
   async get(id: string) {

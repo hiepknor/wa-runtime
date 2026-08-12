@@ -22,18 +22,22 @@ export class WebhookProcessorService {
   ) {}
 
   async process(idempotencyKey: string): Promise<unknown> {
-    const envelope = await this.webhooks.claimForProcessing(idempotencyKey);
-    if (!envelope) return { skipped: true };
+    const claim = await this.webhooks.claimForProcessing(idempotencyKey);
+    if (!claim) return { skipped: true };
+    const { envelope, leaseToken } = claim;
     try {
       await this.runtimeEvents.store(normalizeOpenWAWebhook(envelope));
       const status = webhookStatus(envelope.event, envelope.data);
       const messageId = String(envelope.data.messageId ?? envelope.data.id ?? '');
       if (status && messageId) await this.messages.updateStatusByOpenWAMessageId(messageId, status);
-      await this.webhooks.markProcessed(envelope.idempotencyKey);
+      if (!await this.webhooks.markProcessed(envelope.idempotencyKey, leaseToken)) {
+        return { skipped: true, lostOwnership: true };
+      }
       return { statusUpdated: Boolean(status && messageId) };
     } catch (error) {
       await this.webhooks.markFailed(
         envelope.idempotencyKey,
+        leaseToken,
         error instanceof Error ? error.message : String(error),
       );
       throw error;

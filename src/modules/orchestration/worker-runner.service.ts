@@ -64,14 +64,6 @@ export class WorkerRunnerService {
     for (const worker of workers) {
       worker.on('error', error => this.logger.error({ event: 'worker.connection.error', queue: worker.name, error }));
     }
-    campaignWorker.on('failed', job => {
-      if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
-        void this.campaignProcessor.markFailed(job.data.runId).catch(error =>
-          this.logger.error({ event: 'campaign.preparation.mark_failed.error', campaignRunId: job.data.runId, error }),
-        );
-      }
-    });
-
     await new Promise<void>(resolve => {
       process.once('SIGTERM', resolve);
       process.once('SIGINT', resolve);

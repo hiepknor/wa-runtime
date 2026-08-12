@@ -21,7 +21,8 @@ describe('gateway sync recovery', () => {
 
   it('returns an expired RUNNING sync to durable PENDING state', async () => {
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
-    await gateway.updateSyncRun(run.id, { status: 'RUNNING' });
+    const claim = await gateway.claimSyncRun(run.id);
+    expect(claim).not.toBeNull();
     await pool.query(`UPDATE sync_runs SET lease_expires_at = now() - interval '1 second' WHERE id = $1`, [run.id]);
 
     expect(await gateway.recoverExpiredSyncRuns()).toBe(1);
@@ -34,11 +35,38 @@ describe('gateway sync recovery', () => {
   it('synchronizes the fake OpenWA snapshot into the durable read model', async () => {
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
 
-    await new GatewaySyncService(gateway, new OpenWAClient()).perform(run.id, INTEGRATION_SESSION_ID);
+    await new GatewaySyncService(gateway, new OpenWAClient()).perform(run.id);
 
     expect(await gateway.findSyncRun(run.id)).toMatchObject({ status: 'COMPLETED', groupsSynced: 1, membersSynced: 1 });
     expect(await gateway.findGroup(INTEGRATION_SESSION_ID, '120363000000000000@g.us')).toMatchObject({
       sendCapability: { status: 'ALLOWED', reason: 'SEND_ALLOWED' },
+    });
+  });
+
+  it('fences a stale sync attempt after lease recovery and reclaim', async () => {
+    const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
+    const stale = await gateway.claimSyncRun(run.id);
+    expect(stale).not.toBeNull();
+    await pool.query(
+      `UPDATE sync_runs SET lease_expires_at = now() - interval '1 second' WHERE id = $1`,
+      [run.id],
+    );
+    await gateway.recoverExpiredSyncRuns();
+    const current = await gateway.claimSyncRun(run.id);
+    expect(current).not.toBeNull();
+    expect(current!.leaseToken).not.toBe(stale!.leaseToken);
+
+    expect(await gateway.completeSyncRun(run.id, stale!.leaseToken, 1, 1)).toBe(false);
+    expect(await gateway.failSyncRunAttempt(
+      run.id,
+      stale!.leaseToken,
+      1,
+      1,
+      'stale failure',
+    )).toBe('LOST_OWNERSHIP');
+    expect(await gateway.completeSyncRun(run.id, current!.leaseToken, 2, 3)).toBe(true);
+    expect(await gateway.findSyncRun(run.id)).toMatchObject({
+      status: 'COMPLETED', groupsSynced: 2, membersSynced: 3,
     });
   });
 });

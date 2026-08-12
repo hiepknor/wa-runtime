@@ -8,8 +8,4 @@ export class CampaignRunProcessorService {
   process(runId: string): Promise<void> {
     return this.runs.prepare(runId);
   }
-
-  markFailed(runId: string): Promise<void> {
-    return this.runs.markPreparationFailed(runId);
-  }
 }

@@ -43,6 +43,10 @@ interface GroupRow {
   capability_checked_at: Date | null;
   capability_invalidated_at: Date | null;
   capability_revision: number;
+  capability_refresh_attempt_count: number;
+  capability_refresh_lease_token: string | null;
+  capability_refresh_lease_expires_at: Date | null;
+  capability_refresh_lease_valid?: boolean;
 }
 
 interface MemberRow {
@@ -65,6 +69,21 @@ interface SyncRunRow {
   started_at: Date | null;
   completed_at: Date | null;
 }
+
+export interface ClaimedSyncRun {
+  sessionId: string;
+  leaseToken: string;
+  attemptNumber: number;
+}
+
+export type SyncAttemptResult = 'PENDING' | 'FAILED' | 'LOST_OWNERSHIP';
+
+export interface ClaimedCapabilityRefresh {
+  leaseToken: string;
+  attemptNumber: number;
+}
+
+export type CapabilityRefreshAttemptResult = 'RETRY' | 'FAILED' | 'LOST_OWNERSHIP';
 
 const mapSession = (row: SessionRow): SessionDto => ({
   id: row.id,
@@ -212,14 +231,21 @@ export class GatewayRepository {
     sessionId: string,
     group: OpenWAGroup,
     expectedRevision?: number,
+    capabilityLeaseToken?: string,
   ): Promise<{ members: number; applied: boolean }> {
     return this.database.transaction(async client => {
       const existingResult = await client.query<GroupRow>(
-        'SELECT * FROM gateway_groups WHERE session_id = $1 AND id = $2 FOR UPDATE',
+        `SELECT *, capability_refresh_lease_expires_at > now() AS capability_refresh_lease_valid
+         FROM gateway_groups WHERE session_id = $1 AND id = $2 FOR UPDATE`,
         [sessionId, group.id],
       );
       const existing = existingResult.rows[0];
       if (expectedRevision !== undefined && existing?.capability_revision !== expectedRevision) {
+        return { members: 0, applied: false };
+      }
+      if (capabilityLeaseToken !== undefined
+        && (existing?.capability_refresh_lease_token !== capabilityLeaseToken
+          || existing.capability_refresh_lease_valid !== true)) {
         return { members: 0, applied: false };
       }
       const isAdmin = group.isAdmin ?? existing?.is_admin ?? null;
@@ -251,6 +277,9 @@ export class GatewayRepository {
            send_capability = EXCLUDED.send_capability,
            send_capability_reason = EXCLUDED.send_capability_reason,
            capability_checked_at = now(), capability_invalidated_at = NULL,
+           capability_refresh_attempt_count = 0, capability_refresh_next_attempt_at = now(),
+           capability_refresh_lease_token = NULL, capability_refresh_lease_expires_at = NULL,
+           capability_refresh_error = NULL,
            capability_revision = CASE
              WHEN gateway_groups.send_capability IS DISTINCT FROM EXCLUDED.send_capability
                OR gateway_groups.send_capability_reason IS DISTINCT FROM EXCLUDED.send_capability_reason
@@ -286,6 +315,9 @@ export class GatewayRepository {
     const result = await this.database.query(
       `UPDATE gateway_groups SET send_capability = 'UNKNOWN', send_capability_reason = $3,
          capability_invalidated_at = now(), capability_revision = capability_revision + 1,
+         capability_refresh_attempt_count = 0, capability_refresh_next_attempt_at = now(),
+         capability_refresh_lease_token = NULL, capability_refresh_lease_expires_at = NULL,
+         capability_refresh_error = NULL,
          updated_at = now()
        WHERE session_id = $1 AND id = $2 AND is_active = true`,
       [sessionId, groupId, reason],
@@ -305,7 +337,10 @@ export class GatewayRepository {
     }>(
       `SELECT session_id, id, capability_revision FROM gateway_groups
        WHERE is_active = true AND capability_invalidated_at IS NOT NULL
-       ORDER BY capability_invalidated_at LIMIT $1`,
+         AND capability_refresh_attempt_count < 3
+         AND capability_refresh_next_attempt_at <= now()
+         AND (capability_refresh_lease_token IS NULL OR capability_refresh_lease_expires_at < now())
+       ORDER BY capability_refresh_next_attempt_at, capability_invalidated_at LIMIT $1`,
       [limit],
     );
     return result.rows.map(row => ({
@@ -315,13 +350,83 @@ export class GatewayRepository {
     }));
   }
 
-  async markCapabilityRefreshFailed(sessionId: string, groupId: string, expectedRevision: number): Promise<void> {
-    await this.database.query(
-      `UPDATE gateway_groups SET send_capability = 'UNKNOWN', send_capability_reason = 'REFRESH_FAILED',
-         capability_checked_at = now(), capability_invalidated_at = NULL, updated_at = now()
-       WHERE session_id = $1 AND id = $2 AND capability_revision = $3`,
+  async claimCapabilityRefresh(
+    sessionId: string,
+    groupId: string,
+    expectedRevision: number,
+  ): Promise<ClaimedCapabilityRefresh | null> {
+    const result = await this.database.query<{
+      capability_refresh_lease_token: string;
+      capability_refresh_attempt_count: number;
+    }>(
+      `UPDATE gateway_groups SET
+         capability_refresh_attempt_count = capability_refresh_attempt_count + 1,
+         capability_refresh_lease_token = gen_random_uuid(),
+         capability_refresh_lease_expires_at = now() + interval '2 minutes',
+         capability_refresh_error = NULL, updated_at = now()
+       WHERE session_id = $1 AND id = $2 AND capability_revision = $3
+         AND is_active = true AND capability_invalidated_at IS NOT NULL
+         AND capability_refresh_attempt_count < 3
+         AND capability_refresh_next_attempt_at <= now()
+         AND (capability_refresh_lease_token IS NULL OR capability_refresh_lease_expires_at < now())
+       RETURNING capability_refresh_lease_token, capability_refresh_attempt_count`,
       [sessionId, groupId, expectedRevision],
     );
+    const row = result.rows[0];
+    return row ? {
+      leaseToken: row.capability_refresh_lease_token,
+      attemptNumber: row.capability_refresh_attempt_count,
+    } : null;
+  }
+
+  async failCapabilityRefreshAttempt(
+    sessionId: string,
+    groupId: string,
+    expectedRevision: number,
+    leaseToken: string,
+    error: string,
+  ): Promise<CapabilityRefreshAttemptResult> {
+    const result = await this.database.query<{ exhausted: boolean }>(
+      `UPDATE gateway_groups SET
+         send_capability = 'UNKNOWN',
+         send_capability_reason = CASE WHEN capability_refresh_attempt_count >= 3
+           THEN 'REFRESH_FAILED' ELSE send_capability_reason END,
+         capability_checked_at = CASE WHEN capability_refresh_attempt_count >= 3
+           THEN now() ELSE capability_checked_at END,
+         capability_invalidated_at = CASE WHEN capability_refresh_attempt_count >= 3
+           THEN NULL ELSE capability_invalidated_at END,
+         capability_refresh_next_attempt_at = CASE WHEN capability_refresh_attempt_count >= 3
+           THEN capability_refresh_next_attempt_at
+           ELSE now() + LEAST(300, 5 * power(2, capability_refresh_attempt_count - 1)) * interval '1 second' END,
+         capability_refresh_lease_token = NULL, capability_refresh_lease_expires_at = NULL,
+         capability_refresh_error = $5, updated_at = now()
+       WHERE session_id = $1 AND id = $2 AND capability_revision = $3
+         AND capability_refresh_lease_token = $4 AND capability_refresh_lease_expires_at > now()
+       RETURNING capability_refresh_attempt_count >= 3 AS exhausted`,
+      [sessionId, groupId, expectedRevision, leaseToken, error],
+    );
+    const row = result.rows[0];
+    return row ? (row.exhausted ? 'FAILED' : 'RETRY') : 'LOST_OWNERSHIP';
+  }
+
+  async recoverExpiredCapabilityRefreshes(): Promise<number> {
+    const result = await this.database.query(
+      `UPDATE gateway_groups SET
+         send_capability = 'UNKNOWN',
+         send_capability_reason = CASE WHEN capability_refresh_attempt_count >= 3
+           THEN 'REFRESH_FAILED' ELSE send_capability_reason END,
+         capability_checked_at = CASE WHEN capability_refresh_attempt_count >= 3
+           THEN now() ELSE capability_checked_at END,
+         capability_invalidated_at = CASE WHEN capability_refresh_attempt_count >= 3
+           THEN NULL ELSE capability_invalidated_at END,
+         capability_refresh_next_attempt_at = now(),
+         capability_refresh_lease_token = NULL, capability_refresh_lease_expires_at = NULL,
+         capability_refresh_error = 'Recovered expired capability refresh lease', updated_at = now()
+       WHERE (capability_refresh_lease_token IS NOT NULL AND capability_refresh_lease_expires_at < now())
+         OR (capability_invalidated_at IS NOT NULL AND capability_refresh_lease_token IS NULL
+           AND capability_refresh_attempt_count >= 3)`,
+    );
+    return result.rowCount ?? 0;
   }
 
   async listGroups(sessionId: string, limit: number, offset: number): Promise<{ data: GroupDto[]; total: number }> {
@@ -394,30 +499,86 @@ export class GatewayRepository {
 
   async listPendingSyncRuns(limit: number): Promise<SyncRunDto[]> {
     const result = await this.database.query<SyncRunRow>(
-      `SELECT * FROM sync_runs WHERE status = 'PENDING' ORDER BY requested_at LIMIT $1`, [limit],
+      `SELECT * FROM sync_runs WHERE status = 'PENDING' AND attempt_count < 3 AND next_attempt_at <= now()
+       ORDER BY next_attempt_at, requested_at LIMIT $1`, [limit],
     );
     return result.rows.map(mapSyncRun);
   }
 
   async recoverExpiredSyncRuns(): Promise<number> {
     const result = await this.database.query(
-      `UPDATE sync_runs SET status = 'PENDING', lease_expires_at = NULL,
-         error = 'Recovered expired sync lease', updated_at = now()
+      `UPDATE sync_runs SET
+         status = CASE WHEN attempt_count >= 3 THEN 'FAILED'::gateway_sync_status
+           ELSE 'PENDING'::gateway_sync_status END,
+         next_attempt_at = CASE WHEN attempt_count >= 3 THEN next_attempt_at ELSE now() END,
+         lease_token = NULL, lease_expires_at = NULL,
+         error = 'Recovered expired sync lease',
+         completed_at = CASE WHEN attempt_count >= 3 THEN now() ELSE NULL END,
+         updated_at = now()
        WHERE status = 'RUNNING' AND lease_expires_at < now()`,
     );
     return result.rowCount ?? 0;
   }
 
-  async updateSyncRun(id: string, input: { status: SyncRunStatus; groups?: number; members?: number; error?: string }): Promise<void> {
-    await this.database.query(
-      `UPDATE sync_runs SET status = $2::gateway_sync_status, groups_synced = COALESCE($3, groups_synced),
-         members_synced = COALESCE($4, members_synced), error = $5,
-         started_at = CASE WHEN $2::gateway_sync_status = 'RUNNING' THEN now() ELSE started_at END,
-         completed_at = CASE WHEN $2::gateway_sync_status IN ('COMPLETED','FAILED') THEN now() ELSE completed_at END,
-         attempt_count = attempt_count + CASE WHEN $2::gateway_sync_status = 'RUNNING' THEN 1 ELSE 0 END,
-         lease_expires_at = CASE WHEN $2::gateway_sync_status = 'RUNNING'
-           THEN now() + interval '1 hour' ELSE NULL END,
+  async claimSyncRun(id: string): Promise<ClaimedSyncRun | null> {
+    const result = await this.database.query<{
+      session_id: string;
+      lease_token: string;
+      attempt_count: number;
+    }>(
+      `UPDATE sync_runs SET status = 'RUNNING', attempt_count = attempt_count + 1,
+         lease_token = gen_random_uuid(), lease_expires_at = now() + interval '2 minutes',
+         groups_synced = 0, members_synced = 0, error = NULL,
+         started_at = COALESCE(started_at, now()), completed_at = NULL, updated_at = now()
+       WHERE id = $1 AND status = 'PENDING' AND attempt_count < 3 AND next_attempt_at <= now()
+       RETURNING session_id, lease_token, attempt_count`,
+      [id],
+    );
+    const row = result.rows[0];
+    return row ? { sessionId: row.session_id, leaseToken: row.lease_token, attemptNumber: row.attempt_count } : null;
+  }
+
+  async renewSyncLease(id: string, leaseToken: string): Promise<boolean> {
+    const result = await this.database.query(
+      `UPDATE sync_runs SET lease_expires_at = now() + interval '2 minutes', updated_at = now()
+       WHERE id = $1 AND status = 'RUNNING' AND lease_token = $2 AND lease_expires_at > now()`,
+      [id, leaseToken],
+    );
+    return result.rowCount === 1;
+  }
+
+  async completeSyncRun(id: string, leaseToken: string, groups: number, members: number): Promise<boolean> {
+    const result = await this.database.query(
+      `UPDATE sync_runs SET status = 'COMPLETED', groups_synced = $3, members_synced = $4,
+         error = NULL, lease_token = NULL, lease_expires_at = NULL,
+         completed_at = now(), updated_at = now()
+       WHERE id = $1 AND status = 'RUNNING' AND lease_token = $2 AND lease_expires_at > now()`,
+      [id, leaseToken, groups, members],
+    );
+    return result.rowCount === 1;
+  }
+
+  async failSyncRunAttempt(
+    id: string,
+    leaseToken: string,
+    groups: number,
+    members: number,
+    error: string,
+  ): Promise<SyncAttemptResult> {
+    const result = await this.database.query<{ status: 'PENDING' | 'FAILED' }>(
+      `UPDATE sync_runs SET
+         status = CASE WHEN attempt_count >= 3 THEN 'FAILED'::gateway_sync_status
+           ELSE 'PENDING'::gateway_sync_status END,
+         groups_synced = $3, members_synced = $4, error = $5,
+         next_attempt_at = CASE WHEN attempt_count >= 3 THEN next_attempt_at
+           ELSE now() + LEAST(300, 5 * power(2, attempt_count - 1)) * interval '1 second' END,
+         lease_token = NULL, lease_expires_at = NULL,
+         completed_at = CASE WHEN attempt_count >= 3 THEN now() ELSE NULL END,
          updated_at = now()
-      WHERE id = $1`, [id, input.status, input.groups ?? null, input.members ?? null, input.error ?? null]);
+       WHERE id = $1 AND status = 'RUNNING' AND lease_token = $2 AND lease_expires_at > now()
+       RETURNING status`,
+      [id, leaseToken, groups, members, error],
+    );
+    return result.rows[0]?.status ?? 'LOST_OWNERSHIP';
   }
 }
