@@ -4,13 +4,15 @@ import { GatewayRepository } from '../../src/modules/gateway/gateway.repository'
 
 describe('GatewayRepository.listMembers', () => {
   it('applies filtering, ordering, limit, and offset in database queries', async () => {
-    const query = vi.fn()
+    const clientQuery = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [{
         participant_id: 'member@c.us', phone_number: '84900000000', display_name: 'Member',
         is_admin: false, is_super_admin: false,
       }] })
       .mockResolvedValueOnce({ rows: [{ count: '1' }] });
-    const repository = new GatewayRepository({ query } as unknown as DatabaseService);
+    const transaction = vi.fn(async operation => operation({ query: clientQuery }));
+    const repository = new GatewayRepository({ transaction } as unknown as DatabaseService);
 
     const result = await repository.listMembers('session-id', 'group-id', 25, 50, '  100%_match  ');
 
@@ -21,11 +23,13 @@ describe('GatewayRepository.listMembers', () => {
       }],
       total: 1,
     });
-    expect(query).toHaveBeenCalledTimes(2);
-    expect(query.mock.calls[0]?.[0]).toContain('LIMIT $3 OFFSET $4');
-    expect(query.mock.calls[0]?.[0]).toContain('participant_id ASC');
-    expect(query.mock.calls[0]?.[1]).toEqual(['session-id', 'group-id', 25, 50, '%100\\%\\_match%']);
-    expect(query.mock.calls[1]?.[0]).toContain('count(*)');
-    expect(query.mock.calls[1]?.[1]).toEqual(['session-id', 'group-id', '%100\\%\\_match%']);
+    expect(transaction).toHaveBeenCalledOnce();
+    expect(clientQuery).toHaveBeenCalledTimes(3);
+    expect(clientQuery.mock.calls[0]?.[0]).toBe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+    expect(clientQuery.mock.calls[1]?.[0]).toContain('LIMIT $3 OFFSET $4');
+    expect(clientQuery.mock.calls[1]?.[0]).toContain('participant_id ASC');
+    expect(clientQuery.mock.calls[1]?.[1]).toEqual(['session-id', 'group-id', 25, 50, '%100\\%\\_match%']);
+    expect(clientQuery.mock.calls[2]?.[0]).toContain('count(*)');
+    expect(clientQuery.mock.calls[2]?.[1]).toEqual(['session-id', 'group-id', '%100\\%\\_match%']);
   });
 });

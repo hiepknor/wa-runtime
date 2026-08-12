@@ -352,8 +352,9 @@ export class GatewayRepository {
     const searchPattern = normalizedQuery
       ? `%${normalizedQuery.replace(/[\\%_]/g, '\\$&')}%`
       : null;
-    const [rows, count] = await Promise.all([
-      this.database.query<MemberRow>(
+    return this.database.transaction(async client => {
+      await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+      const rows = await client.query<MemberRow>(
         `SELECT participant_id, phone_number, display_name, is_admin, is_super_admin
          FROM group_members
          WHERE session_id = $1 AND group_id = $2
@@ -363,8 +364,10 @@ export class GatewayRepository {
              OR participant_id ILIKE $5 ESCAPE '\\')
          ORDER BY is_super_admin DESC, is_admin DESC,
            lower(coalesce(display_name, phone_number)) ASC, participant_id ASC
-         LIMIT $3 OFFSET $4`, [sessionId, groupId, limit, offset, searchPattern]),
-      this.database.query<{ count: string }>(
+         LIMIT $3 OFFSET $4`,
+        [sessionId, groupId, limit, offset, searchPattern],
+      );
+      const count = await client.query<{ count: string }>(
         `SELECT count(*)::text AS count
          FROM group_members
          WHERE session_id = $1 AND group_id = $2
@@ -373,9 +376,9 @@ export class GatewayRepository {
              OR phone_number ILIKE $3 ESCAPE '\\'
              OR participant_id ILIKE $3 ESCAPE '\\')`,
         [sessionId, groupId, searchPattern],
-      ),
-    ]);
-    return { data: rows.rows.map(mapMember), total: Number(count.rows[0]?.count ?? 0) };
+      );
+      return { data: rows.rows.map(mapMember), total: Number(count.rows[0]?.count ?? 0) };
+    });
   }
 
   async createSyncRun(sessionId: string): Promise<SyncRunDto> {
