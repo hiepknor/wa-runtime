@@ -6,6 +6,8 @@ import { CAMPAIGN_QUEUE, GATEWAY_SYNC_QUEUE, MESSAGE_SEND_QUEUE, WEBHOOK_QUEUE }
 import {
   RUNTIME_HEARTBEAT_TTL_SECONDS,
   runtimeHeartbeatKey,
+  schedulerTickStateKey,
+  type SchedulerTickState,
   type RuntimeProcessName,
 } from './runtime-heartbeat';
 
@@ -36,6 +38,16 @@ export class QueueService implements OnApplicationShutdown {
       new Date().toISOString(),
       'EX',
       RUNTIME_HEARTBEAT_TTL_SECONDS,
+    );
+  }
+
+  async publishSchedulerTickState(state: SchedulerTickState): Promise<void> {
+    await this.ensureHealthConnection();
+    await this.healthConnection.set(
+      schedulerTickStateKey(state.name),
+      JSON.stringify(state),
+      'EX',
+      7 * 24 * 60 * 60,
     );
   }
 

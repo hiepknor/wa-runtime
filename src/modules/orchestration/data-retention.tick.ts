@@ -15,15 +15,11 @@ export interface RetentionResult {
 export class DataRetentionTick {
   private readonly logger = new Logger(DataRetentionTick.name);
   private readonly config = runtimeConfig();
-  private nextRunAt = 0;
 
   constructor(private readonly database: DatabaseService) {}
 
   async run(): Promise<void> {
-    const now = Date.now();
-    if (now < this.nextRunAt) return;
     const result = await this.cleanup();
-    this.nextRunAt = Date.now() + this.config.RUNTIME_RETENTION_INTERVAL_MS;
     const deleted = Object.values(result).reduce((total, count) => total + count, 0);
     if (deleted > 0) this.logger.log({ event: 'data.retention.completed', deleted, ...result });
   }
