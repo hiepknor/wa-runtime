@@ -98,4 +98,27 @@ describe('durable attempt fencing', () => {
       'current failure',
     )).toBe('RETRY');
   });
+
+  it('suppresses capability refresh claims while a full session sync is running', async () => {
+    await gateway.invalidateGroupCapability(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, 'MANUAL_REFRESH');
+    const group = await gateway.findGroup(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID);
+    const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
+    const syncClaim = await gateway.claimSyncRun(run.id);
+    expect(syncClaim).not.toBeNull();
+
+    expect(await gateway.listGroupsNeedingCapabilityRefresh(10)).toEqual([]);
+    expect(await gateway.claimCapabilityRefresh(
+      INTEGRATION_SESSION_ID,
+      INTEGRATION_GROUP_ID,
+      group!.sendCapability.revision,
+    )).toBeNull();
+
+    expect(await gateway.completeSyncRun(run.id, syncClaim!.leaseToken, 0, 0)).toBe(true);
+    expect(await gateway.listGroupsNeedingCapabilityRefresh(10)).toHaveLength(1);
+    expect(await gateway.claimCapabilityRefresh(
+      INTEGRATION_SESSION_ID,
+      INTEGRATION_GROUP_ID,
+      group!.sendCapability.revision,
+    )).not.toBeNull();
+  });
 });

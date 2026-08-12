@@ -383,6 +383,10 @@ export class GatewayRepository {
          AND capability_refresh_attempt_count < 3
          AND capability_refresh_next_attempt_at <= now()
          AND (capability_refresh_lease_token IS NULL OR capability_refresh_lease_expires_at < now())
+         AND NOT EXISTS (
+           SELECT 1 FROM sync_runs
+           WHERE sync_runs.session_id = gateway_groups.session_id AND sync_runs.status = 'RUNNING'
+         )
        ORDER BY capability_refresh_next_attempt_at, capability_invalidated_at LIMIT $1`,
       [limit],
     );
@@ -412,6 +416,10 @@ export class GatewayRepository {
          AND capability_refresh_attempt_count < 3
          AND capability_refresh_next_attempt_at <= now()
          AND (capability_refresh_lease_token IS NULL OR capability_refresh_lease_expires_at < now())
+         AND NOT EXISTS (
+           SELECT 1 FROM sync_runs
+           WHERE sync_runs.session_id = gateway_groups.session_id AND sync_runs.status = 'RUNNING'
+         )
        RETURNING capability_refresh_lease_token, capability_refresh_attempt_count`,
       [sessionId, groupId, expectedRevision],
     );
