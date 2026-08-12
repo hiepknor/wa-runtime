@@ -18,11 +18,19 @@ Every completed HTTP request emits `http.request.completed`. Scheduler recovery 
 publication failures, worker job failures and OpenWA request failures emit structured events without
 message contents or credentials.
 
+Scheduler ticks emit `scheduler.tick.completed`, `scheduler.tick.failed`,
+`scheduler.tick.timed_out`, `scheduler.tick.overlap_skipped` and
+`scheduler.tick.telemetry_failed`. Redis also retains the last known non-sensitive state under
+`automation-runtime:scheduler-tick:<name>` with timestamps, duration and consecutive-failure count.
+The keys are diagnostic state, not work ownership or retry authority.
+
 Useful commands:
 
 ```bash
 docker compose logs --since=15m api worker scheduler
 docker compose logs -f api worker scheduler
+docker compose exec -T redis redis-cli --scan --pattern 'automation-runtime:scheduler-tick:*'
+docker compose exec -T redis redis-cli get automation-runtime:scheduler-tick:messages
 ```
 
 Set `LOG_LEVEL` to `verbose`, `debug`, `log`, `warn`, `error` or `fatal`. Production defaults to
@@ -41,6 +49,7 @@ and allowlisted-session count. It does not prove that OpenWA is currently paired
 
 ## Manual diagnosis
 
-There is no automatic warning for webhook `DEAD`, delivery `UNKNOWN`, queue failures or growing
-backlog. Inspect JSON logs and durable PostgreSQL state during operation. Never automatically retry
-an `UNKNOWN` live delivery; follow [Failure model](failure-model.md).
+The repository emits alertable events but does not ship a collector or paging engine. Configure the
+deployment platform to alert on repeated tick failure/timeout, webhook `DEAD`, delivery `UNKNOWN`,
+queue failures and growing backlog. Never automatically retry an `UNKNOWN` live delivery; follow
+[Failure model](failure-model.md).

@@ -42,6 +42,11 @@ The same image runs three long-lived processes and one one-shot migration proces
 The API can restart without losing campaign work. The scheduler reconstructs pending work from
 PostgreSQL, and BullMQ job IDs make re-enqueueing safe.
 
+Message, webhook, gateway, campaign and retention scheduler ticks use independent recursive timers.
+Each tick has its own cadence and timeout, cannot overlap itself and backs off exponentially after a
+failure without delaying other ticks. Redis stores a non-sensitive last-known state record for each
+tick; PostgreSQL remains the work-state authority.
+
 The accepted target execution model is defined by
 [ADR 001](adr/001-postgresql-owned-durable-work-execution.md). Its implementation is in progress.
 Database-owned retry, lease-token fencing, session sync epochs and PostgreSQL outbound-session

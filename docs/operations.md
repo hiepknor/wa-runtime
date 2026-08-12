@@ -72,6 +72,7 @@ docker compose ps
 docker compose logs --since=15m api worker scheduler migrate
 docker compose exec -T postgres pg_isready -U automation -d automation_runtime
 docker compose exec -T redis redis-cli ping
+docker compose exec -T redis redis-cli --scan --pattern 'automation-runtime:scheduler-tick:*'
 ```
 
 Regularly inspect repeated worker failures, runs stuck in `PREPARING`, unexpected `UNKNOWN`
@@ -83,6 +84,11 @@ After [ADR 001](adr/001-postgresql-owned-durable-work-execution.md) is implement
 lost-ownership transitions, exhausted durable retry budgets, sync epoch rejections, expired
 outbound-session leases and scheduler lag. These events must not include message text, member search
 values, phone numbers or secrets.
+
+Page on repeated `scheduler.tick.failed` or any `scheduler.tick.timed_out`. A timed-out tick remains
+non-overlapping until its underlying operation settles; do not restart a second scheduler as a
+workaround. Compare its Redis `lastStartedAt`, `lastSuccessAt`, `lastFailureAt`, `nextRunAt` and
+`consecutiveFailures` fields, then inspect PostgreSQL/Redis latency for that tick's dependency.
 
 Treat `OpenWAResponseValidationError` as an integration compatibility incident. Its log message
 contains only the operation and issue count; do not add raw response payloads while diagnosing it.

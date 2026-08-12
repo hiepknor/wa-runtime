@@ -69,6 +69,11 @@ runner model gives each tick an interval, timeout, no-overlap guard and failure 
 processors through repositories—not Bull event listeners or executable entrypoints—own state
 transitions and side effects.
 
+A tick timeout emits telemetry but does not pretend to cancel an in-flight SQL or queue operation.
+The tick remains guarded until that operation settles, then schedules bounded exponential backoff.
+Other ticks continue on their own timers. Telemetry publication failure is logged and cannot change
+the work outcome.
+
 ## Authorization invariant
 
 Every public object access resolves to a session and checks the deployment session scope. Signed

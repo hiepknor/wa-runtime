@@ -136,8 +136,10 @@ serialization guarantee after this migration.
 The scheduler discovers due rows and publishes wake-up jobs. It does not own work attempts. Feature
 processors, through repositories, claim attempts and persist retry or terminal state.
 
-Each scheduler tick will eventually have an independent interval, timeout, no-overlap guard and
-failure backoff. Independent ticks may run concurrently; the same tick must not overlap itself.
+Each scheduler tick has an independent interval, timeout, no-overlap guard and bounded exponential
+failure backoff. Independent ticks run concurrently; the same tick cannot overlap itself. A timeout
+is an alert boundary, not unsafe cancellation: the no-overlap guard remains held until the underlying
+database or queue operation settles.
 
 ## OpenWA boundary
 
@@ -215,7 +217,8 @@ Implementation is split into reviewable phases:
    serialize one session, load test 500 sends and remove the Redis outbound lock;
 4. **Implemented:** bulk group/member synchronization, validate OpenWA response schemas and bound
    group pagination with duplicate/progress detection;
-5. isolate scheduler tick timing and add operational alerts.
+5. **Implemented:** isolate scheduler tick timing and publish structured timeout, failure, overlap
+   and last-success telemetry for operational alerts.
 
 Until the implemented phases pass staging multi-process tests, production must run one scheduler and
 one worker. Live sends remain disabled during the migration and staging validation.
