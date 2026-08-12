@@ -115,4 +115,21 @@ describe('OpenWAClient response validation', () => {
     await expect(request).resolves.toMatchObject({ id: 'session-1', status: 'ready' });
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
+
+  it('retries transient server failures for idempotent reads', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ message: 'temporary engine failure' }, 500))
+      .mockResolvedValueOnce(jsonResponse({
+        id: 'group-1', name: 'Group', participants: [], linkedParentJID: null,
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const request = new OpenWAClient().getGroup('session-1', 'group-1');
+    await vi.advanceTimersByTimeAsync(250);
+
+    await expect(request).resolves.toMatchObject({ id: 'group-1', participants: [] });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });

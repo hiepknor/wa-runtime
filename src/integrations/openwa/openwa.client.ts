@@ -89,6 +89,7 @@ const webhookSchema = z.object({
 const healthSchema = z.object({ status: nonEmptyString, timestamp: dateTimeString, version: nonEmptyString });
 const sendTextResultSchema = z.object({ messageId: nonEmptyString, timestamp: z.number().int().nonnegative() });
 const maxRateLimitRetries = 12;
+const maxTransientReadRetries = 4;
 
 export type OpenWASendTextResult = z.infer<typeof sendTextResultSchema>;
 export type OpenWASession = z.infer<typeof sessionSchema>;
@@ -126,16 +127,25 @@ export class OpenWAClient {
     headers.set('accept', 'application/json');
     headers.set('x-api-key', this.config.OPENWA_API_KEY);
     try {
-      for (let attempt = 0; ; attempt += 1) {
+      let rateLimitRetries = 0;
+      let transientRetries = 0;
+      for (;;) {
         const response = await fetch(new URL(path, this.config.OPENWA_BASE_URL), {
           ...init,
           redirect: 'error',
           signal: AbortSignal.timeout(30_000),
           headers,
         });
-        if (response.status === 429 && method === 'GET' && attempt < maxRateLimitRetries) {
+        if (response.status === 429 && method === 'GET' && rateLimitRetries < maxRateLimitRetries) {
           response.body?.cancel().catch(() => undefined);
-          await new Promise(resolve => setTimeout(resolve, rateLimitDelayMs(response.headers, attempt)));
+          await delay(rateLimitDelayMs(response.headers, rateLimitRetries));
+          rateLimitRetries += 1;
+          continue;
+        }
+        if (response.status >= 500 && method === 'GET' && transientRetries < maxTransientReadRetries) {
+          response.body?.cancel().catch(() => undefined);
+          await delay(jitteredBackoffMs(transientRetries, 5_000));
+          transientRetries += 1;
           continue;
         }
         if (!response.ok) throw new OpenWAHttpError(response.status, await response.text());
@@ -144,7 +154,8 @@ export class OpenWAClient {
         this.logger.debug({
           event: 'openwa.request.completed', operation, method, statusCode: response.status,
           durationMs: Math.round((performance.now() - started) * 100) / 100,
-          rateLimitRetries: attempt,
+          rateLimitRetries,
+          transientRetries,
         });
         return parsed.data;
       }
@@ -251,6 +262,13 @@ function rateLimitDelayMs(headers: Headers, attempt: number): number {
   if (Number.isFinite(retryAfter) && retryAfter >= 0) {
     return Math.min(60_000, Math.max(250, Math.ceil(retryAfter * 1000)));
   }
-  const backoff = Math.min(60_000, 250 * 2 ** attempt);
-  return Math.ceil(backoff * (0.75 + Math.random() * 0.5));
+  return jitteredBackoffMs(attempt, 60_000);
 }
+
+const delay = (milliseconds: number): Promise<void> =>
+  new Promise(resolve => setTimeout(resolve, milliseconds));
+
+const jitteredBackoffMs = (attempt: number, maximum: number): number => {
+  const backoff = Math.min(maximum, 250 * 2 ** attempt);
+  return Math.ceil(backoff * (0.75 + Math.random() * 0.5));
+};
