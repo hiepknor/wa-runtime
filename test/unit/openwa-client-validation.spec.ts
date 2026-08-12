@@ -22,6 +22,7 @@ describe('OpenWAClient response validation', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -88,5 +89,22 @@ describe('OpenWAClient response validation', () => {
 
     await expect(new OpenWAClient().listGroups('session-1'))
       .rejects.toBeInstanceOf(OpenWAResponseValidationError);
+  });
+
+  it('retries rate-limited GET requests using gateway retry metadata', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ message: 'rate limited' }, 429))
+      .mockResolvedValueOnce(jsonResponse({
+        id: 'session-1', name: 'Session', status: 'ready', engineLoaded: true,
+        restriction: null, createdAt: '2026-08-12T00:00:00Z', updatedAt: '2026-08-12T00:00:00Z',
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const request = new OpenWAClient().getSession('session-1');
+    await vi.advanceTimersByTimeAsync(250);
+
+    await expect(request).resolves.toMatchObject({ id: 'session-1', status: 'ready' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

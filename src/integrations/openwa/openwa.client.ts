@@ -88,6 +88,7 @@ const webhookSchema = z.object({
 });
 const healthSchema = z.object({ status: nonEmptyString, timestamp: dateTimeString, version: nonEmptyString });
 const sendTextResultSchema = z.object({ messageId: nonEmptyString, timestamp: z.number().int().nonnegative() });
+const maxRateLimitRetries = 8;
 
 export type OpenWASendTextResult = z.infer<typeof sendTextResultSchema>;
 export type OpenWASession = z.infer<typeof sessionSchema>;
@@ -125,20 +126,28 @@ export class OpenWAClient {
     headers.set('accept', 'application/json');
     headers.set('x-api-key', this.config.OPENWA_API_KEY);
     try {
-      const response = await fetch(new URL(path, this.config.OPENWA_BASE_URL), {
-        ...init,
-        redirect: 'error',
-        signal: AbortSignal.timeout(30_000),
-        headers,
-      });
-      if (!response.ok) throw new OpenWAHttpError(response.status, await response.text());
-      const parsed = schema.safeParse(await response.json());
-      if (!parsed.success) throw new OpenWAResponseValidationError(operation, parsed.error.issues.length);
-      this.logger.debug({
-        event: 'openwa.request.completed', operation, method, statusCode: response.status,
-        durationMs: Math.round((performance.now() - started) * 100) / 100,
-      });
-      return parsed.data;
+      for (let attempt = 0; ; attempt += 1) {
+        const response = await fetch(new URL(path, this.config.OPENWA_BASE_URL), {
+          ...init,
+          redirect: 'error',
+          signal: AbortSignal.timeout(30_000),
+          headers,
+        });
+        if (response.status === 429 && method === 'GET' && attempt < maxRateLimitRetries) {
+          response.body?.cancel().catch(() => undefined);
+          await new Promise(resolve => setTimeout(resolve, rateLimitDelayMs(response.headers, attempt)));
+          continue;
+        }
+        if (!response.ok) throw new OpenWAHttpError(response.status, await response.text());
+        const parsed = schema.safeParse(await response.json());
+        if (!parsed.success) throw new OpenWAResponseValidationError(operation, parsed.error.issues.length);
+        this.logger.debug({
+          event: 'openwa.request.completed', operation, method, statusCode: response.status,
+          durationMs: Math.round((performance.now() - started) * 100) / 100,
+          rateLimitRetries: attempt,
+        });
+        return parsed.data;
+      }
     } catch (error) {
       this.logger.error({
         event: 'openwa.request.failed', operation, method,
@@ -227,4 +236,19 @@ export class OpenWAClient {
       body: JSON.stringify({ chatId, text }),
     });
   }
+}
+
+function rateLimitDelayMs(headers: Headers, attempt: number): number {
+  const retryAfter = Number(headers.get('retry-after'));
+  if (Number.isFinite(retryAfter) && retryAfter >= 0) {
+    return Math.min(60_000, Math.max(250, Math.ceil(retryAfter * 1000)));
+  }
+  const exhaustedResets = ['short', 'medium', 'long']
+    .filter(tier => headers.get(`x-ratelimit-remaining-${tier}`) === '0')
+    .map(tier => Number(headers.get(`x-ratelimit-reset-${tier}`)))
+    .filter(value => Number.isFinite(value) && value >= 0);
+  if (exhaustedResets.length > 0) {
+    return Math.min(60_000, Math.max(250, Math.ceil(Math.max(...exhaustedResets) * 1000)));
+  }
+  return Math.min(10_000, 250 * 2 ** attempt);
 }
