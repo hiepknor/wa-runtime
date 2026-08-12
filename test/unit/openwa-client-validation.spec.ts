@@ -54,7 +54,7 @@ describe('OpenWAClient response validation', () => {
     await expect(failure).rejects.not.toThrow(/secret-phone/);
   });
 
-  it('normalizes missing summary subjects while keeping group details strict', async () => {
+  it('normalizes missing subjects in both group summaries and details', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse([
         { id: 'group-1', linkedParentJID: null },
@@ -69,8 +69,9 @@ describe('OpenWAClient response validation', () => {
       { id: 'group-1', name: 'Group subject pending sync', linkedParentJID: null },
       { id: 'group-2', name: 'Group subject pending sync', linkedParentJID: null },
     ]);
-    await expect(new OpenWAClient().getGroup('session-1', 'group-1'))
-      .rejects.toBeInstanceOf(OpenWAResponseValidationError);
+    await expect(new OpenWAClient().getGroup('session-1', 'group-1')).resolves.toMatchObject({
+      id: 'group-1', name: 'Group subject pending sync', participants: [],
+    });
   });
 
   it('fails bounded pagination when a later page repeats group ids', async () => {

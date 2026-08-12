@@ -54,7 +54,6 @@ const participantSchema = z.object({
   isSuperAdmin: z.boolean(),
 });
 const groupSchema = groupSummaryBaseSchema.extend({
-  name: nonEmptyString,
   description: nullableString,
   owner: nullableString,
   createdAt: z.number().int().optional(),
@@ -78,7 +77,10 @@ const groupSchema = groupSummaryBaseSchema.extend({
     }
     participantIds.add(participant.id);
   }
-});
+}).transform(group => ({
+  ...group,
+  name: group.name?.trim() ? group.name : pendingGroupName,
+}));
 const webhookSchema = z.object({
   id: nonEmptyString,
   sessionId: nonEmptyString,
