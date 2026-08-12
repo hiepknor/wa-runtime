@@ -1,10 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { z } from 'zod';
 import { runtimeConfig } from '../../core/config/runtime-config';
-
-export interface OpenWASendTextResult {
-  messageId: string;
-  timestamp: number;
-}
 
 export type OpenWASessionStatus =
   | 'created'
@@ -16,63 +12,84 @@ export type OpenWASessionStatus =
   | 'action_required'
   | 'failed';
 
-export interface OpenWASession {
-  id: string;
-  name: string;
-  status: OpenWASessionStatus;
-  phone?: string | null;
-  pushName?: string | null;
-  connectedAt?: string | null;
-  lastActive?: string | null;
-  createdAt: string;
-  updatedAt: string;
-  lastError?: string | null;
-  restriction?: Record<string, unknown> | null;
-  engineLoaded: boolean;
-}
+const nonEmptyString = z.string().min(1);
+const nullableString = z.string().nullable().optional();
+const dateTimeString = z.string().refine(value => Number.isFinite(Date.parse(value)), 'invalid datetime');
+const nullableDateTimeString = dateTimeString.nullable().optional();
+const sessionStatusSchema = z.enum([
+  'created', 'initializing', 'qr_ready', 'authenticating', 'ready',
+  'disconnected', 'action_required', 'failed',
+]);
+const sessionSchema = z.object({
+  id: nonEmptyString,
+  name: nonEmptyString,
+  status: sessionStatusSchema,
+  phone: nullableString,
+  pushName: nullableString,
+  connectedAt: nullableDateTimeString,
+  lastActive: nullableDateTimeString,
+  createdAt: dateTimeString,
+  updatedAt: dateTimeString,
+  lastError: nullableString,
+  restriction: z.record(z.string(), z.unknown()).nullable().optional(),
+  engineLoaded: z.boolean(),
+});
+const groupSummarySchema = z.object({
+  id: nonEmptyString,
+  name: nonEmptyString,
+  participantsCount: z.number().int().nonnegative().optional(),
+  isAdmin: z.boolean().optional(),
+  linkedParentJID: nullableString,
+});
+const participantSchema = z.object({
+  id: nonEmptyString,
+  number: nonEmptyString,
+  name: nullableString,
+  isAdmin: z.boolean(),
+  isSuperAdmin: z.boolean(),
+});
+const groupSchema = groupSummarySchema.extend({
+  description: nullableString,
+  owner: nullableString,
+  createdAt: z.number().int().optional(),
+  participants: z.array(participantSchema).max(100_000),
+  isReadOnly: z.boolean().optional(),
+  isAnnounce: z.boolean().optional(),
+  announce: z.boolean().optional(),
+  locked: z.boolean().optional(),
+  ephemeralSeconds: z.number().int().nonnegative().optional(),
+  memberAddMode: z.enum(['all', 'admins']).optional(),
+}).superRefine((group, context) => {
+  const participantIds = new Set<string>();
+  for (const participant of group.participants) {
+    if (participantIds.has(participant.id)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['participants'],
+        message: 'duplicate participant id',
+      });
+      return;
+    }
+    participantIds.add(participant.id);
+  }
+});
+const webhookSchema = z.object({
+  id: nonEmptyString,
+  sessionId: nonEmptyString,
+  url: z.url(),
+  events: z.array(nonEmptyString),
+  active: z.boolean(),
+});
+const healthSchema = z.object({ status: nonEmptyString, timestamp: dateTimeString, version: nonEmptyString });
+const sendTextResultSchema = z.object({ messageId: nonEmptyString, timestamp: z.number().int().nonnegative() });
 
-export interface OpenWAGroupSummary {
-  id: string;
-  name: string;
-  participantsCount?: number;
-  isAdmin?: boolean;
-  linkedParentJID?: string | null;
-}
-
-export interface OpenWAGroupParticipant {
-  id: string;
-  number: string;
-  name?: string;
-  isAdmin: boolean;
-  isSuperAdmin: boolean;
-}
-
-export interface OpenWAGroup extends OpenWAGroupSummary {
-  description?: string;
-  owner?: string;
-  createdAt?: number;
-  participants: OpenWAGroupParticipant[];
-  isReadOnly?: boolean;
-  isAnnounce?: boolean;
-  announce?: boolean;
-  locked?: boolean;
-  ephemeralSeconds?: number;
-  memberAddMode?: 'all' | 'admins';
-}
-
-export interface OpenWAWebhook {
-  id: string;
-  sessionId: string;
-  url: string;
-  events: string[];
-  active: boolean;
-}
-
-export interface OpenWAHealth {
-  status: string;
-  timestamp: string;
-  version: string;
-}
+export type OpenWASendTextResult = z.infer<typeof sendTextResultSchema>;
+export type OpenWASession = z.infer<typeof sessionSchema>;
+export type OpenWAGroupSummary = z.infer<typeof groupSummarySchema>;
+export type OpenWAGroupParticipant = z.infer<typeof participantSchema>;
+export type OpenWAGroup = z.infer<typeof groupSchema>;
+export type OpenWAWebhook = z.infer<typeof webhookSchema>;
+export type OpenWAHealth = z.infer<typeof healthSchema>;
 
 export class OpenWAHttpError extends Error {
   constructor(
@@ -83,12 +100,19 @@ export class OpenWAHttpError extends Error {
   }
 }
 
+export class OpenWAResponseValidationError extends Error {
+  constructor(readonly operation: string, readonly issues: number) {
+    super(`OpenWA returned an invalid ${operation} response (${issues} schema issues)`);
+    this.name = 'OpenWAResponseValidationError';
+  }
+}
+
 @Injectable()
 export class OpenWAClient {
   private readonly config = runtimeConfig();
   private readonly logger = new Logger(OpenWAClient.name);
 
-  private async request<T>(operation: string, path: string, init?: RequestInit): Promise<T> {
+  private async request<T>(operation: string, path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
     const started = performance.now();
     const method = init?.method ?? 'GET';
     const headers = new Headers(init?.headers);
@@ -102,11 +126,13 @@ export class OpenWAClient {
         headers,
       });
       if (!response.ok) throw new OpenWAHttpError(response.status, await response.text());
+      const parsed = schema.safeParse(await response.json());
+      if (!parsed.success) throw new OpenWAResponseValidationError(operation, parsed.error.issues.length);
       this.logger.debug({
         event: 'openwa.request.completed', operation, method, statusCode: response.status,
         durationMs: Math.round((performance.now() - started) * 100) / 100,
       });
-      return (await response.json()) as T;
+      return parsed.data;
     } catch (error) {
       this.logger.error({
         event: 'openwa.request.failed', operation, method,
@@ -119,11 +145,11 @@ export class OpenWAClient {
   }
 
   listSessions(): Promise<OpenWASession[]> {
-    return this.request('list_sessions', '/api/sessions?limit=1000');
+    return this.request('list_sessions', '/api/sessions?limit=1000', z.array(sessionSchema).max(1000));
   }
 
   async assertCompatibleRelease(): Promise<void> {
-    const health = await this.request<OpenWAHealth>('health', '/api/health');
+    const health = await this.request('health', '/api/health', healthSchema);
     if (health.version !== this.config.OPENWA_RELEASE_TAG) {
       throw new Error(
         `OpenWA release mismatch: expected ${this.config.OPENWA_RELEASE_TAG}, received ${health.version}`,
@@ -132,29 +158,45 @@ export class OpenWAClient {
   }
 
   getSession(sessionId: string): Promise<OpenWASession> {
-    return this.request('get_session', `/api/sessions/${encodeURIComponent(sessionId)}`);
+    return this.request('get_session', `/api/sessions/${encodeURIComponent(sessionId)}`, sessionSchema);
   }
 
   async listGroups(sessionId: string): Promise<OpenWAGroupSummary[]> {
     const pageSize = 1000;
+    const maxPages = 100;
     const groups: OpenWAGroupSummary[] = [];
-    for (let offset = 0; ; offset += pageSize) {
-      const page = await this.request<OpenWAGroupSummary[]>('list_groups',
+    const groupIds = new Set<string>();
+    for (let pageNumber = 0; pageNumber < maxPages; pageNumber += 1) {
+      const offset = pageNumber * pageSize;
+      const page = await this.request('list_groups',
         `/api/sessions/${encodeURIComponent(sessionId)}/groups?limit=${pageSize}&offset=${offset}`,
+        z.array(groupSummarySchema).max(pageSize),
       );
+      for (const group of page) {
+        if (groupIds.has(group.id)) {
+          throw new OpenWAResponseValidationError('list_groups', 1);
+        }
+        groupIds.add(group.id);
+      }
       groups.push(...page);
       if (page.length < pageSize) return groups;
     }
+    throw new OpenWAResponseValidationError('list_groups', 1);
   }
 
   getGroup(sessionId: string, groupId: string): Promise<OpenWAGroup> {
     return this.request('get_group',
       `/api/sessions/${encodeURIComponent(sessionId)}/groups/${encodeURIComponent(groupId)}`,
+      groupSchema,
     );
   }
 
   listWebhooks(sessionId: string): Promise<OpenWAWebhook[]> {
-    return this.request('list_webhooks', `/api/sessions/${encodeURIComponent(sessionId)}/webhooks`);
+    return this.request(
+      'list_webhooks',
+      `/api/sessions/${encodeURIComponent(sessionId)}/webhooks`,
+      z.array(webhookSchema).max(10_000),
+    );
   }
 
   registerWebhook(input: {
@@ -163,7 +205,7 @@ export class OpenWAClient {
     events: string[];
     secret: string;
   }): Promise<OpenWAWebhook> {
-    return this.request('register_webhook', `/api/sessions/${encodeURIComponent(input.sessionId)}/webhooks`, {
+    return this.request('register_webhook', `/api/sessions/${encodeURIComponent(input.sessionId)}/webhooks`, webhookSchema, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ url: input.url, events: input.events, secret: input.secret }),
@@ -171,7 +213,7 @@ export class OpenWAClient {
   }
 
   async sendText(sessionId: string, chatId: string, text: string): Promise<OpenWASendTextResult> {
-    return this.request('send_text', `/api/sessions/${encodeURIComponent(sessionId)}/messages/send-text`, {
+    return this.request('send_text', `/api/sessions/${encodeURIComponent(sessionId)}/messages/send-text`, sendTextResultSchema, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',

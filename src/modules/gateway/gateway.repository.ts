@@ -213,7 +213,38 @@ export class GatewayRepository {
     await this.database.transaction(async client => {
       await this.assertSyncWriteOwnership(client, sessionId, syncFence);
       await client.query('UPDATE gateway_groups SET is_active = false, updated_at = now() WHERE session_id = $1', [sessionId]);
-      for (const group of groups) await this.upsertGroupSummary(client, sessionId, group);
+      if (groups.length > 0) {
+        await client.query(
+          `INSERT INTO gateway_groups
+             (session_id, id, name, participants_count, is_admin, linked_parent_id)
+           SELECT $1, summary.id, summary.name, summary.participants_count,
+             summary.is_admin, summary.linked_parent_id
+           FROM jsonb_to_recordset($2::jsonb) AS summary(
+             id text, name text, participants_count integer, is_admin boolean, linked_parent_id text
+           )
+           ON CONFLICT (session_id, id) DO UPDATE SET
+             name = EXCLUDED.name,
+             participants_count = COALESCE(EXCLUDED.participants_count, gateway_groups.participants_count),
+             is_admin = COALESCE(EXCLUDED.is_admin, gateway_groups.is_admin),
+             linked_parent_id = EXCLUDED.linked_parent_id,
+             send_capability = CASE WHEN gateway_groups.is_active = false
+               THEN 'UNKNOWN' ELSE gateway_groups.send_capability END,
+             send_capability_reason = CASE WHEN gateway_groups.is_active = false
+               THEN 'GROUP_CHANGED' ELSE gateway_groups.send_capability_reason END,
+             capability_invalidated_at = CASE WHEN gateway_groups.is_active = false
+               THEN now() ELSE gateway_groups.capability_invalidated_at END,
+             capability_revision = CASE WHEN gateway_groups.is_active = false
+               THEN gateway_groups.capability_revision + 1 ELSE gateway_groups.capability_revision END,
+             is_active = true, synced_at = now(), updated_at = now()`,
+          [sessionId, JSON.stringify(groups.map(group => ({
+            id: group.id,
+            name: group.name,
+            participants_count: group.participantsCount ?? null,
+            is_admin: group.isAdmin ?? null,
+            linked_parent_id: group.linkedParentJID ?? null,
+          })))],
+        );
+      }
       await client.query(
         `UPDATE gateway_groups SET
            send_capability = 'DENIED', send_capability_reason = 'GROUP_INACTIVE',
@@ -224,25 +255,6 @@ export class GatewayRepository {
         [sessionId],
       );
     });
-  }
-
-  private async upsertGroupSummary(client: PoolClient, sessionId: string, group: OpenWAGroupSummary): Promise<void> {
-    await client.query(
-      `INSERT INTO gateway_groups
-         (session_id, id, name, participants_count, is_admin, linked_parent_id)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (session_id, id) DO UPDATE SET
-         name = EXCLUDED.name,
-         participants_count = COALESCE(EXCLUDED.participants_count, gateway_groups.participants_count),
-         is_admin = COALESCE(EXCLUDED.is_admin, gateway_groups.is_admin),
-         linked_parent_id = EXCLUDED.linked_parent_id,
-         send_capability = CASE WHEN gateway_groups.is_active = false THEN 'UNKNOWN' ELSE gateway_groups.send_capability END,
-         send_capability_reason = CASE WHEN gateway_groups.is_active = false THEN 'GROUP_CHANGED' ELSE gateway_groups.send_capability_reason END,
-         capability_invalidated_at = CASE WHEN gateway_groups.is_active = false THEN now() ELSE gateway_groups.capability_invalidated_at END,
-         capability_revision = CASE WHEN gateway_groups.is_active = false THEN gateway_groups.capability_revision + 1 ELSE gateway_groups.capability_revision END,
-         is_active = true, synced_at = now(), updated_at = now()`,
-      [sessionId, group.id, group.name, group.participantsCount ?? null, group.isAdmin ?? null, group.linkedParentJID ?? null],
-    );
   }
 
   async upsertGroupDetails(
@@ -316,13 +328,22 @@ export class GatewayRepository {
           capability.status, capability.reason],
       );
       await client.query('DELETE FROM group_members WHERE session_id = $1 AND group_id = $2', [sessionId, group.id]);
-      for (const participant of group.participants) {
+      if (group.participants.length > 0) {
         await client.query(
           `INSERT INTO group_members
              (session_id, group_id, participant_id, phone_number, display_name, is_admin, is_super_admin)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-          [sessionId, group.id, participant.id, participant.number, participant.name ?? null,
-            participant.isAdmin, participant.isSuperAdmin],
+           SELECT $1, $2, participant_id, phone_number, display_name, is_admin, is_super_admin
+           FROM unnest($3::text[], $4::text[], $5::text[], $6::boolean[], $7::boolean[])
+             AS participant(participant_id, phone_number, display_name, is_admin, is_super_admin)`,
+          [
+            sessionId,
+            group.id,
+            group.participants.map(participant => participant.id),
+            group.participants.map(participant => participant.number),
+            group.participants.map(participant => participant.name ?? null),
+            group.participants.map(participant => participant.isAdmin),
+            group.participants.map(participant => participant.isSuperAdmin),
+          ],
         );
       }
       return { members: group.participants.length, applied: true };

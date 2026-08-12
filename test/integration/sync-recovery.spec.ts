@@ -134,4 +134,30 @@ describe('gateway sync recovery', () => {
       .toMatchObject({ applied: true, members: 1 });
     expect(await gateway.findSession(INTEGRATION_SESSION_ID)).toMatchObject({ name: 'current session' });
   });
+
+  it('bulk-replaces thousands of synchronized members in one group transaction', async () => {
+    const openwa = new OpenWAClient();
+    await gateway.upsertSession(await openwa.getSession(INTEGRATION_SESSION_ID));
+    const participantCount = 3000;
+    const result = await gateway.upsertGroupDetails(INTEGRATION_SESSION_ID, {
+      id: 'large-group@g.us',
+      name: 'Large integration group',
+      isAdmin: true,
+      participants: Array.from({ length: participantCount }, (_, index) => ({
+        id: `participant-${index}@c.us`,
+        number: `8497${String(index).padStart(7, '0')}`,
+        name: index % 3 === 0 ? `Member ${index}` : null,
+        isAdmin: index < 10,
+        isSuperAdmin: index === 0,
+      })),
+    });
+
+    expect(result).toEqual({ applied: true, members: participantCount });
+    const persisted = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM group_members
+       WHERE session_id = $1 AND group_id = 'large-group@g.us'`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(persisted.rows[0]?.count).toBe(String(participantCount));
+  });
 });
