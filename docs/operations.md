@@ -254,6 +254,18 @@ before Runtime marks missing groups inactive. The first observation leaves the r
 and retries discovery durably. Only 429, upstream 5xx and network failures extend the shared session
 cooldown; validation and persistence errors retain independent item retry semantics.
 
+OpenWA group events now create one durable targeted intent per `(session, group)`. The default
+three-second debounce coalesces bursts and a ten-second maximum wait prevents continuous activity
+from postponing reconciliation indefinitely. PostgreSQL `NOTIFY` wakes the gateway dispatcher, but
+the notification contains no identity and is not durable work; the configurable ten-second scan is
+the recovery fallback. A listener reconnect performs an immediate catch-up scan.
+
+Adaptive pacing is disabled by default. When `GATEWAY_SYNC_ADAPTIVE_PACING=true`, an explicit 429
+halves the persisted effective per-session rate down to
+`GATEWAY_SYNC_MIN_GROUPS_PER_MINUTE`; every configured successful-read streak restores one request
+per minute up to `GATEWAY_SYNC_GROUPS_PER_MINUTE`. Disable the flag to immediately use the fixed
+configured maximum without deleting pacing state.
+
 Useful database inspection queries:
 
 ```sql
@@ -265,8 +277,13 @@ SELECT status, count(*) FROM gateway_sync_items
 WHERE sync_run_id = '<run-id>' GROUP BY status ORDER BY status;
 
 SELECT session_id, next_request_at, consecutive_failures, cooldown_until,
+       effective_requests_per_minute, success_streak, last_rate_pressure_at,
        active_lease_expires_at
 FROM gateway_sync_rate_limits;
+
+SELECT status, count(*), sum(coalesced_count) AS coalesced_events,
+       min(now() - first_requested_at) AS oldest_age
+FROM gateway_group_reconciliation_intents GROUP BY status ORDER BY status;
 ```
 
 After a worker crash, the scheduler returns expired items to `RETRY` and clears expired pacing

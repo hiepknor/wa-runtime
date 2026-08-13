@@ -45,6 +45,12 @@ detail write verifies both the session epoch and item lease. Group data and pare
 incrementally published; a failed item does not replay completed siblings, and an older attempt
 cannot write after a newer epoch begins.
 
+Group webhooks use a separate revisioned targeted intent keyed by session and group. A duplicate
+webhook event is rejected by event idempotency before it can advance the intent. An event arriving
+while revision N runs advances the requested revision; N may publish its fenced authoritative read,
+but completion returns the intent to `PENDING` for the newer revision. PostgreSQL notifications only
+wake dispatch and are never considered evidence that an intent exists or completed.
+
 Malformed successful OpenWA responses fail before durable domain writes. Group pagination is
 bounded and treats duplicate IDs, oversized pages or a full page at the configured page limit as a
 compatibility failure, preventing an unbounded or non-progressing synchronization loop.
@@ -59,6 +65,7 @@ The scheduler rediscovers work from these PostgreSQL rows:
 | Message job | Due `SCHEDULED` | `QUEUED` returns to `SCHEDULED`; `PROCESSING` becomes `UNKNOWN`. |
 | Gateway sync | Due `PENDING` | Owning attempt returns to delayed `PENDING`; exhaustion becomes `FAILED`. |
 | Group reconciliation | Due `PENDING` or `RETRY` | Owning item returns to `RETRY`; exhaustion becomes `FAILED` and finalizes parent progress. |
+| Targeted group intent | Debounced `PENDING` or `RETRY` | Owning revision returns to `RETRY`; a newer requested revision returns to `PENDING`. |
 | Campaign preparation | Due `PREPARING` | Owning attempt backs off durably; exhaustion becomes `FAILED`. |
 | Campaign delivery | `PENDING` in a running run | Materialized from the durable delivery row. |
 
