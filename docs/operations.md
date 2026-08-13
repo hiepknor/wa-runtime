@@ -295,7 +295,8 @@ that disappears during reconciliation is `SKIPPED` and does not fail the parent.
 
 [ADR 005](adr/005-session-scoped-observed-contacts.md) adds a session-scoped contact identity read
 model. Group reconciliation always seeds member identities. OpenWA contact snapshots remain disabled
-by default and can be enabled with `CONTACT_SNAPSHOT_SYNC_ENABLED=true` after migration 018 is applied.
+by default and can be enabled with `CONTACT_SNAPSHOT_SYNC_ENABLED=true` after migrations 018–020 are
+applied.
 
 Identity evidence from an inbound message's bounded `contact.pushName` field is independently gated by
 `CONTACT_MESSAGE_ENRICHMENT_ENABLED`. Runtime extracts only sender identity and push name, then discards
