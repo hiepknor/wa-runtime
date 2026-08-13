@@ -1,7 +1,8 @@
-import { Controller, Get, HttpCode, NotFoundException, Param, ParseUUIDPipe, Post } from '@nestjs/common';
-import { ApiAcceptedResponse, ApiOkResponse, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, HttpCode, NotFoundException, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import { ApiAcceptedResponse, ApiBody, ApiOkResponse, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { SessionDto, SessionListDto } from '../../contracts/sessions/session.dto';
 import { SyncRunDto } from '../../contracts/sessions/sync-run.dto';
+import { SyncRequestDto } from '../../contracts/sessions/sync-request.dto';
 import { GatewayRepository } from './gateway.repository';
 import { GatewaySyncService } from './gateway-sync.service';
 import { SessionService } from './session.service';
@@ -30,9 +31,12 @@ export class SessionController {
 
   @Post(':id/sync')
   @HttpCode(202)
-  @ApiOperation({ summary: 'Queue a full session, group and group-member sync' })
+  @ApiOperation({ summary: 'Queue durable discovery and group reconciliation' })
+  @ApiBody({ type: SyncRequestDto, required: false })
   @ApiAcceptedResponse({ type: SyncRunDto })
-  requestSync(@Param('id', ParseUUIDPipe) id: string) { return this.sync.request(id); }
+  requestSync(@Param('id', ParseUUIDPipe) id: string, @Body() request: SyncRequestDto = new SyncRequestDto()) {
+    return this.sync.request(id, request.mode);
+  }
 
   @Get(':id/sync-runs/:runId')
   @ApiOperation({ summary: 'Read sync progress' })

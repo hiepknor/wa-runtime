@@ -138,13 +138,15 @@ export class OpenWAClient {
           signal: AbortSignal.timeout(30_000),
           headers,
         });
-        if (response.status === 429 && method === 'GET' && rateLimitRetries < maxRateLimitRetries) {
+        if (response.status === 429 && method === 'GET' && operation !== 'get_group'
+          && rateLimitRetries < maxRateLimitRetries) {
           response.body?.cancel().catch(() => undefined);
           await delay(rateLimitDelayMs(response.headers, rateLimitRetries));
           rateLimitRetries += 1;
           continue;
         }
-        if (response.status >= 500 && method === 'GET' && transientRetries < maxTransientReadRetries) {
+        if (response.status >= 500 && method === 'GET' && operation !== 'get_group'
+          && transientRetries < maxTransientReadRetries) {
           response.body?.cancel().catch(() => undefined);
           await delay(jitteredBackoffMs(transientRetries, 5_000));
           transientRetries += 1;

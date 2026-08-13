@@ -77,6 +77,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncRequestDto"
+              }
+            }
+          }
+        },
         "responses": {
           "202": {
             "description": "",
@@ -94,7 +104,7 @@
             "runtime-key": []
           }
         ],
-        "summary": "Queue a full session, group and group-member sync",
+        "summary": "Queue durable discovery and group reconciliation",
         "tags": [
           "sessions"
         ]
@@ -1307,6 +1317,20 @@
           "data"
         ]
       },
+      "SyncRequestDto": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "FULL",
+              "INCREMENTAL"
+            ],
+            "default": "FULL",
+            "description": "FULL reconciles every discovered group; INCREMENTAL reconciles only new, changed, invalidated or stale groups. Omission preserves FULL behavior."
+          }
+        }
+      },
       "SyncRunDto": {
         "type": "object",
         "properties": {
@@ -1320,7 +1344,18 @@
           },
           "syncType": {
             "type": "string",
-            "example": "FULL"
+            "enum": [
+              "FULL",
+              "INCREMENTAL"
+            ]
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "DISCOVERING",
+              "RECONCILING",
+              "COMPLETED"
+            ]
           },
           "status": {
             "type": "string",
@@ -1333,6 +1368,22 @@
           },
           "groupsSynced": {
             "type": "number"
+          },
+          "groupsDiscovered": {
+            "type": "number",
+            "description": "Total groups returned by authoritative discovery"
+          },
+          "groupsScheduled": {
+            "type": "number",
+            "description": "Groups selected for detail reconciliation in this run"
+          },
+          "groupsFailed": {
+            "type": "number",
+            "description": "Groups whose reconciliation exhausted retries"
+          },
+          "groupsSkipped": {
+            "type": "number",
+            "description": "Groups skipped because they disappeared during reconciliation"
           },
           "membersSynced": {
             "type": "number"
@@ -1360,8 +1411,13 @@
           "id",
           "sessionId",
           "syncType",
+          "phase",
           "status",
           "groupsSynced",
+          "groupsDiscovered",
+          "groupsScheduled",
+          "groupsFailed",
+          "groupsSkipped",
           "membersSynced",
           "error",
           "requestedAt",

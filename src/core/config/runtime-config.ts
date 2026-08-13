@@ -31,6 +31,9 @@ const schema = z
     RUNTIME_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(90),
     RUNTIME_RETENTION_INTERVAL_MS: z.coerce.number().int().min(60_000).default(3_600_000),
     RUNTIME_RETENTION_BATCH_SIZE: z.coerce.number().int().min(100).max(10_000).default(5000),
+    GATEWAY_SYNC_GROUPS_PER_MINUTE: z.coerce.number().int().min(1).max(120).default(40),
+    GATEWAY_SYNC_ITEM_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),
+    GATEWAY_GROUP_DETAILS_STALE_AFTER_HOURS: z.coerce.number().int().min(1).max(8760).default(24),
   })
   .superRefine((value, context) => {
     if (value.OUTBOUND_MAX_DELAY_MS < value.OUTBOUND_MIN_DELAY_MS) {

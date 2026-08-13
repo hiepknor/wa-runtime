@@ -1,9 +1,11 @@
+import { createHash } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import type { GroupDto, GroupMemberDto } from '../../contracts/groups/group.dto';
 import type { GroupQueryDto } from '../../contracts/groups/group-query.dto';
 import type { SessionDto } from '../../contracts/sessions/session.dto';
-import type { SyncRunDto, SyncRunStatus } from '../../contracts/sessions/sync-run.dto';
+import type { SyncRunDto, SyncRunPhase, SyncRunStatus } from '../../contracts/sessions/sync-run.dto';
+import { GatewaySyncMode } from '../../contracts/sessions/sync-request.dto';
 import { DatabaseService } from '../../core/database/database.service';
 import {
   pendingGroupName,
@@ -12,6 +14,7 @@ import {
   type OpenWASession,
 } from '../../integrations/openwa/openwa.client';
 import { evaluateGroupCapability, type GroupSendCapabilityReason, type GroupSendCapabilityStatus } from './group-capability';
+import type { SyncItemWriteFence } from './gateway-sync-item.types';
 
 interface SessionRow {
   id: string;
@@ -53,6 +56,8 @@ interface GroupRow {
   capability_refresh_lease_token: string | null;
   capability_refresh_lease_expires_at: Date | null;
   capability_refresh_lease_valid?: boolean;
+  details_fingerprint: string | null;
+  members_fingerprint: string | null;
 }
 
 interface MemberRow {
@@ -66,9 +71,14 @@ interface MemberRow {
 interface SyncRunRow {
   id: string;
   session_id: string;
-  sync_type: string;
+  sync_type: GatewaySyncMode;
   status: SyncRunStatus;
+  phase: SyncRunPhase;
   groups_synced: number;
+  groups_discovered: number;
+  groups_scheduled: number;
+  groups_failed: number;
+  groups_skipped: number;
   members_synced: number;
   error: string | null;
   requested_at: Date;
@@ -146,12 +156,52 @@ const mapMember = (row: MemberRow): GroupMemberDto => ({
   isSuperAdmin: row.is_super_admin,
 });
 
+const detailsFingerprint = (group: OpenWAGroup): string => createHash('sha256').update(JSON.stringify({
+  id: group.id,
+  name: group.name,
+  description: group.description ?? null,
+  owner: group.owner ?? null,
+  linkedParentJID: group.linkedParentJID ?? null,
+  isAdmin: group.isAdmin ?? null,
+  isReadOnly: group.isReadOnly ?? null,
+  isAnnounce: group.announce ?? group.isAnnounce ?? null,
+  locked: group.locked ?? null,
+  ephemeralSeconds: group.ephemeralSeconds ?? null,
+  memberAddMode: group.memberAddMode ?? null,
+  participants: [...group.participants]
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map(participant => ({
+      id: participant.id,
+      number: participant.number,
+      name: participant.name ?? null,
+      isAdmin: participant.isAdmin,
+      isSuperAdmin: participant.isSuperAdmin,
+    })),
+})).digest('hex');
+
+const membersFingerprint = (group: OpenWAGroup): string => createHash('sha256').update(JSON.stringify(
+  [...group.participants]
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map(participant => ({
+      id: participant.id,
+      number: participant.number,
+      name: participant.name ?? null,
+      isAdmin: participant.isAdmin,
+      isSuperAdmin: participant.isSuperAdmin,
+    })),
+)).digest('hex');
+
 const mapSyncRun = (row: SyncRunRow): SyncRunDto => ({
   id: row.id,
   sessionId: row.session_id,
   syncType: row.sync_type,
+  phase: row.phase,
   status: row.status,
   groupsSynced: row.groups_synced,
+  groupsDiscovered: row.groups_discovered,
+  groupsScheduled: row.groups_scheduled,
+  groupsFailed: row.groups_failed,
+  groupsSkipped: row.groups_skipped,
   membersSynced: row.members_synced,
   error: row.error,
   requestedAt: row.requested_at,
@@ -218,7 +268,6 @@ export class GatewayRepository {
   ): Promise<void> {
     await this.database.transaction(async client => {
       await this.assertSyncWriteOwnership(client, sessionId, syncFence);
-      await client.query('UPDATE gateway_groups SET is_active = false, updated_at = now() WHERE session_id = $1', [sessionId]);
       if (groups.length > 0) {
         await client.query(
           `INSERT INTO gateway_groups
@@ -253,6 +302,11 @@ export class GatewayRepository {
         );
       }
       await client.query(
+        `UPDATE gateway_groups SET is_active = false, updated_at = now()
+         WHERE session_id = $1 AND NOT (id = ANY($2::text[]))`,
+        [sessionId, groups.map(group => group.id)],
+      );
+      await client.query(
         `UPDATE gateway_groups SET
            send_capability = 'DENIED', send_capability_reason = 'GROUP_INACTIVE',
            capability_checked_at = now(), capability_invalidated_at = NULL,
@@ -271,16 +325,21 @@ export class GatewayRepository {
       expectedRevision?: number;
       capabilityLeaseToken?: string;
       syncFence?: SyncWriteFence;
+      syncItemFence?: SyncItemWriteFence;
     } = {},
   ): Promise<{ members: number; applied: boolean }> {
     return this.database.transaction(async client => {
       if (options.syncFence) await this.assertSyncWriteOwnership(client, sessionId, options.syncFence);
+      if (options.syncItemFence) await this.assertSyncItemWriteOwnership(client, options.syncItemFence);
       const existingResult = await client.query<GroupRow>(
         `SELECT *, capability_refresh_lease_expires_at > now() AS capability_refresh_lease_valid
          FROM gateway_groups WHERE session_id = $1 AND id = $2 FOR UPDATE`,
         [sessionId, group.id],
       );
       const existing = existingResult.rows[0];
+      const fingerprint = detailsFingerprint(group);
+      const memberFingerprint = membersFingerprint(group);
+      const membersChanged = existing?.members_fingerprint !== memberFingerprint;
       if (options.expectedRevision !== undefined && existing?.capability_revision !== options.expectedRevision) {
         return { members: 0, applied: false };
       }
@@ -303,11 +362,12 @@ export class GatewayRepository {
         `INSERT INTO gateway_groups
            (session_id, id, name, description, owner_id, linked_parent_id, participants_count,
             is_admin, is_read_only, is_announce, settings_locked, ephemeral_seconds,
-            member_add_mode, gateway_created_at, details_synced_at, send_capability,
+            member_add_mode, gateway_created_at, details_synced_at, details_fingerprint,
+            members_fingerprint, send_capability,
             send_capability_reason, capability_checked_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
                  CASE WHEN $14::bigint IS NULL THEN NULL ELSE to_timestamp($14::bigint) END,
-                 now(),$15,$16,now())
+                 now(),$15,$16,$17,$18,now())
          ON CONFLICT (session_id, id) DO UPDATE SET
            name = EXCLUDED.name, description = EXCLUDED.description, owner_id = EXCLUDED.owner_id,
            linked_parent_id = EXCLUDED.linked_parent_id, participants_count = EXCLUDED.participants_count,
@@ -315,6 +375,8 @@ export class GatewayRepository {
            is_read_only = EXCLUDED.is_read_only, is_announce = EXCLUDED.is_announce,
            settings_locked = EXCLUDED.settings_locked, ephemeral_seconds = EXCLUDED.ephemeral_seconds,
            member_add_mode = EXCLUDED.member_add_mode, gateway_created_at = EXCLUDED.gateway_created_at,
+           details_fingerprint = EXCLUDED.details_fingerprint,
+           members_fingerprint = EXCLUDED.members_fingerprint,
            send_capability = EXCLUDED.send_capability,
            send_capability_reason = EXCLUDED.send_capability_reason,
            capability_checked_at = now(), capability_invalidated_at = NULL,
@@ -332,10 +394,12 @@ export class GatewayRepository {
           group.linkedParentJID ?? null, group.participants.length, isAdmin,
           isReadOnly, isAnnounce, group.locked ?? null,
           group.ephemeralSeconds ?? null, group.memberAddMode ?? null, group.createdAt ?? null,
-          capability.status, capability.reason],
+          fingerprint, memberFingerprint, capability.status, capability.reason],
       );
-      await client.query('DELETE FROM group_members WHERE session_id = $1 AND group_id = $2', [sessionId, group.id]);
-      if (group.participants.length > 0) {
+      if (membersChanged) {
+        await client.query('DELETE FROM group_members WHERE session_id = $1 AND group_id = $2', [sessionId, group.id]);
+      }
+      if (membersChanged && group.participants.length > 0) {
         await client.query(
           `INSERT INTO group_members
              (session_id, group_id, participant_id, phone_number, display_name, is_admin, is_super_admin)
@@ -393,7 +457,8 @@ export class GatewayRepository {
          AND NOT EXISTS (
            SELECT 1 FROM sync_runs
            WHERE sync_runs.session_id = gateway_groups.session_id
-             AND sync_runs.status IN ('PENDING', 'RUNNING')
+             AND (sync_runs.status = 'PENDING'
+               OR (sync_runs.status = 'RUNNING' AND sync_runs.phase = 'DISCOVERING'))
          )
        ORDER BY capability_refresh_next_attempt_at, capability_invalidated_at LIMIT $1`,
       [limit],
@@ -427,7 +492,8 @@ export class GatewayRepository {
          AND NOT EXISTS (
            SELECT 1 FROM sync_runs
            WHERE sync_runs.session_id = gateway_groups.session_id
-             AND sync_runs.status IN ('PENDING', 'RUNNING')
+             AND (sync_runs.status = 'PENDING'
+               OR (sync_runs.status = 'RUNNING' AND sync_runs.phase = 'DISCOVERING'))
          )
        RETURNING capability_refresh_lease_token, capability_refresh_attempt_count`,
       [sessionId, groupId, expectedRevision],
@@ -584,10 +650,19 @@ export class GatewayRepository {
     });
   }
 
-  async createSyncRun(sessionId: string): Promise<SyncRunDto> {
-    const result = await this.database.query<SyncRunRow>(
-      `INSERT INTO sync_runs (session_id, sync_type) VALUES ($1, 'FULL') RETURNING *`, [sessionId]);
-    return mapSyncRun(result.rows[0]!);
+  async createSyncRun(sessionId: string, mode: GatewaySyncMode = GatewaySyncMode.FULL): Promise<SyncRunDto> {
+    return this.database.transaction(async client => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`gateway-sync:${sessionId}`]);
+      const active = await client.query<SyncRunRow>(
+        `SELECT * FROM sync_runs WHERE session_id = $1 AND status IN ('PENDING','RUNNING')
+         ORDER BY requested_at LIMIT 1`,
+        [sessionId],
+      );
+      if (active.rows[0]) return mapSyncRun(active.rows[0]);
+      const result = await client.query<SyncRunRow>(
+        `INSERT INTO sync_runs (session_id, sync_type) VALUES ($1, $2) RETURNING *`, [sessionId, mode]);
+      return mapSyncRun(result.rows[0]!);
+    });
   }
 
   async findSyncRunProgress(id: string, sessionId: string): Promise<{
@@ -667,7 +742,9 @@ export class GatewayRepository {
         `UPDATE sync_runs target SET status = 'RUNNING', attempt_count = attempt_count + 1,
            sync_epoch = $2::bigint, lease_token = gen_random_uuid(),
            lease_expires_at = now() + interval '2 minutes',
-           groups_synced = 0, members_synced = 0, error = NULL,
+           phase = 'DISCOVERING', groups_synced = 0, groups_discovered = 0,
+           groups_scheduled = 0, groups_failed = 0, groups_skipped = 0,
+           members_synced = 0, error = NULL,
            started_at = COALESCE(started_at, now()), completed_at = NULL, updated_at = now()
          WHERE id = $1 AND status = 'PENDING' AND attempt_count < 3 AND next_attempt_at <= now()
            AND NOT EXISTS (
@@ -752,5 +829,19 @@ export class GatewayRepository {
       [fence.syncRunId, sessionId, fence.leaseToken, fence.syncEpoch],
     );
     if (run.rowCount !== 1) throw new Error('Gateway sync attempt lost write ownership');
+  }
+
+  private async assertSyncItemWriteOwnership(client: PoolClient, fence: SyncItemWriteFence): Promise<void> {
+    const ownership = await client.query(
+      `SELECT 1 FROM gateway_sync_items items
+       JOIN sync_runs runs ON runs.id = items.sync_run_id
+       JOIN gateway_sync_fences fences ON fences.session_id = items.session_id
+       WHERE items.id = $1 AND items.sync_run_id = $2 AND items.session_id = $3
+         AND items.status = 'RUNNING' AND items.lease_token = $4 AND items.lease_expires_at > now()
+         AND runs.status = 'RUNNING' AND runs.sync_epoch = $5::bigint
+         AND fences.current_epoch = $5::bigint FOR SHARE OF items, runs, fences`,
+      [fence.itemId, fence.syncRunId, fence.sessionId, fence.leaseToken, fence.syncEpoch],
+    );
+    if (ownership.rowCount !== 1) throw new Error('Gateway sync item lost write ownership');
   }
 }
