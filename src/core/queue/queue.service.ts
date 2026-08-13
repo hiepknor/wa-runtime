@@ -1,4 +1,4 @@
-import { Injectable, OnApplicationShutdown } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
 import { runtimeConfig } from '../config/runtime-config';
@@ -19,6 +19,7 @@ export interface QueueReadiness {
 
 @Injectable()
 export class QueueService implements OnApplicationShutdown {
+  private readonly logger = new Logger(QueueService.name);
   private readonly connection = new IORedis(runtimeConfig().REDIS_URL, { maxRetriesPerRequest: null });
   private readonly healthConnection = new IORedis(runtimeConfig().REDIS_URL, {
     lazyConnect: true,
@@ -30,6 +31,11 @@ export class QueueService implements OnApplicationShutdown {
   readonly webhookIngress = new Queue(WEBHOOK_QUEUE, { connection: this.connection });
   readonly gatewaySync = new Queue(GATEWAY_SYNC_QUEUE, { connection: this.connection });
   readonly campaign = new Queue(CAMPAIGN_QUEUE, { connection: this.connection });
+
+  constructor() {
+    this.connection.on('error', error => this.logConnectionError('queue', error));
+    this.healthConnection.on('error', error => this.logConnectionError('health', error));
+  }
 
   async publishHeartbeat(processName: RuntimeProcessName): Promise<void> {
     await this.ensureHealthConnection();
@@ -62,6 +68,14 @@ export class QueueService implements OnApplicationShutdown {
 
   private async ensureHealthConnection(): Promise<void> {
     if (this.healthConnection.status === 'wait') await this.healthConnection.connect();
+  }
+
+  private logConnectionError(connection: 'queue' | 'health', error: Error): void {
+    this.logger.warn({
+      event: 'redis.connection.error',
+      connection,
+      code: 'code' in error && typeof error.code === 'string' ? error.code : undefined,
+    });
   }
 
   async onApplicationShutdown(): Promise<void> {
