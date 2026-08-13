@@ -27,13 +27,13 @@ services:
     restart: unless-stopped
     logging: *default-logging
     environment:
-      POSTGRES_DB: ${WA_RUNTIME_DB_NAME:-automation_runtime}
-      POSTGRES_USER: ${WA_RUNTIME_DB_USER:-automation}
-      POSTGRES_PASSWORD: ${WA_RUNTIME_DB_PASSWORD:-automation}
+      POSTGRES_DB: ${WA_RUNTIME_DB_NAME:-wa_runtime}
+      POSTGRES_USER: ${WA_RUNTIME_DB_USER:-wa_runtime}
+      POSTGRES_PASSWORD: ${WA_RUNTIME_DB_PASSWORD:-wa_runtime}
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
-      - automation-postgres:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
@@ -52,7 +52,7 @@ services:
     ports:
       - "127.0.0.1:6380:6379"
     volumes:
-      - automation-redis:/data
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -128,8 +128,10 @@ services:
         condition: service_healthy
 
 volumes:
-  automation-postgres:
-  automation-redis:
+  postgres-data:
+    name: ${WA_RUNTIME_POSTGRES_VOLUME:-wa-runtime_postgres-data}
+  redis-data:
+    name: ${WA_RUNTIME_REDIS_VOLUME:-wa-runtime_redis-data}
 
 networks:
   runtime-internal:

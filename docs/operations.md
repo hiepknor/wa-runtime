@@ -73,7 +73,7 @@ Useful container checks:
 ```bash
 docker compose ps
 docker compose logs --since=15m api worker scheduler migrate
-docker compose exec -T postgres pg_isready -U automation -d automation_runtime
+docker compose exec -T postgres pg_isready -U wa_runtime -d wa_runtime
 docker compose exec -T redis redis-cli ping
 docker compose exec -T redis redis-cli --scan --pattern 'wa-runtime:scheduler-tick:*'
 ```
@@ -123,10 +123,15 @@ Store backup scripts and archives outside the OpenWA project. A suitable separat
 /var/backups/wa-runtime/      backup archives
 ```
 
-Existing installations may retain the legacy `automation_runtime` PostgreSQL database. Before
-changing an existing Compose project to `wa-runtime`, take a logical PostgreSQL backup, stop the old
-project, and copy or explicitly reattach its PostgreSQL and Redis volumes. Keep the source volumes
-until the new stack passes readiness and application-level smoke tests.
+New installations use the `wa_runtime` PostgreSQL database and role together with the
+`wa-runtime_postgres-data` and `wa-runtime_redis-data` volumes. Existing installations may
+temporarily reattach legacy storage by setting `WA_RUNTIME_POSTGRES_VOLUME` and
+`WA_RUNTIME_REDIS_VOLUME`; this is a maintenance bridge, not the target state. Before changing an
+existing installation, take a logical PostgreSQL backup, record row-count baselines, stop the old
+project, and follow the reviewed
+[storage namespace migration runbook](runbooks/storage-namespace-migration.md). Keep the source
+volumes until the target stack passes readiness, data reconciliation, application smoke tests and
+restore verification.
 
 Use `wa-runtime-postgres` and `wa-runtime-redis` in container connection URLs. Runtime processes also
 join the OpenWA gateway network, where generic `postgres` and `redis` DNS names may resolve to the
@@ -140,9 +145,14 @@ Example logical backup:
 ```bash
 umask 077
 docker compose exec -T postgres \
-  pg_dump -U automation -d automation_runtime -Fc \
+  pg_dump -U wa_runtime -d wa_runtime -Fc \
   > /var/backups/wa-runtime/runtime-$(date -u +%Y%m%dT%H%M%SZ).dump
 ```
+
+For an installation still on legacy database identifiers, substitute its current database and role
+in the backup command. Never change only `WA_RUNTIME_DB_NAME`, `WA_RUNTIME_DB_USER` or the volume
+variables: PostgreSQL database/role creation runs only when the data directory is empty, so existing
+storage requires the explicit migration procedure.
 
 Test restoration periodically into an isolated database. A restore replaces or merges durable
 business data and must be performed during a declared maintenance window with API, scheduler and

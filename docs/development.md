@@ -72,8 +72,10 @@ Required choices:
 The current reviewed Gateway release is OpenWA `0.16.0`; its upstream contract snapshot is stored
 under `contracts/openwa/0.16.0`.
 
-The checked-in Compose file consumes `.env` inside containers, so its service hostnames are
-`postgres`, `redis` and `openwa-dev-api`.
+The checked-in Compose file consumes `.env` inside containers. Runtime storage resolves through the
+private aliases `wa-runtime-postgres` and `wa-runtime-redis`; OpenWA resolves as `openwa-dev-api` on
+the shared development network. New installations create the `wa_runtime` database and the
+`wa-runtime_postgres-data` and `wa-runtime_redis-data` volumes.
 
 ```bash
 docker compose up --build -d
@@ -93,7 +95,7 @@ set -a
 source .env
 set +a
 
-export DATABASE_URL=postgresql://automation:automation@localhost:5433/automation_runtime
+export DATABASE_URL=postgresql://wa_runtime:wa_runtime@localhost:5433/wa_runtime
 export REDIS_URL=redis://localhost:6380
 export OPENWA_BASE_URL=http://localhost:2785
 ```

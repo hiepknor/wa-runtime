@@ -75,7 +75,7 @@ export default async function setup(): Promise<() => Promise<void>> {
 
   try {
     docker(['run', '--rm', '-d', '--name', postgres,
-      '-e', 'POSTGRES_PASSWORD=test', '-e', 'POSTGRES_DB=automation_runtime',
+      '-e', 'POSTGRES_PASSWORD=test', '-e', 'POSTGRES_DB=wa_runtime',
       '-p', '127.0.0.1::5432', 'postgres:17-alpine']);
     containers.push(postgres);
     docker(['run', '--rm', '-d', '--name', redis, '-p', '127.0.0.1::6379', 'redis:8-alpine']);
@@ -83,7 +83,7 @@ export default async function setup(): Promise<() => Promise<void>> {
 
     await Promise.all([
       waitFor(() => {
-        try { docker(['exec', postgres, 'pg_isready', '-U', 'postgres', '-d', 'automation_runtime']); return true; }
+        try { docker(['exec', postgres, 'pg_isready', '-U', 'postgres', '-d', 'wa_runtime']); return true; }
         catch { return false; }
       }),
       waitFor(() => {
@@ -96,7 +96,7 @@ export default async function setup(): Promise<() => Promise<void>> {
 
     const postgresPort = mappedPort(postgres, '5432/tcp');
     const redisPort = mappedPort(redis, '6379/tcp');
-    const databaseUrl = `postgresql://postgres:test@127.0.0.1:${postgresPort}/automation_runtime`;
+    const databaseUrl = `postgresql://postgres:test@127.0.0.1:${postgresPort}/wa_runtime`;
     await waitForDatabase(databaseUrl);
     await migrate(databaseUrl);
 
