@@ -10,6 +10,7 @@ import { DatabaseService } from '../../src/core/database/database.service';
 import { messageRequestHash } from '../../src/modules/messages/message-idempotency';
 import { MessageJobRepository } from '../../src/modules/messages/message-job.repository';
 import { DISALLOWED_SESSION_ID, INTEGRATION_GROUP_ID, integrationPool, resetIntegrationDatabase, seedSendableGroup } from '../support/integration-database';
+import { INTEGRATION_SESSION_ID } from '../support/integration-database';
 
 describe('HTTP session authorization', () => {
   let pool: Pool;
@@ -80,5 +81,29 @@ describe('HTTP session authorization', () => {
     const response = await fetch(`${baseUrl}/message-jobs/${created.job.id}`, { headers: runtimeHeaders });
     expect(response.status).toBe(404);
     await database.onApplicationShutdown();
+  });
+
+  it('validates additive sync modes and preserves the no-body FULL default', async () => {
+    const noBody = await fetch(`${baseUrl}/sessions/${INTEGRATION_SESSION_ID}/sync`, {
+      method: 'POST', headers: runtimeHeaders,
+    });
+    expect(noBody.status).toBe(202);
+    expect(await noBody.json()).toMatchObject({ syncType: 'FULL', phase: 'DISCOVERING' });
+
+    await pool.query(`UPDATE sync_runs SET status = 'COMPLETED', completed_at = now()`);
+    const incremental = await fetch(`${baseUrl}/sessions/${INTEGRATION_SESSION_ID}/sync`, {
+      method: 'POST',
+      headers: { ...runtimeHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'INCREMENTAL' }),
+    });
+    expect(incremental.status).toBe(202);
+    expect(await incremental.json()).toMatchObject({ syncType: 'INCREMENTAL' });
+
+    const invalid = await fetch(`${baseUrl}/sessions/${INTEGRATION_SESSION_ID}/sync`, {
+      method: 'POST',
+      headers: { ...runtimeHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'FAST' }),
+    });
+    expect(invalid.status).toBe(400);
   });
 });

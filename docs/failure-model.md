@@ -39,9 +39,11 @@ and the current token. A zero-row update means lost ownership, not successful co
 exhaustion.
 
 Gateway synchronization also uses a monotonically increasing epoch per session. At most one run per
-session may be `RUNNING`, and every full-sync write verifies its epoch. Group data is incrementally
-published; a failed run can leave records with different synchronization timestamps, but an older
-attempt cannot write after a newer epoch begins.
+session may be active. Discovery publishes the authoritative summary snapshot, then PostgreSQL-owned
+per-group reconciliation items carry independent retry schedules and token-owned leases. Every
+detail write verifies both the session epoch and item lease. Group data and parent progress are
+incrementally published; a failed item does not replay completed siblings, and an older attempt
+cannot write after a newer epoch begins.
 
 Malformed successful OpenWA responses fail before durable domain writes. Group pagination is
 bounded and treats duplicate IDs, oversized pages or a full page at the configured page limit as a
@@ -56,6 +58,7 @@ The scheduler rediscovers work from these PostgreSQL rows:
 | Webhook | `PENDING`, `RETRY` | Return to `RETRY`; eventually `DEAD` after bounded attempts. |
 | Message job | Due `SCHEDULED` | `QUEUED` returns to `SCHEDULED`; `PROCESSING` becomes `UNKNOWN`. |
 | Gateway sync | Due `PENDING` | Owning attempt returns to delayed `PENDING`; exhaustion becomes `FAILED`. |
+| Group reconciliation | Due `PENDING` or `RETRY` | Owning item returns to `RETRY`; exhaustion becomes `FAILED` and finalizes parent progress. |
 | Campaign preparation | Due `PREPARING` | Owning attempt backs off durably; exhaustion becomes `FAILED`. |
 | Campaign delivery | `PENDING` in a running run | Materialized from the durable delivery row. |
 

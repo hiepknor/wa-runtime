@@ -30,7 +30,7 @@ describe('GatewayRepository bulk member replacement', () => {
 
   it('replaces a large member collection with one database insert', async () => {
     const query = vi.fn()
-      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ details_fingerprint: null }] })
       .mockResolvedValueOnce({ rows: [], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [], rowCount: 0 })
       .mockResolvedValueOnce({ rows: [], rowCount: 1000 });

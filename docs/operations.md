@@ -230,6 +230,43 @@ For an upgrade:
 If the live Gateway reports another version, full sync fails closed. Do not bypass the check during
 an upgrade.
 
+## Group reconciliation
+
+`POST /api/v1/sessions/{id}/sync` accepts an optional mode. Omission remains `FULL` for API v1
+compatibility; operator clients should send `INCREMENTAL` for routine synchronization and reserve
+`FULL` for bootstrap or deliberate reconciliation of every active group.
+
+Discovery publishes group summaries first. The run then remains `RUNNING` in phase `RECONCILING`
+while PostgreSQL-owned `gateway_sync_items` update `groupsSynced`, `groupsFailed`, `groupsSkipped`
+and `membersSynced`. Do not submit another run when one is active: the endpoint returns the existing
+run rather than creating duplicate work.
+
+Group-detail calls share a session-scoped pacing lease with targeted capability refreshes. Initial
+defaults are 40 calls per minute, five durable attempts and a 24-hour incremental freshness window.
+Tune `GATEWAY_SYNC_GROUPS_PER_MINUTE` only from staging evidence. A sustained OpenWA 5xx sequence can
+represent an underlying WhatsApp `rate-overlimit`; increasing worker concurrency or adapter retries
+amplifies it.
+
+Useful database inspection queries:
+
+```sql
+SELECT id, sync_type, status, phase, groups_discovered, groups_scheduled,
+       groups_synced, groups_failed, groups_skipped, members_synced, error
+FROM sync_runs ORDER BY requested_at DESC LIMIT 10;
+
+SELECT status, count(*) FROM gateway_sync_items
+WHERE sync_run_id = '<run-id>' GROUP BY status ORDER BY status;
+
+SELECT session_id, next_request_at, consecutive_failures, cooldown_until,
+       active_lease_expires_at
+FROM gateway_sync_rate_limits;
+```
+
+After a worker crash, the scheduler returns expired items to `RETRY` and clears expired pacing
+leases. Do not manually change item status while a valid item or pacing lease exists. A terminal
+failed item makes the parent run `FAILED` without discarding successful sibling results; a group
+that disappears during reconciliation is `SKIPPED` and does not fail the parent.
+
 ## Rollback
 
 Application rollback means returning to a previous immutable Runtime tag. Database rollback is not
@@ -237,9 +274,11 @@ automatically safe: migrations are forward-only and an older binary may not unde
 or enum values. Before every release, classify migrations as backward-compatible or require a
 restore/forward-fix plan.
 
-Migrations implementing ADR 001 are additive but change execution semantics. Deploy them with live
-sends disabled, verify stale-attempt fencing and retry exhaustion in staging, then load test the
-PostgreSQL outbound-session lease before enabling multiple workers or live sends.
+Migrations implementing ADR 001 and ADR 003 are additive but change execution semantics. ADR 003's
+one-active-sync index can reject duplicate sync inserts from an older binary, so quiesce sync
+requests during rollback and prefer a forward fix. Deploy with live sends disabled, verify
+stale-attempt fencing and retry exhaustion in staging, then load test the PostgreSQL leases before
+enabling multiple workers or live sends.
 
 Prefer a forward corrective release for additive migrations. Restore a database backup only after
 explicitly accepting that post-backup campaign and delivery state will be lost.

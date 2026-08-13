@@ -117,9 +117,7 @@ describe('OpenWAClient response validation', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it('retries transient server failures for idempotent reads', async () => {
-    vi.useFakeTimers();
-    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  it('leaves group-detail server failures to the durable reconciliation retry owner', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ message: 'temporary engine failure' }, 500))
       .mockResolvedValueOnce(jsonResponse({
@@ -127,10 +125,17 @@ describe('OpenWAClient response validation', () => {
       }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const request = new OpenWAClient().getGroup('session-1', 'group-1');
-    await vi.advanceTimersByTimeAsync(250);
+    await expect(new OpenWAClient().getGroup('session-1', 'group-1'))
+      .rejects.toMatchObject({ status: 500 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 
-    await expect(request).resolves.toMatchObject({ id: 'group-1', participants: [] });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+  it('leaves group-detail rate limits to the durable reconciliation retry owner', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ message: 'rate-overlimit' }, 429));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(new OpenWAClient().getGroup('session-1', 'group-1'))
+      .rejects.toMatchObject({ status: 429 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
