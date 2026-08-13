@@ -1,13 +1,18 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../../core/database/database.service';
 import { SessionStateCacheService } from '../gateway/session-state-cache.service';
+import { GatewayGroupIntentRepository } from '../gateway/gateway-group-intent.repository';
 import type { RuntimeEvent } from './webhook-normalizer';
+import { runtimeConfig } from '../../core/config/runtime-config';
 
 @Injectable()
 export class RuntimeEventRepository {
+  private readonly logger = new Logger(RuntimeEventRepository.name);
+  private readonly config = runtimeConfig();
   constructor(
     private readonly database: DatabaseService,
     private readonly sessionStates: SessionStateCacheService,
+    private readonly groupIntents: GatewayGroupIntentRepository,
   ) {}
 
   async store(event: RuntimeEvent): Promise<void> {
@@ -62,14 +67,33 @@ export class RuntimeEventRepository {
       }
 
 
-      if (['group.join', 'group.leave', 'group.update'].includes(event.eventType) && event.payload.groupId) {
+      if (['group.join', 'group.leave', 'group.update'].includes(event.eventType) && event.payload.groupId
+        && this.config.OPENWA_ALLOWED_SESSION_IDS.includes(event.sessionId)) {
+        const groupId = String(event.payload.groupId);
+        const sessionExists = await client.query(
+          `SELECT 1 FROM gateway_sessions WHERE id = $1`,
+          [event.sessionId],
+        );
+        if (sessionExists.rowCount !== 1) return;
+        const scheduled = await this.groupIntents.scheduleInTransaction(
+          client,
+          event.sessionId,
+          groupId,
+          event.eventType,
+        );
         await client.query(
           `UPDATE gateway_groups SET send_capability = 'UNKNOWN',
              send_capability_reason = 'GROUP_CHANGED', capability_invalidated_at = now(),
              capability_revision = capability_revision + 1, updated_at = now()
            WHERE session_id = $1 AND id = $2 AND is_active = true`,
-          [event.sessionId, event.payload.groupId],
+          [event.sessionId, groupId],
         );
+        if (scheduled.created) {
+          this.logger.log({
+            event: 'gateway.group_reconciliation.intent_created',
+            sessionId: event.sessionId, source: 'WEBHOOK',
+          });
+        }
       }
     });
     if (invalidateSessionCache) await this.sessionStates.invalidate(event.sessionId);

@@ -6,6 +6,7 @@ import { OpenWAClient, OpenWAHttpError, OpenWAResponseValidationError } from '..
 import { GatewayRepository, type SyncWriteFence } from './gateway.repository';
 import { GatewaySyncItemRepository } from './gateway-sync-item.repository';
 import { GatewaySyncModeConflictError } from './gateway-sync.types';
+import { GatewayGroupIntentRepository } from './gateway-group-intent.repository';
 
 @Injectable()
 export class GatewaySyncService {
@@ -16,6 +17,7 @@ export class GatewaySyncService {
     private readonly repository: GatewayRepository,
     private readonly items: GatewaySyncItemRepository,
     private readonly openwa: OpenWAClient,
+    private readonly groupIntents: GatewayGroupIntentRepository,
   ) {}
 
   async request(sessionId: string, mode: GatewaySyncMode = GatewaySyncMode.FULL): Promise<SyncRunDto> {
@@ -165,12 +167,86 @@ export class GatewaySyncService {
     }
   }
 
+  async reconcileTargetedGroup(
+    sessionId: string,
+    groupId: string,
+  ): Promise<{ members?: number; skipped?: boolean; pending?: boolean }> {
+    if (!this.config.OPENWA_ALLOWED_SESSION_IDS.includes(sessionId)) {
+      throw new ForbiddenException('Session is not in OPENWA_ALLOWED_SESSION_IDS');
+    }
+    const claim = await this.groupIntents.claim(sessionId, groupId);
+    if (!claim) return { skipped: true };
+    const startedAt = Date.now();
+    let ownershipLost = false;
+    let renewalInFlight = false;
+    const heartbeat = setInterval(() => {
+      if (renewalInFlight || ownershipLost) return;
+      renewalInFlight = true;
+      void this.groupIntents.renewLease(sessionId, groupId, claim.leaseToken)
+        .then(renewed => { if (!renewed) ownershipLost = true; })
+        .catch(() => { ownershipLost = true; })
+        .finally(() => { renewalInFlight = false; });
+    }, 30_000);
+    heartbeat.unref();
+    let stage: 'UPSTREAM' | 'PERSISTENCE' = 'UPSTREAM';
+    try {
+      const group = await this.openwa.getGroup(sessionId, groupId);
+      stage = 'PERSISTENCE';
+      if (ownershipLost || !await this.groupIntents.renewLease(sessionId, groupId, claim.leaseToken)) {
+        return { skipped: true };
+      }
+      const result = await this.repository.upsertGroupDetails(sessionId, group, {
+        groupIntentFence: {
+          sessionId, groupId, leaseToken: claim.leaseToken,
+          claimedRevision: claim.requestedRevision,
+        },
+      });
+      const outcome = await this.groupIntents.complete(
+        sessionId, groupId, claim.leaseToken, claim.requestedRevision,
+      );
+      if (outcome === 'LOST_OWNERSHIP') return { skipped: true };
+      this.logger.log({
+        event: 'gateway.group_reconciliation.completed', source: 'WEBHOOK',
+        sessionId, durationMs: Date.now() - startedAt,
+        coalescedEvents: claim.coalescedCount, outcome,
+      });
+      return { members: result.members, pending: outcome === 'PENDING' };
+    } catch (error) {
+      if (stage === 'UPSTREAM' && error instanceof OpenWAHttpError && error.status === 404) {
+        await this.groupIntents.skipMissing(sessionId, groupId, claim.leaseToken, claim.requestedRevision);
+        this.logger.warn({
+          event: 'gateway.group_reconciliation.skipped', source: 'WEBHOOK', sessionId,
+          reason: 'GROUP_NOT_FOUND', durationMs: Date.now() - startedAt,
+        });
+        return { skipped: true };
+      }
+      const policy = stage === 'UPSTREAM'
+        ? this.classifyGroupReadFailure(error)
+        : { retryable: true, ratePressure: false, code: 'PERSISTENCE_ERROR' };
+      const outcome = await this.groupIntents.fail(
+        sessionId, groupId, claim.leaseToken, claim.requestedRevision, policy,
+      );
+      this.logger.warn({
+        event: 'gateway.group_reconciliation.failed', source: 'WEBHOOK', sessionId,
+        outcome, code: policy.code, durationMs: Date.now() - startedAt,
+      });
+      throw error;
+    } finally {
+      clearInterval(heartbeat);
+    }
+  }
+
   private classifyGroupReadFailure(error: unknown) {
     if (error instanceof OpenWAResponseValidationError) {
       return { retryable: false, ratePressure: false, code: 'INVALID_RESPONSE' };
     }
     if (error instanceof OpenWAHttpError) {
-      if (error.status === 429) return { retryable: true, ratePressure: true, code: 'RATE_LIMITED' };
+      if (error.status === 429) {
+        return {
+          retryable: true, ratePressure: true, reduceRate: true,
+          retryAfterMs: error.retryAfterMs, code: 'RATE_LIMITED',
+        };
+      }
       if (error.status >= 500) return { retryable: true, ratePressure: true, code: 'UPSTREAM_SERVER_ERROR' };
       if (error.status === 409) return { retryable: true, ratePressure: false, code: 'UPSTREAM_CONFLICT' };
       return { retryable: false, ratePressure: false, code: `UPSTREAM_HTTP_${error.status}` };
@@ -200,7 +276,7 @@ export class GatewaySyncService {
     if (!pacingLease) return { applied: false };
     const claim = await this.repository.claimCapabilityRefresh(sessionId, groupId, expectedRevision);
     if (!claim) {
-      await this.items.recordSessionRequestOutcome(sessionId, pacingLease, true);
+      await this.items.releaseSessionRequest(sessionId, pacingLease);
       return { applied: false };
     }
     let stage: 'UPSTREAM' | 'PERSISTENCE' = 'UPSTREAM';
@@ -218,7 +294,9 @@ export class GatewaySyncService {
       const policy = stage === 'UPSTREAM'
         ? this.classifyGroupReadFailure(error)
         : { retryable: true, ratePressure: false, code: 'PERSISTENCE_ERROR' };
-      await this.items.recordSessionRequestOutcome(sessionId, pacingLease, false, policy.ratePressure);
+      await this.items.recordSessionRequestOutcome(
+        sessionId, pacingLease, false, policy.ratePressure, policy.reduceRate === true,
+      );
       await this.repository.failCapabilityRefreshAttempt(
         sessionId,
         groupId,

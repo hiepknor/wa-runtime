@@ -22,8 +22,17 @@ export interface SyncItemWriteFence {
   syncEpoch: string;
 }
 
+export interface GroupIntentWriteFence {
+  sessionId: string;
+  groupId: string;
+  leaseToken: string;
+  claimedRevision: number;
+}
+
 export interface GatewaySyncFailurePolicy {
   retryable: boolean;
   ratePressure: boolean;
+  reduceRate?: boolean;
+  retryAfterMs?: number;
   code: string;
 }

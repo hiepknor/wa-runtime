@@ -11,6 +11,7 @@ import type {
   GatewaySyncFailurePolicy,
   GatewaySyncItemDispatch,
 } from './gateway-sync-item.types';
+import { GatewaySyncRateLimitRepository } from './gateway-sync-rate-limit.repository';
 
 const summaryFingerprint = (group: OpenWAGroupSummary): string => createHash('sha256').update(JSON.stringify({
   id: group.id,
@@ -28,7 +29,10 @@ const snapshotFingerprint = (groups: OpenWAGroupSummary[]): string => createHash
 export class GatewaySyncItemRepository {
   private readonly config = runtimeConfig();
 
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly rateLimits: GatewaySyncRateLimitRepository = new GatewaySyncRateLimitRepository(database),
+  ) {}
 
   async publishDiscovery(
     fence: SyncWriteFence,
@@ -177,25 +181,7 @@ export class GatewaySyncItemRepository {
   }
 
   async reserveSessionRequest(sessionId: string): Promise<string | null> {
-    return this.database.transaction(async client => {
-      await client.query(
-        `INSERT INTO gateway_sync_rate_limits (session_id) VALUES ($1)
-         ON CONFLICT (session_id) DO NOTHING`,
-        [sessionId],
-      );
-      const result = await client.query<{ active_lease_token: string }>(
-        `UPDATE gateway_sync_rate_limits SET
-           next_request_at = now() + ($2::double precision * interval '1 millisecond'),
-           active_lease_token = gen_random_uuid(), active_lease_expires_at = now() + interval '2 minutes',
-           updated_at = now()
-         WHERE session_id = $1
-           AND GREATEST(next_request_at, COALESCE(cooldown_until, '-infinity'::timestamptz)) <= now()
-           AND (active_lease_token IS NULL OR active_lease_expires_at < now())
-         RETURNING active_lease_token`,
-        [sessionId, 60_000 / this.config.GATEWAY_SYNC_GROUPS_PER_MINUTE],
-      );
-      return result.rows[0]?.active_lease_token ?? null;
-    });
+    return this.rateLimits.reserve(sessionId);
   }
 
   async recordSessionRequestOutcome(
@@ -203,26 +189,15 @@ export class GatewaySyncItemRepository {
     leaseToken: string,
     success: boolean,
     ratePressure = false,
+    reduceRate = false,
   ): Promise<void> {
-    if (success) {
-      await this.database.query(
-        `UPDATE gateway_sync_rate_limits SET consecutive_failures = 0, cooldown_until = NULL,
-           active_lease_token = NULL, active_lease_expires_at = NULL, updated_at = now()
-         WHERE session_id = $1 AND active_lease_token = $2`,
-        [sessionId, leaseToken],
-      );
-      return;
-    }
-    await this.database.query(
-      `UPDATE gateway_sync_rate_limits SET
-         consecutive_failures = CASE WHEN $3 THEN consecutive_failures + 1 ELSE consecutive_failures END,
-         cooldown_until = CASE WHEN $3 THEN now() + (CASE LEAST(consecutive_failures + 1, 4)
-           WHEN 1 THEN 5 WHEN 2 THEN 15 WHEN 3 THEN 30 ELSE 60 END * interval '1 second')
-           ELSE cooldown_until END,
-         active_lease_token = NULL, active_lease_expires_at = NULL, updated_at = now()
-       WHERE session_id = $1 AND active_lease_token = $2`,
-      [sessionId, leaseToken, ratePressure],
-    );
+    await this.rateLimits.record(sessionId, leaseToken, success ? undefined : {
+      retryable: true, ratePressure, reduceRate, code: 'REQUEST_FAILED',
+    });
+  }
+
+  async releaseSessionRequest(sessionId: string, leaseToken: string): Promise<void> {
+    await this.rateLimits.releaseLease(sessionId, leaseToken);
   }
 
   async claim(id: string): Promise<ClaimedGatewaySyncItem | null> {
@@ -239,18 +214,9 @@ export class GatewaySyncItemRepository {
       );
       const row = candidate.rows[0];
       if (!row) return null;
-      await client.query(
-        `INSERT INTO gateway_sync_rate_limits (session_id) VALUES ($1)
-         ON CONFLICT (session_id) DO NOTHING`,
-        [row.session_id],
-      );
-      const limiter = await client.query<{ ready: boolean }>(
-        `SELECT GREATEST(next_request_at, COALESCE(cooldown_until, '-infinity'::timestamptz)) <= now()
-           AND (active_lease_token IS NULL OR active_lease_expires_at < now()) AS ready
-         FROM gateway_sync_rate_limits WHERE session_id = $1 FOR UPDATE`,
-        [row.session_id],
-      );
-      if (limiter.rows[0]?.ready !== true) return null;
+      await this.rateLimits.ensure(client, row.session_id);
+      const effectiveRate = await this.rateLimits.readyAndRate(client, row.session_id);
+      if (effectiveRate === null) return null;
       const claimed = await client.query<{ lease_token: string; attempt_count: number }>(
         `UPDATE gateway_sync_items SET status = 'RUNNING', attempt_count = attempt_count + 1,
            lease_token = gen_random_uuid(), lease_expires_at = now() + interval '2 minutes',
@@ -262,13 +228,7 @@ export class GatewaySyncItemRepository {
       );
       const claim = claimed.rows[0];
       if (!claim) return null;
-      await client.query(
-        `UPDATE gateway_sync_rate_limits SET
-           next_request_at = now() + ($2::double precision * interval '1 millisecond'),
-           active_lease_token = $3, active_lease_expires_at = now() + interval '2 minutes', updated_at = now()
-         WHERE session_id = $1`,
-        [row.session_id, 60_000 / this.config.GATEWAY_SYNC_GROUPS_PER_MINUTE, claim.lease_token],
-      );
+      await this.rateLimits.acquire(client, row.session_id, claim.lease_token, effectiveRate);
       return {
         id, syncRunId: row.sync_run_id, sessionId: row.session_id, groupId: row.group_id,
         syncEpoch: row.sync_epoch, leaseToken: claim.lease_token, attemptNumber: claim.attempt_count,
@@ -278,12 +238,22 @@ export class GatewaySyncItemRepository {
   }
 
   async renewLease(id: string, leaseToken: string): Promise<boolean> {
-    const result = await this.database.query(
-      `UPDATE gateway_sync_items SET lease_expires_at = now() + interval '2 minutes', updated_at = now()
-       WHERE id = $1 AND status = 'RUNNING' AND lease_token = $2 AND lease_expires_at > now()`,
-      [id, leaseToken],
-    );
-    return result.rowCount === 1;
+    return this.database.transaction(async client => {
+      const result = await client.query<{ session_id: string }>(
+        `UPDATE gateway_sync_items SET lease_expires_at = now() + interval '2 minutes', updated_at = now()
+         WHERE id = $1 AND status = 'RUNNING' AND lease_token = $2 AND lease_expires_at > now()
+         RETURNING session_id`,
+        [id, leaseToken],
+      );
+      const row = result.rows[0];
+      if (!row || !await this.rateLimits.renew(client, row.session_id, leaseToken)) {
+        throw new LostGatewaySyncLeaseError();
+      }
+      return true;
+    }).catch(error => {
+      if (error instanceof LostGatewaySyncLeaseError) return false;
+      throw error;
+    });
   }
 
   async complete(id: string, leaseToken: string, members: number): Promise<boolean> {
@@ -305,12 +275,7 @@ export class GatewaySyncItemRepository {
          WHERE items.id = $1 AND groups.session_id = items.session_id AND groups.id = items.group_id`,
         [id],
       );
-      await client.query(
-        `UPDATE gateway_sync_rate_limits SET consecutive_failures = 0, cooldown_until = NULL,
-           active_lease_token = NULL, active_lease_expires_at = NULL, updated_at = now()
-         WHERE session_id = $1 AND active_lease_token = $2`,
-        [row.session_id, leaseToken],
-      );
+      await this.rateLimits.success(client, row.session_id, leaseToken);
       await this.refreshParent(client, row.sync_run_id);
       return true;
     });
@@ -327,12 +292,7 @@ export class GatewaySyncItemRepository {
       );
       const row = result.rows[0];
       if (!row) return false;
-      await client.query(
-        `UPDATE gateway_sync_rate_limits SET consecutive_failures = 0, cooldown_until = NULL,
-           active_lease_token = NULL, active_lease_expires_at = NULL, updated_at = now()
-         WHERE session_id = $1 AND active_lease_token = $2`,
-        [row.session_id, leaseToken],
-      );
+      await this.rateLimits.release(client, row.session_id, leaseToken);
       await this.refreshParent(client, row.sync_run_id);
       return true;
     });
@@ -366,16 +326,7 @@ export class GatewaySyncItemRepository {
          WHERE id = $1 AND lease_token = $2`,
         [id, leaseToken, willRetry ? 'RETRY' : 'FAILED', error, delaySeconds],
       );
-      await client.query(
-        `UPDATE gateway_sync_rate_limits SET
-           consecutive_failures = CASE WHEN $3 THEN consecutive_failures + 1 ELSE consecutive_failures END,
-           cooldown_until = CASE WHEN $3 THEN now() + (CASE LEAST(consecutive_failures + 1, 4)
-             WHEN 1 THEN 5 WHEN 2 THEN 15 WHEN 3 THEN 30 ELSE 60 END
-             * (0.8 + random() * 0.4) * interval '1 second') ELSE cooldown_until END,
-           active_lease_token = NULL, active_lease_expires_at = NULL, updated_at = now()
-         WHERE session_id = $1 AND active_lease_token = $2`,
-        [row.session_id, leaseToken, policy.ratePressure],
-      );
+      await this.rateLimits.failure(client, row.session_id, leaseToken, policy);
       await this.refreshParent(client, row.sync_run_id);
       return willRetry ? 'RETRY' : 'FAILED';
     });
@@ -478,3 +429,5 @@ export class GatewaySyncItemRepository {
     );
   }
 }
+
+class LostGatewaySyncLeaseError extends Error {}

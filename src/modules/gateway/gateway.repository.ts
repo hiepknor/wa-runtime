@@ -14,7 +14,7 @@ import {
   type OpenWASession,
 } from '../../integrations/openwa/openwa.client';
 import { evaluateGroupCapability, type GroupSendCapabilityReason, type GroupSendCapabilityStatus } from './group-capability';
-import type { SyncItemWriteFence } from './gateway-sync-item.types';
+import type { GroupIntentWriteFence, SyncItemWriteFence } from './gateway-sync-item.types';
 import { GatewaySyncModeConflictError } from './gateway-sync.types';
 
 interface SessionRow {
@@ -338,11 +338,13 @@ export class GatewayRepository {
       capabilityLeaseToken?: string;
       syncFence?: SyncWriteFence;
       syncItemFence?: SyncItemWriteFence;
+      groupIntentFence?: GroupIntentWriteFence;
     } = {},
   ): Promise<{ members: number; applied: boolean }> {
     return this.database.transaction(async client => {
       if (options.syncFence) await this.assertSyncWriteOwnership(client, sessionId, options.syncFence);
       if (options.syncItemFence) await this.assertSyncItemWriteOwnership(client, options.syncItemFence);
+      if (options.groupIntentFence) await this.assertGroupIntentWriteOwnership(client, options.groupIntentFence);
       const existingResult = await client.query<GroupRow>(
         `SELECT *, capability_refresh_lease_expires_at > now() AS capability_refresh_lease_valid
          FROM gateway_groups WHERE session_id = $1 AND id = $2 FOR UPDATE`,
@@ -437,6 +439,27 @@ export class GatewayRepository {
           [options.syncItemFence.itemId, options.syncItemFence.leaseToken],
         );
         if (renewed.rowCount !== 1) throw new Error('Gateway sync item lost write ownership');
+        await this.renewGroupReadPacingLease(
+          client,
+          sessionId,
+          options.syncItemFence.leaseToken,
+        );
+      }
+      if (options.groupIntentFence) {
+        const renewed = await client.query(
+          `UPDATE gateway_group_reconciliation_intents
+           SET lease_expires_at = clock_timestamp() + interval '2 minutes', updated_at = clock_timestamp()
+           WHERE session_id = $1 AND group_id = $2 AND status = 'RUNNING'
+             AND lease_token = $3 AND claimed_revision = $4`,
+          [options.groupIntentFence.sessionId, options.groupIntentFence.groupId,
+            options.groupIntentFence.leaseToken, options.groupIntentFence.claimedRevision],
+        );
+        if (renewed.rowCount !== 1) throw new Error('Gateway group intent lost write ownership');
+        await this.renewGroupReadPacingLease(
+          client,
+          sessionId,
+          options.groupIntentFence.leaseToken,
+        );
       }
       return { members: group.participants.length, applied: true };
     });
@@ -480,6 +503,11 @@ export class GatewayRepository {
            WHERE sync_runs.session_id = gateway_groups.session_id
              AND (sync_runs.status = 'PENDING'
                OR (sync_runs.status = 'RUNNING' AND sync_runs.phase = 'DISCOVERING'))
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM gateway_group_reconciliation_intents intents
+           WHERE intents.session_id = gateway_groups.session_id AND intents.group_id = gateway_groups.id
+             AND intents.status IN ('PENDING', 'RUNNING', 'RETRY')
          )
        ORDER BY capability_refresh_next_attempt_at, capability_invalidated_at LIMIT $1`,
       [limit],
@@ -887,5 +915,30 @@ export class GatewayRepository {
       [fence.itemId, fence.syncRunId, fence.sessionId, fence.leaseToken, fence.syncEpoch],
     );
     if (ownership.rowCount !== 1) throw new Error('Gateway sync item lost write ownership');
+  }
+
+  private async assertGroupIntentWriteOwnership(client: PoolClient, fence: GroupIntentWriteFence): Promise<void> {
+    const ownership = await client.query(
+      `SELECT 1 FROM gateway_group_reconciliation_intents
+       WHERE session_id = $1 AND group_id = $2 AND status = 'RUNNING'
+         AND lease_token = $3 AND lease_expires_at > now() AND claimed_revision = $4 FOR UPDATE`,
+      [fence.sessionId, fence.groupId, fence.leaseToken, fence.claimedRevision],
+    );
+    if (ownership.rowCount !== 1) throw new Error('Gateway group intent lost write ownership');
+  }
+
+  private async renewGroupReadPacingLease(
+    client: PoolClient,
+    sessionId: string,
+    leaseToken: string,
+  ): Promise<void> {
+    const renewed = await client.query(
+      `UPDATE gateway_sync_rate_limits
+       SET active_lease_expires_at = clock_timestamp() + interval '2 minutes',
+         updated_at = clock_timestamp()
+       WHERE session_id = $1 AND active_lease_token = $2`,
+      [sessionId, leaseToken],
+    );
+    if (renewed.rowCount !== 1) throw new Error('Gateway group read pacing lease lost ownership');
   }
 }

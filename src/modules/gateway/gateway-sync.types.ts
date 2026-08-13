@@ -18,6 +18,12 @@ export interface GroupCapabilityRefreshPayload {
   expectedRevision: number;
 }
 
+export interface TargetedGroupReconciliationPayload {
+  sessionId: string;
+  groupId: string;
+  requestedRevision: number;
+}
+
 export class GatewaySyncModeConflictError extends Error {
   constructor(
     readonly activeRunId: string,

@@ -8,7 +8,7 @@ import { RUNTIME_HEARTBEAT_INTERVAL_MS } from '../../core/queue/runtime-heartbea
 import { QueueService } from '../../core/queue/queue.service';
 import { CampaignRunProcessorService } from '../campaigns/campaign-run-processor.service';
 import { GatewaySyncProcessorService } from '../gateway/gateway-sync-processor.service';
-import type { FullGatewaySyncPayload, GroupCapabilityRefreshPayload, GroupReconciliationPayload } from '../gateway/gateway-sync.types';
+import type { FullGatewaySyncPayload, GroupCapabilityRefreshPayload, GroupReconciliationPayload, TargetedGroupReconciliationPayload } from '../gateway/gateway-sync.types';
 import { MessageJobProcessorService } from '../messages/message-job-processor.service';
 import type { MessageSendQueuePayload } from '../messages/message-job.types';
 import { WebhookProcessorService } from '../webhooks/webhook-processor.service';
@@ -41,12 +41,11 @@ export class WorkerRunnerService {
       }, () => this.webhookProcessor.process(job.data.idempotencyKey)),
       { connection, concurrency: 10 },
     );
-    const gatewayWorker = new Worker<FullGatewaySyncPayload | GroupCapabilityRefreshPayload | GroupReconciliationPayload>(
+    const gatewayWorker = new Worker<FullGatewaySyncPayload | GroupCapabilityRefreshPayload | GroupReconciliationPayload | TargetedGroupReconciliationPayload>(
       GATEWAY_SYNC_QUEUE,
       job => this.runJob('gateway_sync', job.name, String(job.id), {
         sessionId: job.data.sessionId,
         ...('syncRunId' in job.data ? { syncRunId: job.data.syncRunId } : {}),
-        ...('groupId' in job.data ? { groupId: job.data.groupId } : {}),
       }, () => this.gatewayProcessor.process(job.name, job.data)),
       { connection, concurrency: 1 },
     );

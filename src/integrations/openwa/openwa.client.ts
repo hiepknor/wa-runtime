@@ -105,6 +105,7 @@ export class OpenWAHttpError extends Error {
   constructor(
     readonly status: number,
     readonly responseBody: string,
+    readonly retryAfterMs?: number,
   ) {
     super(`OpenWA returned HTTP ${status}`);
   }
@@ -152,7 +153,13 @@ export class OpenWAClient {
           transientRetries += 1;
           continue;
         }
-        if (!response.ok) throw new OpenWAHttpError(response.status, await response.text());
+        if (!response.ok) {
+          throw new OpenWAHttpError(
+            response.status,
+            await response.text(),
+            parseRetryAfterMs(response.headers),
+          );
+        }
         const parsed = schema.safeParse(await response.json());
         if (!parsed.success) throw new OpenWAResponseValidationError(operation, parsed.error.issues.length);
         this.logger.debug({
@@ -261,12 +268,21 @@ function rateLimitDelayMs(headers: Headers, attempt: number): number {
   if (exhaustedResets.length > 0) {
     return Math.min(60_000, Math.max(250, Math.ceil(Math.max(...exhaustedResets) * 1000)));
   }
-  const retryAfterHeader = headers.get('retry-after');
-  const retryAfter = retryAfterHeader === null ? Number.NaN : Number(retryAfterHeader);
-  if (Number.isFinite(retryAfter) && retryAfter >= 0) {
-    return Math.min(60_000, Math.max(250, Math.ceil(retryAfter * 1000)));
-  }
+  const retryAfterMs = parseRetryAfterMs(headers);
+  if (retryAfterMs !== undefined) return retryAfterMs;
   return jitteredBackoffMs(attempt, 60_000);
+}
+
+function parseRetryAfterMs(headers: Headers): number | undefined {
+  const value = headers.get('retry-after');
+  if (value === null) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(60_000, Math.max(250, Math.ceil(seconds * 1000)));
+  }
+  const at = Date.parse(value);
+  if (!Number.isFinite(at)) return undefined;
+  return Math.min(60_000, Math.max(250, at - Date.now()));
 }
 
 const delay = (milliseconds: number): Promise<void> =>

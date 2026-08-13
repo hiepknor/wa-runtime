@@ -11,6 +11,7 @@ import { GatewayDispatchTick } from './gateway-dispatch.tick';
 import { MessageDispatchTick } from './message-dispatch.tick';
 import { SchedulerRunnerService } from './scheduler-runner.service';
 import { WebhookDispatchTick } from './webhook-dispatch.tick';
+import { GatewayWorkListenerService } from './gateway-work-listener.service';
 
 @Module({
   imports: [DatabaseModule, QueueModule, MessagesModule, WebhooksModule, GatewayModule, CampaignsModule],
@@ -21,6 +22,7 @@ import { WebhookDispatchTick } from './webhook-dispatch.tick';
     CampaignDispatchTick,
     DataRetentionTick,
     SchedulerRunnerService,
+    GatewayWorkListenerService,
   ],
   exports: [SchedulerRunnerService],
 })
