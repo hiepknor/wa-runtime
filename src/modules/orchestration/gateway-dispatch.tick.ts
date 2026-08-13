@@ -56,7 +56,7 @@ export class GatewayDispatchTick {
       } catch (error) {
         this.logger.error({
           event: 'queue.publish.failed', queue: 'gateway_sync', jobName: 'reconcile-session-group',
-          syncRunId: item.syncRunId, sessionId: item.sessionId, groupId: item.groupId, error,
+          syncRunId: item.syncRunId, sessionId: item.sessionId, error,
         });
       }
     }
