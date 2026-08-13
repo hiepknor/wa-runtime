@@ -550,6 +550,28 @@ describe('gateway sync recovery', () => {
     expect(claims.find(Boolean)?.sessionId).toBe(INTEGRATION_SESSION_ID);
   });
 
+  it('exposes the next durable rate-limit time for delayed dispatch', async () => {
+    const session = await new OpenWAClient().getSession(INTEGRATION_SESSION_ID);
+    const ids = ['delayed-1@g.us', 'delayed-2@g.us'];
+    const openwa = {
+      assertCompatibleRelease: vi.fn().mockResolvedValue(undefined),
+      getSession: vi.fn().mockResolvedValue(session),
+      listGroups: vi.fn().mockResolvedValue(ids.map(id => ({ id, name: id }))),
+      getGroup: vi.fn(),
+    } as unknown as OpenWAClient;
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
+    const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
+    await sync.perform(run.id);
+    const first = (await items.listDispatchable(10))[0]!;
+    const claim = await items.claim(first.id);
+    expect(claim).not.toBeNull();
+    await items.recordSessionRequestOutcome(INTEGRATION_SESSION_ID, claim!.leaseToken, true);
+
+    const next = (await items.listDispatchable(10))[0]!;
+    expect(next.groupId).not.toBe(first.groupId);
+    expect(next.availableAt.valueOf()).toBeGreaterThan(Date.now());
+  });
+
   it('enforces sync-item session isolation in PostgreSQL', async () => {
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
     await expect(pool.query(

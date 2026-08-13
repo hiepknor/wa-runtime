@@ -5,9 +5,10 @@ export interface GatewaySyncItemDispatch {
   syncRunId: string;
   sessionId: string;
   groupId: string;
+  availableAt: Date;
 }
 
-export interface ClaimedGatewaySyncItem extends GatewaySyncItemDispatch {
+export interface ClaimedGatewaySyncItem extends Omit<GatewaySyncItemDispatch, 'availableAt'> {
   leaseToken: string;
   attemptNumber: number;
   syncEpoch: string;

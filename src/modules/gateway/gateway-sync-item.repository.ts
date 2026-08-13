@@ -152,31 +152,33 @@ export class GatewaySyncItemRepository {
 
   async listDispatchable(limit: number): Promise<GatewaySyncItemDispatch[]> {
     const result = await this.database.query<{
-      id: string; sync_run_id: string; session_id: string; group_id: string;
+      id: string; sync_run_id: string; session_id: string; group_id: string; available_at: Date;
     }>(
-      `WITH ranked AS (
+      `WITH candidates AS (
          SELECT items.id, items.sync_run_id, items.session_id, items.group_id,
-           items.next_attempt_at, items.ordinal,
-           row_number() OVER (
-             PARTITION BY items.session_id ORDER BY items.next_attempt_at, items.ordinal
-           ) AS session_rank
+           items.ordinal,
+           GREATEST(items.next_attempt_at,
+             COALESCE(limits.next_request_at, '-infinity'::timestamptz),
+             COALESCE(limits.cooldown_until, '-infinity'::timestamptz)) AS available_at
          FROM gateway_sync_items items
          JOIN sync_runs runs ON runs.id = items.sync_run_id AND runs.status = 'RUNNING'
          LEFT JOIN gateway_sync_rate_limits limits ON limits.session_id = items.session_id
          WHERE items.status IN ('PENDING', 'RETRY') AND items.attempt_count < $2
-           AND items.next_attempt_at <= now()
-           AND (limits.session_id IS NULL OR (
-             GREATEST(limits.next_request_at,
-               COALESCE(limits.cooldown_until, '-infinity'::timestamptz)) <= now()
-             AND (limits.active_lease_token IS NULL OR limits.active_lease_expires_at < now())
-           ))
+           AND (limits.active_lease_token IS NULL OR limits.active_lease_expires_at < now())
+       ), ranked AS (
+         SELECT id, sync_run_id, session_id, group_id, available_at, ordinal,
+           row_number() OVER (
+             PARTITION BY session_id ORDER BY available_at, ordinal
+           ) AS session_rank
+         FROM candidates
        )
-       SELECT id, sync_run_id, session_id, group_id FROM ranked
-       WHERE session_rank = 1 ORDER BY next_attempt_at, ordinal LIMIT $1`,
+       SELECT id, sync_run_id, session_id, group_id, available_at FROM ranked
+       WHERE session_rank = 1 ORDER BY available_at, ordinal LIMIT $1`,
       [limit, this.config.GATEWAY_SYNC_ITEM_MAX_ATTEMPTS],
     );
     return result.rows.map(row => ({
       id: row.id, syncRunId: row.sync_run_id, sessionId: row.session_id, groupId: row.group_id,
+      availableAt: row.available_at,
     }));
   }
 

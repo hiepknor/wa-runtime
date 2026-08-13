@@ -78,6 +78,7 @@ export class GatewayDispatchTick {
         }, {
           jobId: stableQueueJobId('group-reconciliation', item.id),
           priority: 10,
+          delay: Math.max(0, item.availableAt.valueOf() - Date.now()),
           attempts: 1,
           removeOnComplete: true,
           removeOnFail: true,
