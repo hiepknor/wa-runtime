@@ -99,6 +99,16 @@ describe('HTTP session authorization', () => {
     expect(incremental.status).toBe(202);
     expect(await incremental.json()).toMatchObject({ syncType: 'INCREMENTAL' });
 
+    const conflicting = await fetch(`${baseUrl}/sessions/${INTEGRATION_SESSION_ID}/sync`, {
+      method: 'POST',
+      headers: { ...runtimeHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'FULL' }),
+    });
+    expect(conflicting.status).toBe(409);
+    expect(await conflicting.json()).toMatchObject({
+      code: 'SYNC_MODE_CONFLICT', activeMode: 'INCREMENTAL',
+    });
+
     const invalid = await fetch(`${baseUrl}/sessions/${INTEGRATION_SESSION_ID}/sync`, {
       method: 'POST',
       headers: { ...runtimeHeaders, 'content-type': 'application/json' },

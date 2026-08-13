@@ -6,7 +6,13 @@ import { GatewayRepository } from '../../src/modules/gateway/gateway.repository'
 import { GatewaySyncService } from '../../src/modules/gateway/gateway-sync.service';
 import { GatewaySyncItemRepository } from '../../src/modules/gateway/gateway-sync-item.repository';
 import { GatewaySyncMode } from '../../src/contracts/sessions/sync-request.dto';
-import { INTEGRATION_GROUP_ID, INTEGRATION_SESSION_ID, integrationPool, resetIntegrationDatabase } from '../support/integration-database';
+import {
+  INTEGRATION_GROUP_ID,
+  INTEGRATION_SESSION_ID,
+  integrationPool,
+  resetIntegrationDatabase,
+  seedSendableGroup,
+} from '../support/integration-database';
 
 describe('gateway sync recovery', () => {
   let pool: Pool;
@@ -243,7 +249,8 @@ describe('gateway sync recovery', () => {
     await sync.perform(run.id);
     expect(await gateway.findSyncRun(run.id)).toMatchObject({
       status: 'RUNNING', phase: 'RECONCILING', groupsDiscovered: 3,
-      groupsScheduled: 3, groupsSynced: 0, membersSynced: 0,
+      groupsScheduled: 3, groupsSynced: 0, groupsPending: 3,
+      groupsRunning: 0, groupsRetrying: 0, membersSynced: 0,
     });
     expect(await gateway.findGroup(INTEGRATION_SESSION_ID, groupIds[2]!)).toMatchObject({
       name: groupIds[2], detailsSyncedAt: null,
@@ -252,7 +259,7 @@ describe('gateway sync recovery', () => {
     const pending = await listRunItems(run.id);
     await sync.reconcileGroup(pending[0]!.id);
     expect(await gateway.findSyncRun(run.id)).toMatchObject({
-      status: 'RUNNING', groupsSynced: 1, membersSynced: 1,
+      status: 'RUNNING', groupsSynced: 1, groupsPending: 2, membersSynced: 1,
     });
     for (const item of pending.slice(1)) {
       await pool.query('UPDATE gateway_sync_rate_limits SET next_request_at = now()');
@@ -261,6 +268,70 @@ describe('gateway sync recovery', () => {
     expect(await gateway.findSyncRun(run.id)).toMatchObject({
       status: 'COMPLETED', phase: 'COMPLETED', groupsSynced: 3, groupsFailed: 0, membersSynced: 3,
     });
+  });
+
+  it('defers a suspicious destructive snapshot until it is confirmed', async () => {
+    const session = await new OpenWAClient().getSession(INTEGRATION_SESSION_ID);
+    await gateway.upsertSession(session);
+    const baselineGroups = Array.from({ length: 20 }, (_, index) => ({
+      id: `baseline-${index}@g.us`, name: `Baseline ${index}`,
+    }));
+    const baseline = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
+    const baselineClaim = await gateway.claimSyncRun(baseline.id);
+    await items.publishDiscovery({
+      syncRunId: baseline.id, leaseToken: baselineClaim!.leaseToken, syncEpoch: baselineClaim!.syncEpoch,
+    }, INTEGRATION_SESSION_ID, GatewaySyncMode.FULL, baselineGroups);
+    await pool.query(
+      `UPDATE gateway_sync_items SET status = 'COMPLETED', completed_at = now()
+       WHERE sync_run_id = $1`,
+      [baseline.id],
+    );
+    await pool.query(
+      `UPDATE sync_runs SET status = 'COMPLETED', phase = 'COMPLETED', completed_at = now()
+       WHERE id = $1`,
+      [baseline.id],
+    );
+
+    const suspiciousGroups = [{ id: baselineGroups[0]!.id, name: baselineGroups[0]!.name }];
+    const first = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
+    const firstClaim = await gateway.claimSyncRun(first.id);
+    const deferred = await items.publishDiscovery({
+      syncRunId: first.id, leaseToken: firstClaim!.leaseToken, syncEpoch: firstClaim!.syncEpoch,
+    }, INTEGRATION_SESSION_ID, GatewaySyncMode.FULL, suspiciousGroups);
+    expect(deferred.deferred).toBe(true);
+    expect(await gateway.findSyncRun(first.id)).toMatchObject({ status: 'PENDING', nextAttemptAt: expect.any(Date) });
+    const deferredAttempt = await pool.query<{ attempt_count: number }>(
+      `SELECT attempt_count FROM sync_runs WHERE id = $1`, [first.id],
+    );
+    expect(deferredAttempt.rows[0]?.attempt_count).toBe(0);
+    const activeAfterFirst = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM gateway_groups WHERE session_id = $1 AND is_active = true`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(activeAfterFirst.rows[0]?.count).toBe('20');
+
+    await pool.query(`UPDATE sync_runs SET next_attempt_at = now() WHERE id = $1`, [first.id]);
+    const confirmationClaim = await gateway.claimSyncRun(first.id);
+    const confirmed = await items.publishDiscovery({
+      syncRunId: first.id, leaseToken: confirmationClaim!.leaseToken, syncEpoch: confirmationClaim!.syncEpoch,
+    }, INTEGRATION_SESSION_ID, GatewaySyncMode.FULL, suspiciousGroups);
+    expect(confirmed.deferred).toBe(false);
+    const activeAfterConfirmation = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM gateway_groups WHERE session_id = $1 AND is_active = true`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(activeAfterConfirmation.rows[0]?.count).toBe('1');
+  });
+
+  it('accepts an empty authoritative snapshot for a new session', async () => {
+    await gateway.upsertSession(await new OpenWAClient().getSession(INTEGRATION_SESSION_ID));
+    const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
+    const claim = await gateway.claimSyncRun(run.id);
+    const result = await items.publishDiscovery({
+      syncRunId: run.id, leaseToken: claim!.leaseToken, syncEpoch: claim!.syncEpoch,
+    }, INTEGRATION_SESSION_ID, GatewaySyncMode.FULL, []);
+    expect(result).toMatchObject({ discovered: 0, scheduled: 0, completed: true, deferred: false });
+    expect(await gateway.findSyncRun(run.id)).toMatchObject({ status: 'COMPLETED' });
   });
 
   it('incremental discovery skips fresh unchanged groups and selects invalidated groups', async () => {
@@ -306,6 +377,87 @@ describe('gateway sync recovery', () => {
     });
   });
 
+  it('keeps a changed summary dirty after terminal reconciliation failure', async () => {
+    const openwa = new OpenWAClient();
+    await gateway.upsertSession(await openwa.getSession(INTEGRATION_SESSION_ID));
+    const summaries = await openwa.listGroups(INTEGRATION_SESSION_ID);
+    const detail = await openwa.getGroup(INTEGRATION_SESSION_ID, summaries[0]!.id);
+    await gateway.upsertGroupDetails(INTEGRATION_SESSION_ID, detail);
+
+    const warmup = await gateway.createSyncRun(INTEGRATION_SESSION_ID, GatewaySyncMode.INCREMENTAL);
+    const warmupClaim = await gateway.claimSyncRun(warmup.id);
+    await items.publishDiscovery({
+      syncRunId: warmup.id, leaseToken: warmupClaim!.leaseToken, syncEpoch: warmupClaim!.syncEpoch,
+    }, INTEGRATION_SESSION_ID, GatewaySyncMode.INCREMENTAL, summaries);
+    const warmupItem = (await listRunItems(warmup.id))[0]!;
+    const claimedWarmup = await items.claim(warmupItem.id);
+    await items.complete(claimedWarmup!.id, claimedWarmup!.leaseToken, detail.participants.length);
+
+    const changed = [{ ...summaries[0]!, name: 'Changed summary' }];
+    const failedRun = await gateway.createSyncRun(INTEGRATION_SESSION_ID, GatewaySyncMode.INCREMENTAL);
+    const failedClaim = await gateway.claimSyncRun(failedRun.id);
+    await items.publishDiscovery({
+      syncRunId: failedRun.id, leaseToken: failedClaim!.leaseToken, syncEpoch: failedClaim!.syncEpoch,
+    }, INTEGRATION_SESSION_ID, GatewaySyncMode.INCREMENTAL, changed);
+    const failedItem = (await listRunItems(failedRun.id))[0]!;
+    await pool.query('UPDATE gateway_sync_rate_limits SET next_request_at = now()');
+    const claimedFailed = await items.claim(failedItem.id);
+    await items.fail(claimedFailed!.id, claimedFailed!.leaseToken, 'terminal failure', {
+      retryable: false, ratePressure: false, code: 'TEST_FAILURE',
+    });
+
+    const retryRun = await gateway.createSyncRun(INTEGRATION_SESSION_ID, GatewaySyncMode.INCREMENTAL);
+    const retryClaim = await gateway.claimSyncRun(retryRun.id);
+    await items.publishDiscovery({
+      syncRunId: retryRun.id, leaseToken: retryClaim!.leaseToken, syncEpoch: retryClaim!.syncEpoch,
+    }, INTEGRATION_SESSION_ID, GatewaySyncMode.INCREMENTAL, changed);
+    expect(await gateway.findSyncRun(retryRun.id)).toMatchObject({
+      status: 'RUNNING', groupsScheduled: 1,
+    });
+
+    const retryItem = (await listRunItems(retryRun.id))[0]!;
+    await pool.query('UPDATE gateway_sync_rate_limits SET next_request_at = now(), cooldown_until = NULL');
+    const claimedRetry = await items.claim(retryItem.id);
+    await items.complete(claimedRetry!.id, claimedRetry!.leaseToken, detail.participants.length);
+    const cleanRun = await gateway.createSyncRun(INTEGRATION_SESSION_ID, GatewaySyncMode.INCREMENTAL);
+    const cleanClaim = await gateway.claimSyncRun(cleanRun.id);
+    await items.publishDiscovery({
+      syncRunId: cleanRun.id, leaseToken: cleanClaim!.leaseToken, syncEpoch: cleanClaim!.syncEpoch,
+    }, INTEGRATION_SESSION_ID, GatewaySyncMode.INCREMENTAL, changed);
+    expect(await gateway.findSyncRun(cleanRun.id)).toMatchObject({ status: 'COMPLETED', groupsScheduled: 0 });
+  });
+
+  it('does not let an older completed item reconcile a newer observed summary', async () => {
+    const openwa = new OpenWAClient();
+    await gateway.upsertSession(await openwa.getSession(INTEGRATION_SESSION_ID));
+    const summaries = await openwa.listGroups(INTEGRATION_SESSION_ID);
+    const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID, GatewaySyncMode.FULL);
+    const runClaim = await gateway.claimSyncRun(run.id);
+    await items.publishDiscovery({
+      syncRunId: run.id, leaseToken: runClaim!.leaseToken, syncEpoch: runClaim!.syncEpoch,
+    }, INTEGRATION_SESSION_ID, GatewaySyncMode.FULL, summaries.slice(0, 1));
+    const item = (await listRunItems(run.id))[0]!;
+    const itemClaim = await items.claim(item.id);
+
+    await pool.query(
+      `UPDATE gateway_groups SET summary_fingerprint = 'newer-observed-fingerprint'
+       WHERE session_id = $1 AND id = $2`,
+      [INTEGRATION_SESSION_ID, summaries[0]!.id],
+    );
+    await items.complete(itemClaim!.id, itemClaim!.leaseToken, 0);
+
+    const fingerprints = await pool.query<{
+      summary_fingerprint: string;
+      reconciled_summary_fingerprint: string;
+    }>(
+      `SELECT summary_fingerprint, reconciled_summary_fingerprint FROM gateway_groups
+       WHERE session_id = $1 AND id = $2`,
+      [INTEGRATION_SESSION_ID, summaries[0]!.id],
+    );
+    expect(fingerprints.rows[0]!.summary_fingerprint).toBe('newer-observed-fingerprint');
+    expect(fingerprints.rows[0]!.reconciled_summary_fingerprint).not.toBe('newer-observed-fingerprint');
+  });
+
   it('recovers an expired item lease without replaying completed siblings', async () => {
     const session = await new OpenWAClient().getSession(INTEGRATION_SESSION_ID);
     const ids = ['completed-sibling@g.us', 'expired-sibling@g.us'];
@@ -335,6 +487,22 @@ describe('gateway sync recovery', () => {
     expect((openwa.getGroup as ReturnType<typeof vi.fn>).mock.calls.map(call => call[1]))
       .toEqual([ids[0], ids[1]]);
     expect(await gateway.findSyncRun(run.id)).toMatchObject({ status: 'COMPLETED', groupsSynced: 2 });
+  });
+
+  it('renews item ownership and rejects renewal by a stale lease token', async () => {
+    const session = await new OpenWAClient().getSession(INTEGRATION_SESSION_ID);
+    const openwa = {
+      assertCompatibleRelease: vi.fn().mockResolvedValue(undefined),
+      getSession: vi.fn().mockResolvedValue(session),
+      listGroups: vi.fn().mockResolvedValue([{ id: 'long-running@g.us', name: 'Long running' }]),
+    } as unknown as OpenWAClient;
+    const sync = new GatewaySyncService(gateway, items, openwa);
+    const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
+    await sync.perform(run.id);
+    const item = (await listRunItems(run.id))[0]!;
+    const claim = await items.claim(item.id);
+    expect(await items.renewLease(claim!.id, claim!.leaseToken)).toBe(true);
+    expect(await items.renewLease(claim!.id, '00000000-0000-4000-8000-000000000099')).toBe(false);
   });
 
   it('does not rewrite an unchanged member collection', async () => {
@@ -431,9 +599,34 @@ describe('gateway sync recovery', () => {
     await pool.query('UPDATE gateway_sync_rate_limits SET next_request_at = now()');
     const claim = await items.claim(pending[1]!.id);
     expect(claim).not.toBeNull();
-    await items.fail(claim!.id, claim!.leaseToken, 'schema failure', false);
+    await items.fail(claim!.id, claim!.leaseToken, 'schema failure', {
+      retryable: false, ratePressure: false, code: 'INVALID_RESPONSE',
+    });
     expect(await gateway.findSyncRun(run.id)).toMatchObject({
       status: 'FAILED', groupsSynced: 1, groupsFailed: 1, membersSynced: 0,
     });
+  });
+
+  it('applies session cooldown only for upstream rate pressure', async () => {
+    await seedSendableGroup(pool);
+    await pool.query(`INSERT INTO gateway_sync_rate_limits (session_id) VALUES ($1)`, [INTEGRATION_SESSION_ID]);
+    const noPressureLease = await items.reserveSessionRequest(INTEGRATION_SESSION_ID);
+    expect(noPressureLease).not.toBeNull();
+    await items.recordSessionRequestOutcome(INTEGRATION_SESSION_ID, noPressureLease!, false, false);
+    const withoutPressure = await pool.query<{ consecutive_failures: number; cooldown_until: Date | null }>(
+      `SELECT consecutive_failures, cooldown_until FROM gateway_sync_rate_limits WHERE session_id = $1`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(withoutPressure.rows[0]).toMatchObject({ consecutive_failures: 0, cooldown_until: null });
+
+    await pool.query(`UPDATE gateway_sync_rate_limits SET next_request_at = now() WHERE session_id = $1`, [INTEGRATION_SESSION_ID]);
+    const pressureLease = await items.reserveSessionRequest(INTEGRATION_SESSION_ID);
+    await items.recordSessionRequestOutcome(INTEGRATION_SESSION_ID, pressureLease!, false, true);
+    const withPressure = await pool.query<{ consecutive_failures: number; cooldown_until: Date | null }>(
+      `SELECT consecutive_failures, cooldown_until FROM gateway_sync_rate_limits WHERE session_id = $1`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(withPressure.rows[0]?.consecutive_failures).toBe(1);
+    expect(withPressure.rows[0]?.cooldown_until).toBeInstanceOf(Date);
   });
 });

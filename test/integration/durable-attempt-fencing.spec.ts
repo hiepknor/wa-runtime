@@ -99,6 +99,28 @@ describe('durable attempt fencing', () => {
     )).toBe('RETRY');
   });
 
+  it('terminates a non-retryable capability refresh failure immediately', async () => {
+    await gateway.invalidateGroupCapability(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, 'MANUAL_REFRESH');
+    const group = await gateway.findGroup(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID);
+    const revision = group!.sendCapability.revision;
+    const claim = await gateway.claimCapabilityRefresh(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, revision);
+    expect(claim).not.toBeNull();
+
+    expect(await gateway.failCapabilityRefreshAttempt(
+      INTEGRATION_SESSION_ID,
+      INTEGRATION_GROUP_ID,
+      revision,
+      claim!.leaseToken,
+      'UPSTREAM_VALIDATION_ERROR',
+      false,
+    )).toBe('FAILED');
+    expect(await gateway.claimCapabilityRefresh(
+      INTEGRATION_SESSION_ID,
+      INTEGRATION_GROUP_ID,
+      revision,
+    )).toBeNull();
+  });
+
   it('suppresses capability refresh claims while a full session sync is running', async () => {
     await gateway.invalidateGroupCapability(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, 'MANUAL_REFRESH');
     const group = await gateway.findGroup(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID);
