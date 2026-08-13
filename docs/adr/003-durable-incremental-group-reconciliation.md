@@ -37,6 +37,18 @@ WA Runtime owns group reconciliation as durable PostgreSQL work:
    current item lease.
 10. Gateway group events invalidate the affected group and are reconciled by targeted durable work;
     periodic incremental and operator-triggered full runs remain the missed-event safety net.
+11. Discovery records the latest observed summary fingerprint, but only a successfully fenced
+    detail reconciliation advances the reconciled fingerprint. A failed item therefore remains
+    eligible for the next incremental run.
+12. Item leases are renewed while upstream reads and database writes are in progress. A worker that
+    loses ownership stops finalizing the item and lets PostgreSQL recovery choose the next owner.
+13. A destructive snapshot reduction must be observed consistently before it can deactivate
+    existing groups. A first suspicious snapshot delays the durable discovery run without mutating
+    the group read model.
+14. A duplicate request with the same mode returns the active run. A request with a different mode
+    conflicts instead of silently changing or discarding operator intent.
+15. Retryability and upstream rate pressure are separate decisions. Only rate-pressure failures
+    extend the shared session cooldown.
 
 The public request is additive. Omitting a request body preserves the existing `FULL` behavior;
 new clients may explicitly request `INCREMENTAL`. Existing sync-run fields remain and new discovery,
@@ -46,12 +58,19 @@ Initial operational defaults are 40 group-detail requests per minute per session
 time, a 24-hour stale threshold and five item attempts. These are configurable and must be tuned from
 staging evidence, not increased by adding worker concurrency.
 
+The initial destructive-snapshot guard applies when a session previously had at least 20 groups and
+the new count falls below 25 percent of that baseline. Two identical suspicious snapshots are
+required before publication. These thresholds are configurable and operate independently per
+session.
+
 ## Consequences
 
 - Group summaries become visible before member reconciliation finishes.
 - Runtime can resume after Redis loss or process restart without repeating completed groups.
 - A full run may take longer under deliberate pacing, but it stops amplifying WhatsApp overload.
 - Progress becomes meaningful while a run is active.
+- Progress distinguishes pending, running and retrying items and exposes only aggregate pacing
+  state; item and group identities remain internal.
 - Additive tables and columns remain readable by the previous binary, but the one-active-run index
   changes duplicate-request behavior; application rollback therefore requires quiescing sync
   requests or a forward fix rather than assuming unrestricted binary rollback.
@@ -73,7 +92,11 @@ staging evidence, not increased by adding worker concurrency.
 1. Contract and migrations are additive and generated artifacts match source.
 2. Integration tests prove duplicate-run suppression, item fencing, retry recovery, progress,
    session isolation and no replay of completed groups.
-3. Staging demonstrates bounded group-detail request rate, continuously increasing progress and no
+3. Tests prove a failed changed-summary item remains dirty, long work renews its lease, and one
+   suspicious snapshot cannot deactivate an established dataset.
+4. Staging demonstrates bounded group-detail request rate, continuously increasing progress and no
    sustained `rate-overlimit` burst.
-4. WA Studio adopts explicit Reload, Incremental Sync and confirmed Full Sync semantics before the
+5. A second unchanged incremental staging run schedules approximately zero items after fingerprint
+   warm-up.
+6. WA Studio adopts explicit Reload, Incremental Sync and confirmed Full Sync semantics before the
    no-body compatibility default is reconsidered in a future API version.
