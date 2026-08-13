@@ -35,7 +35,7 @@ describe('gateway sync recovery', () => {
   beforeAll(() => {
     pool = integrationPool();
     database = new DatabaseService();
-    gateway = new GatewayRepository(database, new ContactRepository());
+    gateway = new GatewayRepository(database, new ContactRepository(database));
     items = new GatewaySyncItemRepository(database);
     groupIntents = new GatewayGroupIntentRepository(database);
   });
@@ -58,7 +58,7 @@ describe('gateway sync recovery', () => {
   it('synchronizes the fake OpenWA snapshot into the durable read model', async () => {
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
 
-    const sync = new GatewaySyncService(gateway, items, new OpenWAClient(), groupIntents);
+    const sync = new GatewaySyncService(gateway, items, new OpenWAClient(), groupIntents, {} as never);
     await sync.perform(run.id);
     const [item] = await items.listDispatchable(10);
     expect(item).toBeDefined();
@@ -93,7 +93,7 @@ describe('gateway sync recovery', () => {
       listGroups: vi.fn().mockResolvedValue(summaries),
       getGroup,
     } as unknown as OpenWAClient;
-    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents, {} as never);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
 
     await expect(sync.perform(run.id)).resolves.toEqual({ groups: 2, members: 0 });
@@ -248,7 +248,7 @@ describe('gateway sync recovery', () => {
         }],
       })),
     } as unknown as OpenWAClient;
-    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents, {} as never);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
 
     await sync.perform(run.id);
@@ -472,7 +472,7 @@ describe('gateway sync recovery', () => {
       listGroups: vi.fn().mockResolvedValue(ids.map(id => ({ id, name: id }))),
       getGroup: vi.fn(async (_sessionId: string, id: string) => ({ id, name: id, participants: [] })),
     } as unknown as OpenWAClient;
-    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents, {} as never);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
     await sync.perform(run.id);
     const pending = await listRunItems(run.id);
@@ -501,7 +501,7 @@ describe('gateway sync recovery', () => {
       getSession: vi.fn().mockResolvedValue(session),
       listGroups: vi.fn().mockResolvedValue([{ id: 'long-running@g.us', name: 'Long running' }]),
     } as unknown as OpenWAClient;
-    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents, {} as never);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
     await sync.perform(run.id);
     const item = (await listRunItems(run.id))[0]!;
@@ -610,6 +610,47 @@ describe('gateway sync recovery', () => {
     expect(perSession.rows[0]?.contact_id).not.toBe(perSession.rows[1]?.contact_id);
   });
 
+  it('ingests observed contacts and materializes deterministic name precedence', async () => {
+    const contacts = new ContactRepository(database);
+    const session = await new OpenWAClient().getSession(INTEGRATION_SESSION_ID);
+    await gateway.upsertSession(session);
+    await gateway.upsertGroupDetails(INTEGRATION_SESSION_ID, {
+      id: INTEGRATION_GROUP_ID,
+      name: 'Enrichment',
+      participants: [{
+        id: '628222@c.us', number: '628222', name: 'Participant name',
+        isAdmin: false, isSuperAdmin: false,
+      }],
+    });
+    const generation = await contacts.beginObservedSnapshot(INTEGRATION_SESSION_ID);
+    await expect(contacts.ingestObservedPage(INTEGRATION_SESSION_ID, [
+      {
+        id: '628222@c.us', number: '628222', name: 'Contact name', pushName: 'Push name',
+        isMyContact: true, isBlocked: false,
+      },
+      {
+        id: 'unseen@lid', number: 'unseen', name: null, pushName: 'Observed only',
+        isMyContact: true, isBlocked: false,
+      },
+    ])).resolves.toMatchObject({ observed: 2, enriched: 1, conflicts: 0 });
+    await contacts.completeObservedSnapshot(INTEGRATION_SESSION_ID, generation, 2);
+
+    const member = await pool.query<{ display_name: string; display_name_source: string }>(
+      `SELECT display_name, display_name_source FROM group_members
+       WHERE session_id = $1 AND group_id = $2 AND participant_id = '628222@c.us'`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+    expect(member.rows[0]).toEqual({
+      display_name: 'Contact name', display_name_source: 'OPENWA_CONTACT_NAME',
+    });
+    const observedOnly = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM contact_identifiers
+       WHERE session_id = $1 AND identity_type = 'LID' AND identity_value = 'unseen@lid'`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(observedOnly.rows[0]?.count).toBe('1');
+  });
+
   it('allows only one in-flight group-detail request per session', async () => {
     const session = await new OpenWAClient().getSession(INTEGRATION_SESSION_ID);
     const ids = ['paced-1@g.us', 'paced-2@g.us'];
@@ -619,7 +660,7 @@ describe('gateway sync recovery', () => {
       listGroups: vi.fn().mockResolvedValue(ids.map(id => ({ id, name: id }))),
       getGroup: vi.fn(),
     } as unknown as OpenWAClient;
-    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents, {} as never);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
     await sync.perform(run.id);
     const pending = await listRunItems(run.id);
@@ -639,7 +680,7 @@ describe('gateway sync recovery', () => {
       listGroups: vi.fn().mockResolvedValue(ids.map(id => ({ id, name: id }))),
       getGroup: vi.fn(),
     } as unknown as OpenWAClient;
-    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents, {} as never);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
     await sync.perform(run.id);
     const first = (await items.listDispatchable(10))[0]!;
@@ -673,7 +714,7 @@ describe('gateway sync recovery', () => {
         return { id, name: id, participants: [] };
       }),
     } as unknown as OpenWAClient;
-    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents, {} as never);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
     await sync.perform(run.id);
     const pending = await listRunItems(run.id);
@@ -697,7 +738,7 @@ describe('gateway sync recovery', () => {
         return { id, name: id, participants: [] };
       }),
     } as unknown as OpenWAClient;
-    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents, {} as never);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
     await sync.perform(run.id);
     const pending = await listRunItems(run.id);

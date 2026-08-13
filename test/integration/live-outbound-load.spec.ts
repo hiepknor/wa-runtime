@@ -68,7 +68,7 @@ describe('live outbound load', () => {
 
       const processors = databases.map(database => {
         const processorMessages = new MessageJobRepository(database);
-        const gateway = new GatewayRepository(database, new ContactRepository());
+        const gateway = new GatewayRepository(database, new ContactRepository(database));
         return new MessageJobProcessorService(
           database,
           processorMessages,

@@ -53,6 +53,15 @@ const participantSchema = z.object({
   isAdmin: z.boolean(),
   isSuperAdmin: z.boolean(),
 });
+const contactSchema = z.object({
+  id: nonEmptyString,
+  number: z.string(),
+  name: z.string().nullish(),
+  pushName: z.string().nullish(),
+  isMyContact: z.boolean(),
+  isBlocked: z.boolean(),
+  profilePicUrl: z.string().nullish(),
+});
 const groupSchema = groupSummaryBaseSchema.extend({
   description: nullableString,
   owner: nullableString,
@@ -98,6 +107,7 @@ export type OpenWASession = z.infer<typeof sessionSchema>;
 export type OpenWAGroupSummary = z.infer<typeof groupSummarySchema>;
 export type OpenWAGroupParticipant = z.infer<typeof participantSchema>;
 export type OpenWAGroup = z.infer<typeof groupSchema>;
+export type OpenWAContact = z.infer<typeof contactSchema>;
 export type OpenWAWebhook = z.infer<typeof webhookSchema>;
 export type OpenWAHealth = z.infer<typeof healthSchema>;
 
@@ -226,6 +236,27 @@ export class OpenWAClient {
       `/api/sessions/${encodeURIComponent(sessionId)}/groups/${encodeURIComponent(groupId)}`,
       groupSchema,
     );
+  }
+
+  async *listContactPages(sessionId: string): AsyncGenerator<OpenWAContact[]> {
+    const pageSize = 1000;
+    const maxPages = 100;
+    const contactIds = new Set<string>();
+    for (let pageNumber = 0; pageNumber < maxPages; pageNumber += 1) {
+      const offset = pageNumber * pageSize;
+      const page = await this.request(
+        'list_contacts',
+        `/api/sessions/${encodeURIComponent(sessionId)}/contacts?limit=${pageSize}&offset=${offset}`,
+        z.array(contactSchema).max(pageSize),
+      );
+      for (const contact of page) {
+        if (contactIds.has(contact.id)) throw new OpenWAResponseValidationError('list_contacts', 1);
+        contactIds.add(contact.id);
+      }
+      if (page.length > 0) yield page;
+      if (page.length < pageSize) return;
+    }
+    throw new OpenWAResponseValidationError('list_contacts', 1);
   }
 
   listWebhooks(sessionId: string): Promise<OpenWAWebhook[]> {

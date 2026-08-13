@@ -96,6 +96,27 @@ describe('OpenWAClient response validation', () => {
       .rejects.toBeInstanceOf(OpenWAResponseValidationError);
   });
 
+  it('streams bounded contact pages and rejects duplicate identities across pages', async () => {
+    const contact = (id: string) => ({ id, number: id.replace(/@c\.us$/, ''), isMyContact: true, isBlocked: false });
+    const first = Array.from({ length: 1000 }, (_, index) => contact(`${index}@c.us`));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(first))
+      .mockResolvedValueOnce(jsonResponse([contact('1000@c.us')]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pages: unknown[][] = [];
+    for await (const page of new OpenWAClient().listContactPages('session-1')) pages.push(page);
+
+    expect(pages.map(page => page.length)).toEqual([1000, 1]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(first))));
+    const duplicate = async () => {
+      for await (const _page of new OpenWAClient().listContactPages('session-1')) { /* consume */ }
+    };
+    await expect(duplicate()).rejects.toBeInstanceOf(OpenWAResponseValidationError);
+  });
+
   it('retries rate-limited GET requests using gateway retry metadata', async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn()

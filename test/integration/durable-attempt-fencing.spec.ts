@@ -22,7 +22,7 @@ describe('durable attempt fencing', () => {
   beforeAll(() => {
     pool = integrationPool();
     database = new DatabaseService();
-    gateway = new GatewayRepository(database, new ContactRepository());
+    gateway = new GatewayRepository(database, new ContactRepository(database));
     campaigns = new CampaignRunRepository(database, new MessageJobRepository(database));
   });
   beforeEach(async () => {

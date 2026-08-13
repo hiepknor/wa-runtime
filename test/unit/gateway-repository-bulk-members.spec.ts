@@ -17,7 +17,7 @@ describe('GatewayRepository bulk member replacement', () => {
       isAdmin: index % 2 === 0,
     }));
 
-    await new GatewayRepository(database, new ContactRepository()).replaceGroupSummaries('session-1', groups, {
+    await new GatewayRepository(database, new ContactRepository(database)).replaceGroupSummaries('session-1', groups, {
       syncRunId: '00000000-0000-4000-8000-000000000001',
       leaseToken: '00000000-0000-4000-8000-000000000002',
       syncEpoch: '1',
@@ -51,7 +51,7 @@ describe('GatewayRepository bulk member replacement', () => {
       })),
     };
 
-    await expect(new GatewayRepository(database, new ContactRepository()).upsertGroupDetails('session-1', group))
+    await expect(new GatewayRepository(database, new ContactRepository(database)).upsertGroupDetails('session-1', group))
       .resolves.toEqual({ members: 1000, applied: true });
 
     const memberInserts = query.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO group_members'));

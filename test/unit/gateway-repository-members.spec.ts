@@ -13,7 +13,8 @@ describe('GatewayRepository.listMembers', () => {
       }] })
       .mockResolvedValueOnce({ rows: [{ count: '1' }] });
     const transaction = vi.fn(async operation => operation({ query: clientQuery }));
-    const repository = new GatewayRepository({ transaction } as unknown as DatabaseService, new ContactRepository());
+    const database = { transaction } as unknown as DatabaseService;
+    const repository = new GatewayRepository(database, new ContactRepository(database));
 
     const result = await repository.listMembers('session-id', 'group-id', 25, 50, '  100%_match  ');
 

@@ -182,7 +182,7 @@ describe('durable webhook processing', () => {
       }),
     } as unknown as OpenWAClient;
     const sync = new GatewaySyncService(
-      new GatewayRepository(database, new ContactRepository()), new GatewaySyncItemRepository(database), openwa, intents,
+      new GatewayRepository(database, new ContactRepository(database)), new GatewaySyncItemRepository(database), openwa, intents, {} as never,
     );
     await expect(sync.reconcileTargetedGroup(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID))
       .resolves.toMatchObject({ members: 0 });
@@ -221,7 +221,7 @@ describe('durable webhook processing', () => {
       }),
     } as unknown as OpenWAClient;
     const sync = new GatewaySyncService(
-      new GatewayRepository(database, new ContactRepository()), new GatewaySyncItemRepository(database), openwa, intents,
+      new GatewayRepository(database, new ContactRepository(database)), new GatewaySyncItemRepository(database), openwa, intents, {} as never,
     );
     const first = sync.reconcileTargetedGroup(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID);
     await upstreamStarted;

@@ -7,6 +7,7 @@ import { GatewayRepository, type SyncWriteFence } from './gateway.repository';
 import { GatewaySyncItemRepository } from './gateway-sync-item.repository';
 import { GatewaySyncModeConflictError } from './gateway-sync.types';
 import { GatewayGroupIntentRepository } from './gateway-group-intent.repository';
+import { ContactSyncService } from '../contacts/contact-sync.service';
 
 @Injectable()
 export class GatewaySyncService {
@@ -18,6 +19,7 @@ export class GatewaySyncService {
     private readonly items: GatewaySyncItemRepository,
     private readonly openwa: OpenWAClient,
     private readonly groupIntents: GatewayGroupIntentRepository,
+    private readonly contactSync: ContactSyncService,
   ) {}
 
   async request(sessionId: string, mode: GatewaySyncMode = GatewaySyncMode.FULL): Promise<SyncRunDto> {
@@ -80,6 +82,13 @@ export class GatewaySyncService {
         mode: run.syncType, groupsDiscovered: discovery.discovered,
         groupsScheduled: discovery.scheduled,
       });
+      if (run.syncType === GatewaySyncMode.FULL && this.config.CONTACT_SNAPSHOT_SYNC_ENABLED) {
+        try {
+          await this.contactSync.reconcileObservedContacts(sessionId);
+        } catch {
+          this.logger.warn({ event: 'contacts.snapshot.degraded', syncRunId, sessionId });
+        }
+      }
       return { groups: discovery.discovered, members: 0 };
     } catch (error) {
       const description = error instanceof Error ? error.message : String(error);

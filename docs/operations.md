@@ -291,6 +291,37 @@ leases. Do not manually change item status while a valid item or pacing lease ex
 failed item makes the parent run `FAILED` without discarding successful sibling results; a group
 that disappears during reconciliation is `SKIPPED` and does not fail the parent.
 
+## Observed contact synchronization
+
+[ADR 005](adr/005-session-scoped-observed-contacts.md) adds a session-scoped contact identity read
+model. Group reconciliation always seeds member identities. OpenWA contact snapshots remain disabled
+by default and can be enabled with `CONTACT_SNAPSHOT_SYNC_ENABLED=true` after migration 018 is applied.
+
+A full sync then streams OpenWA contacts in pages of at most 1,000 and materializes observed names
+without making contact availability a group-sync dependency. Incremental sync, targeted group
+reconciliation and capability refresh never request the contact collection. Snapshot absence is not
+deletion evidence; do not truncate contact tables to reconcile the bounded Baileys cache.
+
+These aggregate checks contain no contact PII:
+
+```sql
+SELECT count(*) AS members,
+       count(contact_id) AS linked_members,
+       count(display_name) AS named_members
+FROM group_members WHERE session_id = $1;
+
+SELECT identity_type, count(*)
+FROM contact_identifiers WHERE session_id = $1
+GROUP BY identity_type ORDER BY identity_type;
+
+SELECT sync_generation, snapshot_completeness, last_started_at, last_completed_at,
+       last_successful_record_count, last_error_code
+FROM contact_sync_state WHERE session_id = $1;
+```
+
+Disable the flag to stop new snapshots while preserving already observed contacts and materialized
+member names. Never log result rows from contacts, identifiers or names during incident handling.
+
 ## Rollback
 
 Application rollback means returning to a previous immutable Runtime tag. Database rollback is not
