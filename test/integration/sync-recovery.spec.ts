@@ -5,6 +5,8 @@ import { OpenWAClient, OpenWAHttpError, pendingGroupName } from '../../src/integ
 import { GatewayRepository } from '../../src/modules/gateway/gateway.repository';
 import { GatewaySyncService } from '../../src/modules/gateway/gateway-sync.service';
 import { GatewaySyncItemRepository } from '../../src/modules/gateway/gateway-sync-item.repository';
+import { GatewayGroupIntentRepository } from '../../src/modules/gateway/gateway-group-intent.repository';
+import { GatewaySyncRateLimitRepository } from '../../src/modules/gateway/gateway-sync-rate-limit.repository';
 import { GatewaySyncMode } from '../../src/contracts/sessions/sync-request.dto';
 import {
   INTEGRATION_GROUP_ID,
@@ -19,6 +21,7 @@ describe('gateway sync recovery', () => {
   let database: DatabaseService;
   let gateway: GatewayRepository;
   let items: GatewaySyncItemRepository;
+  let groupIntents: GatewayGroupIntentRepository;
 
   const listRunItems = async (syncRunId: string) => {
     const result = await pool.query<{ id: string }>(
@@ -33,6 +36,7 @@ describe('gateway sync recovery', () => {
     database = new DatabaseService();
     gateway = new GatewayRepository(database);
     items = new GatewaySyncItemRepository(database);
+    groupIntents = new GatewayGroupIntentRepository(database);
   });
   beforeEach(() => resetIntegrationDatabase(pool));
   afterAll(async () => { await database.onApplicationShutdown(); await pool.end(); });
@@ -53,7 +57,7 @@ describe('gateway sync recovery', () => {
   it('synchronizes the fake OpenWA snapshot into the durable read model', async () => {
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
 
-    const sync = new GatewaySyncService(gateway, items, new OpenWAClient());
+    const sync = new GatewaySyncService(gateway, items, new OpenWAClient(), groupIntents);
     await sync.perform(run.id);
     const [item] = await items.listDispatchable(10);
     expect(item).toBeDefined();
@@ -88,7 +92,7 @@ describe('gateway sync recovery', () => {
       listGroups: vi.fn().mockResolvedValue(summaries),
       getGroup,
     } as unknown as OpenWAClient;
-    const sync = new GatewaySyncService(gateway, items, openwa);
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
 
     await expect(sync.perform(run.id)).resolves.toEqual({ groups: 2, members: 0 });
@@ -243,7 +247,7 @@ describe('gateway sync recovery', () => {
         }],
       })),
     } as unknown as OpenWAClient;
-    const sync = new GatewaySyncService(gateway, items, openwa);
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
 
     await sync.perform(run.id);
@@ -467,7 +471,7 @@ describe('gateway sync recovery', () => {
       listGroups: vi.fn().mockResolvedValue(ids.map(id => ({ id, name: id }))),
       getGroup: vi.fn(async (_sessionId: string, id: string) => ({ id, name: id, participants: [] })),
     } as unknown as OpenWAClient;
-    const sync = new GatewaySyncService(gateway, items, openwa);
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
     await sync.perform(run.id);
     const pending = await listRunItems(run.id);
@@ -496,7 +500,7 @@ describe('gateway sync recovery', () => {
       getSession: vi.fn().mockResolvedValue(session),
       listGroups: vi.fn().mockResolvedValue([{ id: 'long-running@g.us', name: 'Long running' }]),
     } as unknown as OpenWAClient;
-    const sync = new GatewaySyncService(gateway, items, openwa);
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
     await sync.perform(run.id);
     const item = (await listRunItems(run.id))[0]!;
@@ -535,7 +539,7 @@ describe('gateway sync recovery', () => {
       listGroups: vi.fn().mockResolvedValue(ids.map(id => ({ id, name: id }))),
       getGroup: vi.fn(),
     } as unknown as OpenWAClient;
-    const sync = new GatewaySyncService(gateway, items, openwa);
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
     await sync.perform(run.id);
     const pending = await listRunItems(run.id);
@@ -567,7 +571,7 @@ describe('gateway sync recovery', () => {
         return { id, name: id, participants: [] };
       }),
     } as unknown as OpenWAClient;
-    const sync = new GatewaySyncService(gateway, items, openwa);
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
     await sync.perform(run.id);
     const pending = await listRunItems(run.id);
@@ -591,7 +595,7 @@ describe('gateway sync recovery', () => {
         return { id, name: id, participants: [] };
       }),
     } as unknown as OpenWAClient;
-    const sync = new GatewaySyncService(gateway, items, openwa);
+    const sync = new GatewaySyncService(gateway, items, openwa, groupIntents);
     const run = await gateway.createSyncRun(INTEGRATION_SESSION_ID);
     await sync.perform(run.id);
     const pending = await listRunItems(run.id);
@@ -628,5 +632,41 @@ describe('gateway sync recovery', () => {
     );
     expect(withPressure.rows[0]?.consecutive_failures).toBe(1);
     expect(withPressure.rows[0]?.cooldown_until).toBeInstanceOf(Date);
+  });
+
+  it('persists adaptive rate reduction on 429 and recovers it after successful reads', async () => {
+    await seedSendableGroup(pool);
+    const rateLimits = new GatewaySyncRateLimitRepository(database);
+    const firstLease = await rateLimits.reserve(INTEGRATION_SESSION_ID);
+    expect(firstLease).not.toBeNull();
+    await rateLimits.record(INTEGRATION_SESSION_ID, firstLease!, {
+      retryable: true, ratePressure: true, reduceRate: true, code: 'RATE_LIMITED',
+    });
+    let state = await pool.query<{
+      effective_requests_per_minute: number; success_streak: number; last_rate_pressure_at: Date | null;
+    }>(
+      `SELECT effective_requests_per_minute, success_streak, last_rate_pressure_at
+       FROM gateway_sync_rate_limits WHERE session_id = $1`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(state.rows[0]).toMatchObject({ effective_requests_per_minute: 20, success_streak: 0 });
+    expect(state.rows[0]!.last_rate_pressure_at).toBeInstanceOf(Date);
+
+    for (let success = 0; success < 2; success += 1) {
+      await pool.query(
+        `UPDATE gateway_sync_rate_limits SET next_request_at = now(), cooldown_until = NULL
+         WHERE session_id = $1`,
+        [INTEGRATION_SESSION_ID],
+      );
+      const lease = await rateLimits.reserve(INTEGRATION_SESSION_ID);
+      expect(lease).not.toBeNull();
+      await rateLimits.record(INTEGRATION_SESSION_ID, lease!);
+    }
+    state = await pool.query(
+      `SELECT effective_requests_per_minute, success_streak, last_rate_pressure_at
+       FROM gateway_sync_rate_limits WHERE session_id = $1`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(state.rows[0]).toMatchObject({ effective_requests_per_minute: 21, success_streak: 0 });
   });
 });

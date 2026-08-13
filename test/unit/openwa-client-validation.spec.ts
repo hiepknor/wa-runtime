@@ -1,6 +1,10 @@
 import { Logger } from '@nestjs/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { OpenWAClient, OpenWAResponseValidationError } from '../../src/integrations/openwa/openwa.client';
+import {
+  OpenWAClient,
+  OpenWAHttpError,
+  OpenWAResponseValidationError,
+} from '../../src/integrations/openwa/openwa.client';
 
 vi.mock('../../src/core/config/runtime-config', () => ({
   runtimeConfig: () => ({
@@ -131,11 +135,15 @@ describe('OpenWAClient response validation', () => {
   });
 
   it('leaves group-detail rate limits to the durable reconciliation retry owner', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ message: 'rate-overlimit' }, 429));
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ message: 'rate-overlimit' }), {
+      status: 429,
+      headers: { 'content-type': 'application/json', 'retry-after': '7' },
+    }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(new OpenWAClient().getGroup('session-1', 'group-1'))
-      .rejects.toMatchObject({ status: 429 });
+    const failure = await new OpenWAClient().getGroup('session-1', 'group-1').catch(error => error);
+    expect(failure).toBeInstanceOf(OpenWAHttpError);
+    expect(failure).toMatchObject({ status: 429, retryAfterMs: 7_000 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -186,6 +186,13 @@ export default async function setup(): Promise<() => Promise<void>> {
       ALLOW_LIVE_SENDS: 'true',
       OUTBOUND_MIN_DELAY_MS: '0',
       OUTBOUND_MAX_DELAY_MS: '0',
+      GATEWAY_GROUP_EVENT_DEBOUNCE_MS: '0',
+      GATEWAY_GROUP_EVENT_MAX_WAIT_MS: '1000',
+      GATEWAY_TARGETED_RECONCILIATION_ENABLED: 'true',
+      GATEWAY_SYNC_NOTIFY_WAKEUP_ENABLED: 'true',
+      GATEWAY_SYNC_ADAPTIVE_PACING: 'true',
+      GATEWAY_SYNC_MIN_GROUPS_PER_MINUTE: '5',
+      GATEWAY_SYNC_RATE_RECOVERY_SUCCESSES: '2',
     });
 
     return async () => {

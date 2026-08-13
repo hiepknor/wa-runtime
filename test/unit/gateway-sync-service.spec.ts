@@ -30,7 +30,9 @@ describe('GatewaySyncService item ownership', () => {
     const openwa = {
       getGroup: vi.fn().mockImplementation(() => new Promise(resolve => { releaseGroup = resolve; })),
     } as unknown as OpenWAClient;
-    const operation = new GatewaySyncService(repository, items, openwa).reconcileGroup('item-1');
+    const operation = new GatewaySyncService(
+      repository, items, openwa, {} as never,
+    ).reconcileGroup('item-1');
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(items.renewLease).toHaveBeenCalledTimes(1);
