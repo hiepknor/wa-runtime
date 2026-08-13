@@ -8,6 +8,7 @@ import { GatewaySyncItemRepository } from '../../src/modules/gateway/gateway-syn
 import { GatewayGroupIntentRepository } from '../../src/modules/gateway/gateway-group-intent.repository';
 import { GatewaySyncRateLimitRepository } from '../../src/modules/gateway/gateway-sync-rate-limit.repository';
 import { GatewaySyncMode } from '../../src/contracts/sessions/sync-request.dto';
+import { ContactRepository } from '../../src/modules/contacts/contact.repository';
 import {
   INTEGRATION_GROUP_ID,
   INTEGRATION_SESSION_ID,
@@ -34,7 +35,7 @@ describe('gateway sync recovery', () => {
   beforeAll(() => {
     pool = integrationPool();
     database = new DatabaseService();
-    gateway = new GatewayRepository(database);
+    gateway = new GatewayRepository(database, new ContactRepository());
     items = new GatewaySyncItemRepository(database);
     groupIntents = new GatewayGroupIntentRepository(database);
   });
@@ -565,6 +566,48 @@ describe('gateway sync recovery', () => {
       .toBe(before.rows.find(row => row.participant_id === extra.id)?.ctid);
     expect(after.rows.find(row => row.participant_id === detail.participants[0]!.id)?.display_name)
       .toBe('Changed member');
+  });
+
+  it('links every synchronized member to a session-scoped observed contact without treating a LID as phone', async () => {
+    const session = await new OpenWAClient().getSession(INTEGRATION_SESSION_ID);
+    await gateway.upsertSession(session);
+    const group = {
+      id: INTEGRATION_GROUP_ID,
+      name: 'Identity coverage',
+      participants: [
+        { id: 'opaque-lid@lid', number: 'opaque-lid', name: null, isAdmin: false, isSuperAdmin: false },
+        { id: '628111@s.whatsapp.net', number: '628111', name: 'Named', isAdmin: false, isSuperAdmin: false },
+      ],
+    };
+    await gateway.upsertGroupDetails(INTEGRATION_SESSION_ID, group);
+
+    const linked = await pool.query<{ participant_id: string; contact_id: string | null }>(
+      `SELECT participant_id, contact_id FROM group_members
+       WHERE session_id = $1 AND group_id = $2 ORDER BY participant_id`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+    expect(linked.rows).toHaveLength(2);
+    expect(linked.rows.every(row => row.contact_id !== null)).toBe(true);
+    const identifiers = await pool.query<{ identity_type: string; identity_value: string }>(
+      `SELECT identity_type, identity_value FROM contact_identifiers
+       WHERE session_id = $1 ORDER BY identity_type, identity_value`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(identifiers.rows).toEqual([
+      { identity_type: 'LID', identity_value: 'opaque-lid@lid' },
+      { identity_type: 'PHONE', identity_value: '628111' },
+      { identity_type: 'PHONE_JID', identity_value: '628111@c.us' },
+    ]);
+
+    const otherSession = '00000000-0000-4000-8000-000000000002';
+    await gateway.upsertSession({ ...session, id: otherSession, name: 'Other session' });
+    await gateway.upsertGroupDetails(otherSession, group);
+    const perSession = await pool.query<{ session_id: string; contact_id: string }>(
+      `SELECT session_id, contact_id FROM contact_identifiers
+       WHERE identity_type = 'LID' AND identity_value = 'opaque-lid@lid' ORDER BY session_id`,
+    );
+    expect(perSession.rows).toHaveLength(2);
+    expect(perSession.rows[0]?.contact_id).not.toBe(perSession.rows[1]?.contact_id);
   });
 
   it('allows only one in-flight group-detail request per session', async () => {

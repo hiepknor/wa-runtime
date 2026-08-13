@@ -12,9 +12,10 @@ import { GatewaySyncProcessorService } from './gateway-sync-processor.service';
 import { GatewaySyncItemRepository } from './gateway-sync-item.repository';
 import { GatewayGroupIntentRepository } from './gateway-group-intent.repository';
 import { GatewaySyncRateLimitRepository } from './gateway-sync-rate-limit.repository';
+import { ContactsModule } from '../contacts/contacts.module';
 
 @Module({
-  imports: [OpenWAModule],
+  imports: [OpenWAModule, ContactsModule],
   controllers: [SessionController, GroupController],
   providers: [GatewayRepository, GatewaySyncRateLimitRepository, GatewaySyncItemRepository, GatewayGroupIntentRepository, GatewaySyncService, GatewaySyncProcessorService, SessionService, GroupService, SessionStateCacheService, SessionScopeService],
   exports: [GatewayRepository, GatewaySyncRateLimitRepository, GatewaySyncItemRepository, GatewayGroupIntentRepository, GatewaySyncService, GatewaySyncProcessorService, SessionStateCacheService, SessionScopeService],

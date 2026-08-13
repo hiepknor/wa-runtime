@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DatabaseService } from '../../src/core/database/database.service';
 import { GatewayRepository } from '../../src/modules/gateway/gateway.repository';
+import { ContactRepository } from '../../src/modules/contacts/contact.repository';
 
 describe('GatewayRepository.listMembers', () => {
   it('applies filtering, ordering, limit, and offset in database queries', async () => {
@@ -12,7 +13,7 @@ describe('GatewayRepository.listMembers', () => {
       }] })
       .mockResolvedValueOnce({ rows: [{ count: '1' }] });
     const transaction = vi.fn(async operation => operation({ query: clientQuery }));
-    const repository = new GatewayRepository({ transaction } as unknown as DatabaseService);
+    const repository = new GatewayRepository({ transaction } as unknown as DatabaseService, new ContactRepository());
 
     const result = await repository.listMembers('session-id', 'group-id', 25, 50, '  100%_match  ');
 

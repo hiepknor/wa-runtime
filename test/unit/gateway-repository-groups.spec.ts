@@ -5,6 +5,7 @@ import {
 } from '../../src/contracts/groups/group-query.dto';
 import type { DatabaseService } from '../../src/core/database/database.service';
 import { GatewayRepository } from '../../src/modules/gateway/gateway.repository';
+import { ContactRepository } from '../../src/modules/contacts/contact.repository';
 
 describe('GatewayRepository.listGroups', () => {
   it('applies search, filters, deterministic pagination, and count in database queries', async () => {
@@ -13,7 +14,7 @@ describe('GatewayRepository.listGroups', () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [{ count: '0' }] });
     const transaction = vi.fn(async operation => operation({ query: clientQuery }));
-    const repository = new GatewayRepository({ transaction } as unknown as DatabaseService);
+    const repository = new GatewayRepository({ transaction } as unknown as DatabaseService, new ContactRepository());
 
     const result = await repository.listGroups({
       sessionId: 'session-id', limit: 20, offset: 40, query: '  100%_match  ',

@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import { DatabaseService } from '../../src/core/database/database.service';
 import { CampaignRunRepository } from '../../src/modules/campaigns/campaign-run.repository';
 import { GatewayRepository } from '../../src/modules/gateway/gateway.repository';
+import { ContactRepository } from '../../src/modules/contacts/contact.repository';
 import { MessageJobRepository } from '../../src/modules/messages/message-job.repository';
 import {
   INTEGRATION_GROUP_ID,
@@ -21,7 +22,7 @@ describe('durable attempt fencing', () => {
   beforeAll(() => {
     pool = integrationPool();
     database = new DatabaseService();
-    gateway = new GatewayRepository(database);
+    gateway = new GatewayRepository(database, new ContactRepository());
     campaigns = new CampaignRunRepository(database, new MessageJobRepository(database));
   });
   beforeEach(async () => {

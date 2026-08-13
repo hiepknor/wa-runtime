@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import { DatabaseService } from '../../src/core/database/database.service';
 import { OpenWAClient, OpenWAHttpError } from '../../src/integrations/openwa/openwa.client';
 import { GatewayRepository } from '../../src/modules/gateway/gateway.repository';
+import { ContactRepository } from '../../src/modules/contacts/contact.repository';
 import { SessionScopeService } from '../../src/modules/gateway/session-scope.service';
 import { messageRequestHash } from '../../src/modules/messages/message-idempotency';
 import { MessageJobProcessorService } from '../../src/modules/messages/message-job-processor.service';
@@ -93,7 +94,7 @@ describe('message durability and delivery', () => {
   it('sends through fake OpenWA and persists ACCEPTED with the upstream message ID', async () => {
     const created = await create('accepted-send', 'integration-success', false);
     await messages.claimDue(10);
-    const gateway = new GatewayRepository(database);
+    const gateway = new GatewayRepository(database, new ContactRepository());
     const processor = new MessageJobProcessorService(
       database, messages,
       new MessageSendPolicyService(gateway, new SessionScopeService()),
@@ -109,7 +110,7 @@ describe('message durability and delivery', () => {
   it('records a proven 403 failure and invalidates group capability', async () => {
     const created = await create('denied-send', 'simulate-403', false);
     await messages.claimDue(10);
-    const gateway = new GatewayRepository(database);
+    const gateway = new GatewayRepository(database, new ContactRepository());
     const processor = new MessageJobProcessorService(
       database, messages,
       new MessageSendPolicyService(gateway, new SessionScopeService()),
@@ -126,7 +127,7 @@ describe('message durability and delivery', () => {
   it('records a proven 404 failure and marks the group as changed', async () => {
     const created = await create('missing-group-send', 'simulate-404', false);
     await messages.claimDue(10);
-    const gateway = new GatewayRepository(database);
+    const gateway = new GatewayRepository(database, new ContactRepository());
     const processor = new MessageJobProcessorService(
       database, messages,
       new MessageSendPolicyService(gateway, new SessionScopeService()),
@@ -143,7 +144,7 @@ describe('message durability and delivery', () => {
   it('records UNKNOWN when the connection drops after the upstream request starts', async () => {
     const created = await create('ambiguous-send', 'simulate-network-drop', false);
     await messages.claimDue(10);
-    const gateway = new GatewayRepository(database);
+    const gateway = new GatewayRepository(database, new ContactRepository());
     const processor = new MessageJobProcessorService(
       database, messages,
       new MessageSendPolicyService(gateway, new SessionScopeService()),

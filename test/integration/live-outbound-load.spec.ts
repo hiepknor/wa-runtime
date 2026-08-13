@@ -4,6 +4,7 @@ import { DatabaseService } from '../../src/core/database/database.service';
 import { runtimeConfig } from '../../src/core/config/runtime-config';
 import { OpenWAClient } from '../../src/integrations/openwa/openwa.client';
 import { GatewayRepository } from '../../src/modules/gateway/gateway.repository';
+import { ContactRepository } from '../../src/modules/contacts/contact.repository';
 import { SessionScopeService } from '../../src/modules/gateway/session-scope.service';
 import { messageRequestHash } from '../../src/modules/messages/message-idempotency';
 import { MessageJobProcessorService } from '../../src/modules/messages/message-job-processor.service';
@@ -67,7 +68,7 @@ describe('live outbound load', () => {
 
       const processors = databases.map(database => {
         const processorMessages = new MessageJobRepository(database);
-        const gateway = new GatewayRepository(database);
+        const gateway = new GatewayRepository(database, new ContactRepository());
         return new MessageJobProcessorService(
           database,
           processorMessages,

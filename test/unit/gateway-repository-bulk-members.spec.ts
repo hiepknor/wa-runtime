@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { DatabaseService } from '../../src/core/database/database.service';
 import type { OpenWAGroup } from '../../src/integrations/openwa/openwa.client';
 import { GatewayRepository } from '../../src/modules/gateway/gateway.repository';
+import { ContactRepository } from '../../src/modules/contacts/contact.repository';
 
 describe('GatewayRepository bulk member replacement', () => {
   it('upserts a full summary page with one database insert', async () => {
@@ -16,7 +17,7 @@ describe('GatewayRepository bulk member replacement', () => {
       isAdmin: index % 2 === 0,
     }));
 
-    await new GatewayRepository(database).replaceGroupSummaries('session-1', groups, {
+    await new GatewayRepository(database, new ContactRepository()).replaceGroupSummaries('session-1', groups, {
       syncRunId: '00000000-0000-4000-8000-000000000001',
       leaseToken: '00000000-0000-4000-8000-000000000002',
       syncEpoch: '1',
@@ -50,7 +51,7 @@ describe('GatewayRepository bulk member replacement', () => {
       })),
     };
 
-    await expect(new GatewayRepository(database).upsertGroupDetails('session-1', group))
+    await expect(new GatewayRepository(database, new ContactRepository()).upsertGroupDetails('session-1', group))
       .resolves.toEqual({ members: 1000, applied: true });
 
     const memberInserts = query.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO group_members'));
@@ -59,6 +60,9 @@ describe('GatewayRepository bulk member replacement', () => {
     expect(memberInserts[0]?.[0]).toContain('ON CONFLICT');
     expect(memberInserts[0]?.[0]).toContain('IS DISTINCT FROM');
     expect(memberInserts[0]?.[1][2]).toHaveLength(1000);
-    expect(query).toHaveBeenCalledTimes(4);
+    const contactBatches = query.mock.calls.filter(([sql]) => String(sql).includes('jsonb_to_recordset'));
+    expect(contactBatches).toHaveLength(4);
+    expect(contactBatches.every(call => JSON.parse(String(call[1][2])).length === 1000)).toBe(true);
+    expect(query).toHaveBeenCalledTimes(9);
   });
 });

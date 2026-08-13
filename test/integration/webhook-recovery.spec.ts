@@ -6,6 +6,7 @@ import type { MessageJobRepository } from '../../src/modules/messages/message-jo
 import { RuntimeEventRepository } from '../../src/modules/webhooks/runtime-event.repository';
 import { GatewayGroupIntentRepository } from '../../src/modules/gateway/gateway-group-intent.repository';
 import { GatewayRepository } from '../../src/modules/gateway/gateway.repository';
+import { ContactRepository } from '../../src/modules/contacts/contact.repository';
 import { GatewaySyncItemRepository } from '../../src/modules/gateway/gateway-sync-item.repository';
 import { GatewaySyncService } from '../../src/modules/gateway/gateway-sync.service';
 import type { OpenWAClient } from '../../src/integrations/openwa/openwa.client';
@@ -181,7 +182,7 @@ describe('durable webhook processing', () => {
       }),
     } as unknown as OpenWAClient;
     const sync = new GatewaySyncService(
-      new GatewayRepository(database), new GatewaySyncItemRepository(database), openwa, intents,
+      new GatewayRepository(database, new ContactRepository()), new GatewaySyncItemRepository(database), openwa, intents,
     );
     await expect(sync.reconcileTargetedGroup(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID))
       .resolves.toMatchObject({ members: 0 });
@@ -220,7 +221,7 @@ describe('durable webhook processing', () => {
       }),
     } as unknown as OpenWAClient;
     const sync = new GatewaySyncService(
-      new GatewayRepository(database), new GatewaySyncItemRepository(database), openwa, intents,
+      new GatewayRepository(database, new ContactRepository()), new GatewaySyncItemRepository(database), openwa, intents,
     );
     const first = sync.reconcileTargetedGroup(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID);
     await upstreamStarted;

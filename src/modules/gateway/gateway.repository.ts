@@ -16,6 +16,7 @@ import {
 import { evaluateGroupCapability, type GroupSendCapabilityReason, type GroupSendCapabilityStatus } from './group-capability';
 import type { GroupIntentWriteFence, SyncItemWriteFence } from './gateway-sync-item.types';
 import { GatewaySyncModeConflictError } from './gateway-sync.types';
+import { ContactRepository } from '../contacts/contact.repository';
 
 interface SessionRow {
   id: string;
@@ -223,7 +224,10 @@ const mapSyncRun = (row: SyncRunRow): SyncRunDto => ({
 
 @Injectable()
 export class GatewayRepository {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly contacts: ContactRepository,
+  ) {}
 
   async upsertSession(session: OpenWASession, syncFence?: SyncWriteFence): Promise<SessionDto> {
     const sql = `INSERT INTO gateway_sessions
@@ -413,19 +417,27 @@ export class GatewayRepository {
       if (membersChanged && group.participants.length > 0) {
         await client.query(
           `INSERT INTO group_members AS existing
-             (session_id, group_id, participant_id, phone_number, display_name, is_admin, is_super_admin)
-           SELECT $1, $2, participant_id, phone_number, display_name, is_admin, is_super_admin
+             (session_id, group_id, participant_id, phone_number, display_name,
+              participant_display_name, display_name_source, display_name_updated_at,
+              is_admin, is_super_admin)
+           SELECT $1, $2, participant_id, phone_number, participant_display_name,
+             participant_display_name,
+             CASE WHEN participant_display_name IS NULL THEN NULL ELSE 'GROUP_PARTICIPANT_NAME' END,
+             CASE WHEN participant_display_name IS NULL THEN NULL ELSE now() END,
+             is_admin, is_super_admin
            FROM unnest($3::text[], $4::text[], $5::text[], $6::boolean[], $7::boolean[])
-             AS participant(participant_id, phone_number, display_name, is_admin, is_super_admin)
+             AS participant(participant_id, phone_number, participant_display_name, is_admin, is_super_admin)
            ON CONFLICT (session_id, group_id, participant_id) DO UPDATE SET
              phone_number = EXCLUDED.phone_number,
-             display_name = EXCLUDED.display_name,
+             participant_display_name = EXCLUDED.participant_display_name,
              is_admin = EXCLUDED.is_admin,
              is_super_admin = EXCLUDED.is_super_admin,
              synced_at = now(), updated_at = now()
-           WHERE (existing.phone_number, existing.display_name, existing.is_admin, existing.is_super_admin)
+           WHERE (existing.phone_number, existing.participant_display_name,
+                  existing.is_admin, existing.is_super_admin)
              IS DISTINCT FROM
-             (EXCLUDED.phone_number, EXCLUDED.display_name, EXCLUDED.is_admin, EXCLUDED.is_super_admin)`,
+             (EXCLUDED.phone_number, EXCLUDED.participant_display_name,
+              EXCLUDED.is_admin, EXCLUDED.is_super_admin)`,
           [
             sessionId,
             group.id,
@@ -436,6 +448,7 @@ export class GatewayRepository {
             group.participants.map(participant => participant.isSuperAdmin),
           ],
         );
+        await this.contacts.seedGroupMembers(client, sessionId, group.id, group.participants);
       }
       if (membersChanged) {
         await client.query(
