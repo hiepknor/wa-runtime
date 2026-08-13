@@ -12,9 +12,10 @@ import { MessageDispatchTick } from './message-dispatch.tick';
 import { SchedulerRunnerService } from './scheduler-runner.service';
 import { WebhookDispatchTick } from './webhook-dispatch.tick';
 import { GatewayWorkListenerService } from './gateway-work-listener.service';
+import { ContactsModule } from '../contacts/contacts.module';
 
 @Module({
-  imports: [DatabaseModule, QueueModule, MessagesModule, WebhooksModule, GatewayModule, CampaignsModule],
+  imports: [DatabaseModule, QueueModule, MessagesModule, WebhooksModule, GatewayModule, CampaignsModule, ContactsModule],
   providers: [
     MessageDispatchTick,
     WebhookDispatchTick,

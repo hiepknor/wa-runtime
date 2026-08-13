@@ -10,6 +10,7 @@ import { IsolatedSchedulerTick } from './isolated-scheduler-tick';
 import { MessageDispatchTick } from './message-dispatch.tick';
 import { WebhookDispatchTick } from './webhook-dispatch.tick';
 import { GatewayWorkListenerService } from './gateway-work-listener.service';
+import { ContactPeriodicSyncTick } from '../contacts/contact-periodic-sync.tick';
 
 @Injectable()
 export class SchedulerRunnerService {
@@ -24,6 +25,7 @@ export class SchedulerRunnerService {
     private readonly retention: DataRetentionTick,
     private readonly queues: QueueService,
     private readonly gatewayListener: GatewayWorkListenerService,
+    private readonly contacts: ContactPeriodicSyncTick,
   ) {}
 
   async run(): Promise<void> {
@@ -41,6 +43,7 @@ export class SchedulerRunnerService {
         5 * 60_000,
         () => this.retention.run(),
       ),
+      this.tick('contacts', 300_000, 15 * 60_000, () => this.contacts.run()),
     ];
     let resolveStop: (() => void) | undefined;
     const stopped = new Promise<void>(resolve => { resolveStop = resolve; });

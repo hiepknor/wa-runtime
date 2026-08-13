@@ -297,6 +297,23 @@ that disappears during reconciliation is `SKIPPED` and does not fail the parent.
 model. Group reconciliation always seeds member identities. OpenWA contact snapshots remain disabled
 by default and can be enabled with `CONTACT_SNAPSHOT_SYNC_ENABLED=true` after migration 018 is applied.
 
+Identity evidence from an inbound message's bounded `contact.pushName` field is independently gated by
+`CONTACT_MESSAGE_ENRICHMENT_ENABLED`. Runtime extracts only sender identity and push name, then discards
+the upstream contact object; a contact write failure never retries or dead-letters the message webhook.
+This producer does not infer a phone from a LID and does not merge identities.
+
+Periodic contact-only refresh is independently gated by `CONTACT_PERIODIC_SYNC_ENABLED`. The scheduler
+checks due, ready, allowlisted sessions every five minutes and refreshes at most ten per tick. A successful
+refresh sets the next due time using `CONTACT_PERIODIC_SYNC_INTERVAL_MS` (24 hours by default); failures
+use bounded exponential backoff. PostgreSQL generation/lease fencing prevents a periodic refresh and a
+full-sync-triggered refresh from owning the same session concurrently. This job never lists groups or
+members from OpenWA.
+
+Snapshot completion logs only aggregate counters: observed/enriched/merged/conflicts and member coverage
+by identity type and name source. Do not add session IDs, raw names, phone numbers or WhatsApp identifiers
+to these events. Before enabling either producer, apply migrations 018–020. Disable its flag to roll back
+new writes while retaining already observed data.
+
 A full sync then streams OpenWA contacts in pages of at most 1,000 and materializes observed names
 without making contact availability a group-sync dependency. Incremental sync, targeted group
 reconciliation and capability refresh never request the contact collection. Snapshot absence is not

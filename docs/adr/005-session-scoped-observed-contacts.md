@@ -41,6 +41,7 @@ adding per-member upstream reads, read-time contact joins or cross-session ident
    contact, identifier or name. Retention or deletion requires a separately reviewed policy.
 8. Contact synchronization is enrichment. A contact read failure does not fail authoritative group
    reconciliation, and the previous successfully observed contact data remains usable.
+   Full-sync and periodic contact refreshes share a PostgreSQL generation/lease fence per session.
 9. The effective member display name is materialized in `group_members`. Member search, count,
    deterministic ordering and pagination remain database-side and do not join or fetch contacts on
    the request path.
@@ -52,6 +53,9 @@ adding per-member upstream reads, read-time contact joins or cross-session ident
 12. Public Contacts endpoints are deferred until the read model, merge behavior and observed-snapshot
     lifecycle pass staging. The existing group-member contract remains unchanged during the initial
     rollout.
+13. Inbound message `contact.pushName` may update `OPENWA_PUSH_NAME` behind an independent feature flag.
+    Runtime persists neither the raw webhook contact object nor message-derived identity links; failure
+    of this optional enrichment does not poison the durable message webhook.
 
 ## Data model
 

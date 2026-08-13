@@ -16,21 +16,24 @@ describe('ContactSyncService', () => {
       async *listContactPages() { for (const page of pages) yield page; },
     } as unknown as OpenWAClient;
     const repository = {
-      beginObservedSnapshot: vi.fn().mockResolvedValue(3),
+      beginObservedSnapshot: vi.fn().mockResolvedValue({ generation: 3, leaseToken: 'lease-3' }),
       ingestObservedPage: vi.fn()
         .mockResolvedValueOnce({ observed: 1, enriched: 2 })
         .mockResolvedValueOnce({ observed: 1, enriched: 0 }),
       reconcileObservedIdentities: vi.fn().mockResolvedValue({ enriched: 1, merged: 1, conflicts: 1 }),
       completeObservedSnapshot: vi.fn().mockResolvedValue(undefined),
+      getCoverageMetrics: vi.fn().mockResolvedValue({ member_records: 4, named_records: 3 }),
       failObservedSnapshot: vi.fn(),
     } as unknown as ContactRepository;
 
     await new ContactSyncService(repository, openwa).reconcileObservedContacts('session-1');
 
     expect(repository.ingestObservedPage).toHaveBeenCalledTimes(2);
-    expect(repository.ingestObservedPage).toHaveBeenNthCalledWith(1, 'session-1', 3, pages[0]);
-    expect(repository.reconcileObservedIdentities).toHaveBeenCalledWith('session-1', 3);
-    expect(repository.completeObservedSnapshot).toHaveBeenCalledWith('session-1', 3, 2);
+    expect(repository.ingestObservedPage).toHaveBeenNthCalledWith(1, 'session-1', 3, 'lease-3', pages[0]);
+    expect(repository.reconcileObservedIdentities).toHaveBeenCalledWith('session-1', 3, 'lease-3');
+    expect(repository.completeObservedSnapshot).toHaveBeenCalledWith(
+      'session-1', 3, 'lease-3', 2, 86_400_000,
+    );
     expect(repository.failObservedSnapshot).not.toHaveBeenCalled();
   });
 
@@ -39,12 +42,21 @@ describe('ContactSyncService', () => {
       async *listContactPages() { throw new Error('raw upstream details'); },
     } as unknown as OpenWAClient;
     const repository = {
-      beginObservedSnapshot: vi.fn().mockResolvedValue(4),
+      beginObservedSnapshot: vi.fn().mockResolvedValue({ generation: 4, leaseToken: 'lease-4' }),
       failObservedSnapshot: vi.fn().mockResolvedValue(undefined),
     } as unknown as ContactRepository;
 
     await expect(new ContactSyncService(repository, openwa).reconcileObservedContacts('session-1'))
       .rejects.toThrow('raw upstream details');
-    expect(repository.failObservedSnapshot).toHaveBeenCalledWith('session-1', 4, 'UPSTREAM_ERROR');
+    expect(repository.failObservedSnapshot).toHaveBeenCalledWith('session-1', 4, 'lease-4', 'UPSTREAM_ERROR');
+  });
+
+  it('does not call OpenWA when another snapshot owns the session lease', async () => {
+    const openwa = { listContactPages: vi.fn() } as unknown as OpenWAClient;
+    const repository = { beginObservedSnapshot: vi.fn().mockResolvedValue(null) } as unknown as ContactRepository;
+
+    await expect(new ContactSyncService(repository, openwa).reconcileObservedContacts('session-1', false))
+      .resolves.toBe(false);
+    expect(openwa.listContactPages).not.toHaveBeenCalled();
   });
 });

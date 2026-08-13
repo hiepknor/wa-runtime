@@ -24,20 +24,84 @@ const inputRelation = `jsonb_to_recordset($3::jsonb) AS member(
 export class ContactRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  async beginObservedSnapshot(sessionId: string): Promise<number> {
-    const result = await this.database.query<{ sync_generation: string }>(
-      `INSERT INTO contact_sync_state (session_id, sync_generation, last_started_at, last_error_code)
-       VALUES ($1, 1, now(), NULL)
-       ON CONFLICT (session_id) DO UPDATE SET
-         sync_generation = contact_sync_state.sync_generation + 1,
-         last_started_at = now(), last_error_code = NULL, updated_at = now()
-       RETURNING sync_generation`,
-      [sessionId],
+  async listPeriodicSessionIds(allowedSessionIds: string[], limit: number): Promise<string[]> {
+    const result = await this.database.query<{ id: string }>(
+      `SELECT session.id FROM gateway_sessions session
+       LEFT JOIN contact_sync_state state ON state.session_id = session.id
+       WHERE session.id = ANY($1::text[]) AND session.status = 'ready' AND session.engine_loaded = true
+         AND (state.session_id IS NULL OR state.next_attempt_at <= now())
+         AND (state.lease_token IS NULL OR state.lease_expires_at < now())
+       ORDER BY state.next_attempt_at NULLS FIRST, session.id LIMIT $2`,
+      [allowedSessionIds, limit],
     );
-    return Number(result.rows[0]!.sync_generation);
+    return result.rows.map(row => row.id);
   }
 
-  async ingestObservedPage(sessionId: string, generation: number, contacts: OpenWAContact[]): Promise<{
+  async getCoverageMetrics(sessionId: string): Promise<Record<string, number>> {
+    const result = await this.database.query<Record<string, string>>(
+      `SELECT
+         count(*)::text AS member_records,
+         count(*) FILTER (WHERE member.contact_id IS NOT NULL)::text AS linked_records,
+         count(*) FILTER (WHERE member.display_name IS NOT NULL)::text AS named_records,
+         count(*) FILTER (WHERE identifier.identity_type = 'LID')::text AS lid_records,
+         count(*) FILTER (WHERE identifier.identity_type = 'LID'
+           AND member.display_name IS NOT NULL)::text AS named_lid_records,
+         count(*) FILTER (WHERE identifier.identity_type = 'PHONE_JID')::text AS phone_jid_records,
+         count(*) FILTER (WHERE identifier.identity_type = 'PHONE_JID'
+           AND member.display_name IS NOT NULL)::text AS named_phone_jid_records,
+         count(*) FILTER (WHERE member.display_name_source = 'OPENWA_CONTACT_NAME')::text AS contact_name_records,
+         count(*) FILTER (WHERE member.display_name_source = 'GROUP_PARTICIPANT_NAME')::text AS participant_name_records,
+         count(*) FILTER (WHERE member.display_name_source = 'OPENWA_PUSH_NAME')::text AS push_name_records
+       FROM group_members member
+       LEFT JOIN contact_identifiers identifier
+         ON identifier.session_id = member.session_id AND identifier.contact_id = member.contact_id
+        AND identifier.identity_type = CASE
+          WHEN member.participant_id LIKE '%@lid' THEN 'LID'
+          WHEN member.participant_id LIKE '%@c.us' OR member.participant_id LIKE '%@s.whatsapp.net'
+            THEN 'PHONE_JID'
+          ELSE 'OTHER_JID'
+        END
+        AND identifier.identity_value = CASE
+          WHEN member.participant_id LIKE '%@s.whatsapp.net'
+            THEN regexp_replace(member.participant_id, '@s\\.whatsapp\\.net$', '@c.us')
+          ELSE member.participant_id
+        END
+       WHERE member.session_id = $1`,
+      [sessionId],
+    );
+    return Object.fromEntries(
+      Object.entries(result.rows[0] ?? {}).map(([key, value]) => [key, Number(value)]),
+    );
+  }
+
+  async beginObservedSnapshot(sessionId: string, force = true): Promise<{
+    generation: number;
+    leaseToken: string;
+  } | null> {
+    const result = await this.database.query<{ sync_generation: string; lease_token: string }>(
+      `INSERT INTO contact_sync_state
+         (session_id, sync_generation, last_started_at, last_error_code, lease_token, lease_expires_at)
+       VALUES ($1, 1, now(), NULL, gen_random_uuid(), now() + interval '10 minutes')
+       ON CONFLICT (session_id) DO UPDATE SET
+         sync_generation = contact_sync_state.sync_generation + 1,
+         last_started_at = now(), last_error_code = NULL,
+         attempt_count = contact_sync_state.attempt_count + 1,
+         lease_token = gen_random_uuid(), lease_expires_at = now() + interval '10 minutes', updated_at = now()
+       WHERE (contact_sync_state.lease_token IS NULL OR contact_sync_state.lease_expires_at < now())
+         AND ($2 OR contact_sync_state.next_attempt_at <= now())
+       RETURNING sync_generation, lease_token`,
+      [sessionId, force],
+    );
+    const row = result.rows[0];
+    return row ? { generation: Number(row.sync_generation), leaseToken: row.lease_token } : null;
+  }
+
+  async ingestObservedPage(
+    sessionId: string,
+    generation: number,
+    leaseToken: string,
+    contacts: OpenWAContact[],
+  ): Promise<{
     observed: number;
     enriched: number;
   }> {
@@ -62,6 +126,13 @@ export class ContactRepository {
     });
     return this.database.transaction(async client => {
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [sessionId]);
+      const ownership = await client.query(
+        `UPDATE contact_sync_state SET lease_expires_at = now() + interval '10 minutes', updated_at = now()
+         WHERE session_id = $1 AND sync_generation = $2 AND lease_token = $3
+           AND lease_expires_at > now()`,
+        [sessionId, generation, leaseToken],
+      );
+      if (ownership.rowCount !== 1) throw new Error('Contact snapshot lost write ownership');
       const pageJson = JSON.stringify(rows);
       const pageRelation = `jsonb_to_recordset($2::jsonb) AS contact(
         identity_type text, identity_value text, phone text, contact_name text,
@@ -217,9 +288,17 @@ export class ContactRepository {
   async reconcileObservedIdentities(
     sessionId: string,
     generation: number,
+    leaseToken: string,
   ): Promise<{ merged: number; conflicts: number; enriched: number }> {
     return this.database.transaction(async client => {
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [sessionId]);
+      const ownership = await client.query(
+        `UPDATE contact_sync_state SET lease_expires_at = now() + interval '10 minutes', updated_at = now()
+         WHERE session_id = $1 AND sync_generation = $2 AND lease_token = $3
+           AND lease_expires_at > now()`,
+        [sessionId, generation, leaseToken],
+      );
+      if (ownership.rowCount !== 1) throw new Error('Contact snapshot lost write ownership');
       await client.query(
         `CREATE TEMP TABLE contact_merge_plan ON COMMIT DROP AS
          WITH RECURSIVE phone_cardinality AS MATERIALIZED (
@@ -385,23 +464,34 @@ export class ContactRepository {
     });
   }
 
-  async completeObservedSnapshot(sessionId: string, generation: number, records: number): Promise<void> {
-    await this.database.query(
+  async completeObservedSnapshot(
+    sessionId: string,
+    generation: number,
+    leaseToken: string,
+    records: number,
+    intervalMs: number,
+  ): Promise<void> {
+    const result = await this.database.query(
       `UPDATE contact_sync_state SET last_completed_at = now(), last_successful_record_count = $3,
-         last_error_code = NULL, updated_at = now()
-       WHERE session_id = $1 AND sync_generation = $2`,
-      [sessionId, generation, records],
+         last_error_code = NULL, attempt_count = 0,
+         next_attempt_at = now() + $5 * interval '1 millisecond',
+         lease_token = NULL, lease_expires_at = NULL, updated_at = now()
+       WHERE session_id = $1 AND sync_generation = $2 AND lease_token = $4`,
+      [sessionId, generation, records, leaseToken, intervalMs],
     );
+    if (result.rowCount !== 1) throw new Error('Contact snapshot lost write ownership');
   }
 
-  async failObservedSnapshot(sessionId: string, generation: number, code: string): Promise<void> {
+  async failObservedSnapshot(sessionId: string, generation: number, leaseToken: string, code: string): Promise<void> {
     await this.database.query(
       `WITH evidence_cleanup AS (
          DELETE FROM contact_identity_evidence WHERE session_id = $1 AND sync_generation = $2
        )
-       UPDATE contact_sync_state SET last_error_code = $3, updated_at = now()
-       WHERE session_id = $1 AND sync_generation = $2`,
-      [sessionId, generation, code],
+       UPDATE contact_sync_state SET last_error_code = $4,
+         next_attempt_at = now() + LEAST(3600, 60 * power(2, LEAST(attempt_count, 6))) * interval '1 second',
+         lease_token = NULL, lease_expires_at = NULL, updated_at = now()
+       WHERE session_id = $1 AND sync_generation = $2 AND lease_token = $3`,
+      [sessionId, generation, leaseToken, code],
     );
   }
 

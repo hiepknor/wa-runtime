@@ -622,8 +622,8 @@ describe('gateway sync recovery', () => {
         isAdmin: false, isSuperAdmin: false,
       }],
     });
-    const generation = await contacts.beginObservedSnapshot(INTEGRATION_SESSION_ID);
-    await expect(contacts.ingestObservedPage(INTEGRATION_SESSION_ID, generation, [
+    const claim = (await contacts.beginObservedSnapshot(INTEGRATION_SESSION_ID))!;
+    await expect(contacts.ingestObservedPage(INTEGRATION_SESSION_ID, claim.generation, claim.leaseToken, [
       {
         id: '628222@c.us', number: '628222', name: 'Contact name', pushName: 'Push name',
         isMyContact: true, isBlocked: false,
@@ -633,7 +633,9 @@ describe('gateway sync recovery', () => {
         isMyContact: true, isBlocked: false,
       },
     ])).resolves.toMatchObject({ observed: 2, enriched: 1 });
-    await contacts.completeObservedSnapshot(INTEGRATION_SESSION_ID, generation, 2);
+    await contacts.completeObservedSnapshot(
+      INTEGRATION_SESSION_ID, claim.generation, claim.leaseToken, 2, 86_400_000,
+    );
 
     const member = await pool.query<{ display_name: string; display_name_source: string }>(
       `SELECT display_name, display_name_source FROM group_members
@@ -664,12 +666,12 @@ describe('gateway sync recovery', () => {
       ],
     });
 
-    const generation = await contacts.beginObservedSnapshot(INTEGRATION_SESSION_ID);
-    await expect(contacts.ingestObservedPage(INTEGRATION_SESSION_ID, generation, [{
+    const claim = (await contacts.beginObservedSnapshot(INTEGRATION_SESSION_ID))!;
+    await expect(contacts.ingestObservedPage(INTEGRATION_SESSION_ID, claim.generation, claim.leaseToken, [{
       id: 'linked@lid', number: '628333', name: 'Authoritative contact', pushName: null,
       isMyContact: true, isBlocked: false,
     }])).resolves.toMatchObject({ observed: 1, enriched: 1 });
-    await expect(contacts.reconcileObservedIdentities(INTEGRATION_SESSION_ID, generation))
+    await expect(contacts.reconcileObservedIdentities(INTEGRATION_SESSION_ID, claim.generation, claim.leaseToken))
       .resolves.toMatchObject({ enriched: 1, merged: 1, conflicts: 0 });
 
     const identifiers = await pool.query<{ identity_type: string; contact_id: string }>(
@@ -704,16 +706,16 @@ describe('gateway sync recovery', () => {
       ],
     });
 
-    const generation = await contacts.beginObservedSnapshot(INTEGRATION_SESSION_ID);
-    await expect(contacts.ingestObservedPage(INTEGRATION_SESSION_ID, generation, [{
+    const claim = (await contacts.beginObservedSnapshot(INTEGRATION_SESSION_ID))!;
+    await expect(contacts.ingestObservedPage(INTEGRATION_SESSION_ID, claim.generation, claim.leaseToken, [{
       id: 'first@lid', number: '628444', name: 'First', pushName: null,
       isMyContact: true, isBlocked: false,
     }])).resolves.toMatchObject({ observed: 1, enriched: 1 });
-    await expect(contacts.ingestObservedPage(INTEGRATION_SESSION_ID, generation, [{
+    await expect(contacts.ingestObservedPage(INTEGRATION_SESSION_ID, claim.generation, claim.leaseToken, [{
       id: 'second@lid', number: '628444', name: 'Second', pushName: null,
       isMyContact: true, isBlocked: false,
     }])).resolves.toMatchObject({ observed: 1, enriched: 1 });
-    await expect(contacts.reconcileObservedIdentities(INTEGRATION_SESSION_ID, generation))
+    await expect(contacts.reconcileObservedIdentities(INTEGRATION_SESSION_ID, claim.generation, claim.leaseToken))
       .resolves.toMatchObject({ enriched: 0, merged: 0, conflicts: 2 });
 
     const identities = await pool.query<{ contact_id: string }>(
@@ -722,6 +724,34 @@ describe('gateway sync recovery', () => {
       [INTEGRATION_SESSION_ID],
     );
     expect(identities.rows).toHaveLength(3);
+  });
+
+  it('fences concurrent and stale contact snapshot attempts per session', async () => {
+    const contacts = new ContactRepository(database);
+    const session = await new OpenWAClient().getSession(INTEGRATION_SESSION_ID);
+    await gateway.upsertSession(session);
+    const first = await contacts.beginObservedSnapshot(INTEGRATION_SESSION_ID);
+    expect(first).not.toBeNull();
+    await expect(contacts.beginObservedSnapshot(INTEGRATION_SESSION_ID)).resolves.toBeNull();
+    await pool.query(
+      `UPDATE contact_sync_state SET lease_expires_at = now() - interval '1 second' WHERE session_id = $1`,
+      [INTEGRATION_SESSION_ID],
+    );
+    const current = await contacts.beginObservedSnapshot(INTEGRATION_SESSION_ID);
+    expect(current?.generation).toBe(first!.generation + 1);
+
+    await expect(contacts.ingestObservedPage(
+      INTEGRATION_SESSION_ID,
+      first!.generation,
+      first!.leaseToken,
+      [{
+        id: 'stale@lid', number: 'stale', name: null, pushName: null,
+        isMyContact: false, isBlocked: false,
+      }],
+    )).rejects.toThrow('lost write ownership');
+    await contacts.failObservedSnapshot(
+      INTEGRATION_SESSION_ID, current!.generation, current!.leaseToken, 'UPSTREAM_ERROR',
+    );
   });
 
   it('allows only one in-flight group-detail request per session', async () => {
