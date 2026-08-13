@@ -39,7 +39,7 @@ revisions. Notification wake-up was enabled only after this polling-path check p
 | Twenty-event burst | Requested revision advanced by 20, `coalesced_count=19`, one attempt, terminal `COMPLETED` | PASS |
 | Duplicate delivery | First request reported `duplicate=false`; replay reported `duplicate=true` and did not advance revision | PASS |
 | Polling fallback | With notification wake-up disabled, the intent completed in about 7.2 seconds with a 10-second poll interval | PASS |
-| Notification fast wake | One isolated sample started the gateway tick 984 ms after `NOTIFY` | PRELIMINARY |
+| Notification fast wake | Twenty identity-free samples ranged from 136–302 ms; nearest-rank p95 was 278 ms | PASS |
 | Listener loss | Terminating only the dedicated LISTEN backend changed PID and reconnected in about 520 ms | PASS |
 | Redis and worker restart | A durable webhook survived Redis/worker unavailability and converged to revision 24 in one intent attempt | PASS |
 | Redis error handling | After the follow-up fix, a Redis restart produced zero `Unhandled error event` lines and only structured `redis.connection.error` warnings | PASS |
@@ -61,8 +61,6 @@ not contain session, group or member identities.
 The staging gate is **PENDING**, not PASS. The following ADR 004 evidence still requires an
 observation window or an additional isolated staging fixture:
 
-- collect enough idle notification samples to calculate `notify-to-dispatch p95`, rather than
-  treating the single 984 ms sample as p95;
 - observe fixed-rate targeted reconciliation for 24–72 hours before enabling adaptive pacing;
 - exercise sustained upstream 429 responses and verify persisted multiplicative decrease and
   recovery without generating avoidable load against production OpenWA;
