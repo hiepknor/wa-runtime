@@ -238,14 +238,21 @@ compatibility; operator clients should send `INCREMENTAL` for routine synchroniz
 
 Discovery publishes group summaries first. The run then remains `RUNNING` in phase `RECONCILING`
 while PostgreSQL-owned `gateway_sync_items` update `groupsSynced`, `groupsFailed`, `groupsSkipped`
-and `membersSynced`. Do not submit another run when one is active: the endpoint returns the existing
-run rather than creating duplicate work.
+and `membersSynced`. `membersSynced` means members observed in successfully reconciled snapshots,
+not rows changed. A duplicate request with the same mode returns the active run; a different mode
+returns HTTP 409 rather than silently changing operator intent.
 
 Group-detail calls share a session-scoped pacing lease with targeted capability refreshes. Initial
 defaults are 40 calls per minute, five durable attempts and a 24-hour incremental freshness window.
 Tune `GATEWAY_SYNC_GROUPS_PER_MINUTE` only from staging evidence. A sustained OpenWA 5xx sequence can
 represent an underlying WhatsApp `rate-overlimit`; increasing worker concurrency or adapter retries
 amplifies it.
+
+An established session also guards destructive discovery changes. With the default configuration,
+a snapshot below 25 percent of a baseline of at least 20 groups must be observed identically twice
+before Runtime marks missing groups inactive. The first observation leaves the read model unchanged
+and retries discovery durably. Only 429, upstream 5xx and network failures extend the shared session
+cooldown; validation and persistence errors retain independent item retry semantics.
 
 Useful database inspection queries:
 
