@@ -530,6 +530,43 @@ describe('gateway sync recovery', () => {
     expect(after.rows).toEqual(before.rows);
   });
 
+  it('updates only changed members when a collection fingerprint changes', async () => {
+    const openwa = new OpenWAClient();
+    await gateway.upsertSession(await openwa.getSession(INTEGRATION_SESSION_ID));
+    const detail = await openwa.getGroup(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID);
+    const extra = {
+      id: 'extra-participant', number: '84970000001', name: 'Stable member',
+      isAdmin: false, isSuperAdmin: false,
+    };
+    await gateway.upsertGroupDetails(INTEGRATION_SESSION_ID, {
+      ...detail, participants: [...detail.participants, extra],
+    });
+    const before = await pool.query<{ participant_id: string; ctid: string }>(
+      `SELECT participant_id, ctid::text FROM group_members
+       WHERE session_id = $1 AND group_id = $2 ORDER BY participant_id`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+
+    await gateway.upsertGroupDetails(INTEGRATION_SESSION_ID, {
+      ...detail,
+      participants: [
+        { ...detail.participants[0]!, name: 'Changed member' },
+        extra,
+      ],
+    });
+    const after = await pool.query<{ participant_id: string; display_name: string | null; ctid: string }>(
+      `SELECT participant_id, display_name, ctid::text FROM group_members
+       WHERE session_id = $1 AND group_id = $2 ORDER BY participant_id`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+
+    expect(after).toMatchObject({ rowCount: 2 });
+    expect(after.rows.find(row => row.participant_id === extra.id)?.ctid)
+      .toBe(before.rows.find(row => row.participant_id === extra.id)?.ctid);
+    expect(after.rows.find(row => row.participant_id === detail.participants[0]!.id)?.display_name)
+      .toBe('Changed member');
+  });
+
   it('allows only one in-flight group-detail request per session', async () => {
     const session = await new OpenWAClient().getSession(INTEGRATION_SESSION_ID);
     const ids = ['paced-1@g.us', 'paced-2@g.us'];

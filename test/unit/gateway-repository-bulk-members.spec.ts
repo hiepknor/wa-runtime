@@ -32,8 +32,8 @@ describe('GatewayRepository bulk member replacement', () => {
     const query = vi.fn()
       .mockResolvedValueOnce({ rows: [{ details_fingerprint: null }] })
       .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1000 });
+      .mockResolvedValueOnce({ rows: [], rowCount: 1000 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
     const database = {
       transaction: <T>(operation: (client: { query: typeof query }) => Promise<T>) => operation({ query }),
     } as unknown as DatabaseService;
@@ -56,6 +56,8 @@ describe('GatewayRepository bulk member replacement', () => {
     const memberInserts = query.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO group_members'));
     expect(memberInserts).toHaveLength(1);
     expect(memberInserts[0]?.[0]).toContain('unnest');
+    expect(memberInserts[0]?.[0]).toContain('ON CONFLICT');
+    expect(memberInserts[0]?.[0]).toContain('IS DISTINCT FROM');
     expect(memberInserts[0]?.[1][2]).toHaveLength(1000);
     expect(query).toHaveBeenCalledTimes(4);
   });

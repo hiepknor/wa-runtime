@@ -410,16 +410,22 @@ export class GatewayRepository {
           group.ephemeralSeconds ?? null, group.memberAddMode ?? null, group.createdAt ?? null,
           fingerprint, memberFingerprint, capability.status, capability.reason],
       );
-      if (membersChanged) {
-        await client.query('DELETE FROM group_members WHERE session_id = $1 AND group_id = $2', [sessionId, group.id]);
-      }
       if (membersChanged && group.participants.length > 0) {
         await client.query(
-          `INSERT INTO group_members
+          `INSERT INTO group_members AS existing
              (session_id, group_id, participant_id, phone_number, display_name, is_admin, is_super_admin)
            SELECT $1, $2, participant_id, phone_number, display_name, is_admin, is_super_admin
            FROM unnest($3::text[], $4::text[], $5::text[], $6::boolean[], $7::boolean[])
-             AS participant(participant_id, phone_number, display_name, is_admin, is_super_admin)`,
+             AS participant(participant_id, phone_number, display_name, is_admin, is_super_admin)
+           ON CONFLICT (session_id, group_id, participant_id) DO UPDATE SET
+             phone_number = EXCLUDED.phone_number,
+             display_name = EXCLUDED.display_name,
+             is_admin = EXCLUDED.is_admin,
+             is_super_admin = EXCLUDED.is_super_admin,
+             synced_at = now(), updated_at = now()
+           WHERE (existing.phone_number, existing.display_name, existing.is_admin, existing.is_super_admin)
+             IS DISTINCT FROM
+             (EXCLUDED.phone_number, EXCLUDED.display_name, EXCLUDED.is_admin, EXCLUDED.is_super_admin)`,
           [
             sessionId,
             group.id,
@@ -429,6 +435,13 @@ export class GatewayRepository {
             group.participants.map(participant => participant.isAdmin),
             group.participants.map(participant => participant.isSuperAdmin),
           ],
+        );
+      }
+      if (membersChanged) {
+        await client.query(
+          `DELETE FROM group_members WHERE session_id = $1 AND group_id = $2
+             AND NOT (participant_id = ANY($3::text[]))`,
+          [sessionId, group.id, group.participants.map(participant => participant.id)],
         );
       }
       if (options.syncItemFence) {
