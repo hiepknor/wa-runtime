@@ -21,10 +21,8 @@ message contents or credentials.
 Scheduler ticks emit `scheduler.tick.completed`, `scheduler.tick.failed`,
 `scheduler.tick.timed_out`, `scheduler.tick.overlap_skipped` and
 `scheduler.tick.telemetry_failed`. Redis also retains the last known non-sensitive state under
-`wa-runtime:scheduler-tick:<name>` with timestamps, duration and consecutive-failure count. During
-the ADR 002 compatibility window, the same value is also written to the legacy
-`automation-runtime:scheduler-tick:<name>` key. The keys are diagnostic state, not work ownership or
-retry authority.
+`wa-runtime:scheduler-tick:<name>` with timestamps, duration and consecutive-failure count. The keys
+are diagnostic state, not work ownership or retry authority.
 
 Useful commands:
 

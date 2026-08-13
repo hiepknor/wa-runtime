@@ -76,7 +76,6 @@ services:
       wa-dev-network:
         aliases:
           - wa-runtime-api
-          - automation-api
     ports:
       - "127.0.0.1:3100:3100"
     healthcheck:
@@ -129,9 +128,9 @@ services:
 
 volumes:
   postgres-data:
-    name: ${WA_RUNTIME_POSTGRES_VOLUME:-wa-runtime_postgres-data}
+    name: wa-runtime_postgres-data
   redis-data:
-    name: ${WA_RUNTIME_REDIS_VOLUME:-wa-runtime_redis-data}
+    name: wa-runtime_redis-data
 
 networks:
   runtime-internal:

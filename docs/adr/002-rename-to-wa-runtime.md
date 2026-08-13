@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-12
 - Amended: 2026-08-13 — establish a fully normalized target namespace and bounded compatibility exit
+- Completed: 2026-08-13 — compatibility exit criteria accepted; legacy runtime identifiers removed
 - Owners: WA Runtime maintainers
 
 ## Context
@@ -51,26 +52,25 @@ change must still be regenerated and synchronized to WA Studio.
 | Docker Compose project and network names | Use `wa-runtime`; migrate existing installations in a backed-up maintenance window. |
 | Persistent volumes | Compose uses logical names `postgres-data` and `redis-data`, producing `wa-runtime_postgres-data` and `wa-runtime_redis-data`. Existing data is copied or explicitly reattached during a backed-up maintenance window; never rely on an implicit empty-volume replacement. |
 | Runtime PostgreSQL and Redis hostnames | Use the private aliases `wa-runtime-postgres` and `wa-runtime-redis`; generic aliases can collide with OpenWA services on the shared gateway network. |
-| Docker network alias | Use `wa-runtime-api`. Retain `automation-api` only for the bounded compatibility window described below. |
-| Redis heartbeat and scheduler telemetry | Use `wa-runtime:*`. Dual-write and legacy read fallback are temporary migration behavior and are removed after the compatibility exit criteria pass. |
+| Docker network alias | Use `wa-runtime-api`; no legacy alias remains. |
+| Redis heartbeat and scheduler telemetry | Use `wa-runtime:*`; no legacy write or read fallback remains. |
 | BullMQ queue names and stable job IDs | Keep unchanged so queued transport work survives rolling deployment. |
 | Filesystem deployment and backup paths | Use `/opt/wa-runtime` and `/var/backups/wa-runtime` for new installations; migrate existing paths operationally rather than from application code. |
 
 ## Compatibility window and exit criteria
 
-Compatibility exists to support a controlled transition and must not become the steady state.
-Legacy Redis writes, Redis read fallback and the `automation-api` network alias may be removed after:
+Compatibility existed to support a controlled transition and is not the steady state. Removal was
+approved after:
 
 1. every deployed API, scheduler and worker uses the `wa-runtime` namespace;
 2. WA Studio and every operational probe use `wa-runtime-api` or the public Runtime origin;
 3. no legacy Redis key or network-alias access is observed for one complete release window; and
 4. rollback no longer targets a release that requires the legacy identifiers.
 
-The PostgreSQL database/role and persistent-volume migration occurs in a maintenance window because
-those identifiers own durable state. The source volumes and a logical PostgreSQL backup are retained
-until readiness, data-count reconciliation, application smoke tests and one restore verification
-pass. After the retention period recorded in the migration runbook, legacy volumes may be archived
-or removed through an explicit operator action.
+The PostgreSQL database/role and persistent-volume migration occurred in a maintenance window
+because those identifiers own durable state. Readiness, data-count reconciliation, application
+smoke tests and backup verification passed before the legacy volumes were explicitly removed. The
+logical PostgreSQL backup remains retained outside Docker storage.
 
 Public API paths, DTO names, BullMQ queue names, stable job IDs and already-applied SQL migration
 files are protocol/history identifiers rather than product branding. They remain stable unless a
@@ -86,20 +86,15 @@ separate versioned migration is approved.
 5. For an existing installation, take a logical PostgreSQL backup, record row-count baselines, stop
    the old Compose project, and migrate its database/role and persistent volumes using the reviewed
    runbook before starting any service against the target storage.
-6. Deploy API, scheduler and workers together or roll them while temporary Redis dual writes remain
-   active.
-7. Verify readiness through both Redis namespaces, queue rediscovery, database row counts and
-   application-level smoke tests.
-8. Retain the stopped source volumes and backup until restore evidence and the documented retention
-   period pass.
-9. Remove Redis dual writes, legacy reads and `automation-api` only after the compatibility exit
-   criteria pass.
-10. Rename the Git repository and deployment directory, then update remotes and automation to use
+6. Deploy API, scheduler and workers together.
+7. Verify readiness, queue rediscovery, database row counts and application-level smoke tests.
+8. Retain and verify the logical backup according to the documented retention policy.
+9. Rename the Git repository and deployment directory, then update remotes and automation to use
     `wa-runtime` exclusively.
 
 ## Consequences
 
-Operational dashboards, log queries and deployment automation must move to `wa-runtime`. During the
-compatibility window duplicate ephemeral Redis heartbeat and scheduler-state keys are expected.
-Business data is not duplicated and public routes do not change. Existing installations require a
-separately reviewed storage migration; new installations start directly with clean WA Runtime names.
+Operational dashboards, log queries and deployment automation use `wa-runtime`. Runtime processes
+write only the new Redis namespace and expose only the new network alias. Business data is not
+duplicated and public routes do not change. Existing installations require a separately reviewed
+storage migration; new installations start directly with clean WA Runtime names.

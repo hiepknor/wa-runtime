@@ -1,9 +1,5 @@
 import IORedis from 'ioredis';
-import {
-  legacyRuntimeHeartbeatKey,
-  runtimeHeartbeatKey,
-  type RuntimeProcessName,
-} from '../src/core/queue/runtime-heartbeat';
+import { runtimeHeartbeatKey, type RuntimeProcessName } from '../src/core/queue/runtime-heartbeat';
 
 async function main(): Promise<void> {
   const processName = process.argv[2] as RuntimeProcessName | undefined;
@@ -20,11 +16,8 @@ async function main(): Promise<void> {
   });
   try {
     await redis.connect();
-    const [heartbeat, legacyHeartbeat] = await redis.mget(
-      runtimeHeartbeatKey(processName),
-      legacyRuntimeHeartbeatKey(processName),
-    );
-    process.exitCode = heartbeat || legacyHeartbeat ? 0 : 1;
+    const heartbeat = await redis.get(runtimeHeartbeatKey(processName));
+    process.exitCode = heartbeat ? 0 : 1;
   } catch {
     process.exitCode = 1;
   } finally {

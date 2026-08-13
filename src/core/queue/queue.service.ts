@@ -4,8 +4,6 @@ import IORedis from 'ioredis';
 import { runtimeConfig } from '../config/runtime-config';
 import { CAMPAIGN_QUEUE, GATEWAY_SYNC_QUEUE, MESSAGE_SEND_QUEUE, WEBHOOK_QUEUE } from './queue.constants';
 import {
-  legacyRuntimeHeartbeatKey,
-  legacySchedulerTickStateKey,
   RUNTIME_HEARTBEAT_TTL_SECONDS,
   runtimeHeartbeatKey,
   schedulerTickStateKey,
@@ -36,37 +34,27 @@ export class QueueService implements OnApplicationShutdown {
   async publishHeartbeat(processName: RuntimeProcessName): Promise<void> {
     await this.ensureHealthConnection();
     const value = new Date().toISOString();
-    await Promise.all([
-      this.healthConnection.set(runtimeHeartbeatKey(processName), value, 'EX', RUNTIME_HEARTBEAT_TTL_SECONDS),
-      this.healthConnection.set(legacyRuntimeHeartbeatKey(processName), value, 'EX', RUNTIME_HEARTBEAT_TTL_SECONDS),
-    ]);
+    await this.healthConnection.set(runtimeHeartbeatKey(processName), value, 'EX', RUNTIME_HEARTBEAT_TTL_SECONDS);
   }
 
   async publishSchedulerTickState(state: SchedulerTickState): Promise<void> {
     await this.ensureHealthConnection();
     const value = JSON.stringify(state);
     const ttl = 7 * 24 * 60 * 60;
-    await Promise.all([
-      this.healthConnection.set(schedulerTickStateKey(state.name), value, 'EX', ttl),
-      this.healthConnection.set(legacySchedulerTickStateKey(state.name), value, 'EX', ttl),
-    ]);
+    await this.healthConnection.set(schedulerTickStateKey(state.name), value, 'EX', ttl);
   }
 
   async readiness(): Promise<QueueReadiness> {
     await this.ensureHealthConnection();
     const pong = await this.healthConnection.ping();
-    const [worker, scheduler, legacyWorker, legacyScheduler] = await this.healthConnection.mget(
+    const [worker, scheduler] = await this.healthConnection.mget(
       runtimeHeartbeatKey('worker'),
       runtimeHeartbeatKey('scheduler'),
-      legacyRuntimeHeartbeatKey('worker'),
-      legacyRuntimeHeartbeatKey('scheduler'),
     );
-    const workerReady = worker ?? legacyWorker;
-    const schedulerReady = scheduler ?? legacyScheduler;
-    if (pong !== 'PONG' || !workerReady || !schedulerReady) {
+    if (pong !== 'PONG' || !worker || !scheduler) {
       throw new Error(`Runtime process heartbeat missing: ${[
-        !workerReady ? 'worker' : undefined,
-        !schedulerReady ? 'scheduler' : undefined,
+        !worker ? 'worker' : undefined,
+        !scheduler ? 'scheduler' : undefined,
       ].filter(Boolean).join(', ') || 'redis'}`);
     }
     return { redis: true, worker: true, scheduler: true };

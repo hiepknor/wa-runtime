@@ -123,15 +123,11 @@ Store backup scripts and archives outside the OpenWA project. A suitable separat
 /var/backups/wa-runtime/      backup archives
 ```
 
-New installations use the `wa_runtime` PostgreSQL database and role together with the
-`wa-runtime_postgres-data` and `wa-runtime_redis-data` volumes. Existing installations may
-temporarily reattach legacy storage by setting `WA_RUNTIME_POSTGRES_VOLUME` and
-`WA_RUNTIME_REDIS_VOLUME`; this is a maintenance bridge, not the target state. Before changing an
-existing installation, take a logical PostgreSQL backup, record row-count baselines, stop the old
-project, and follow the reviewed
-[storage namespace migration runbook](runbooks/storage-namespace-migration.md). Keep the source
-volumes until the target stack passes readiness, data reconciliation, application smoke tests and
-restore verification.
+Installations use the `wa_runtime` PostgreSQL database and role together with the
+`wa-runtime_postgres-data` and `wa-runtime_redis-data` volumes. A previously named installation must
+take a logical PostgreSQL backup, record row-count baselines, stop the old project, and follow the
+reviewed [storage namespace migration runbook](runbooks/storage-namespace-migration.md). The active
+Compose configuration has no legacy-volume override.
 
 Use `wa-runtime-postgres` and `wa-runtime-redis` in container connection URLs. Runtime processes also
 join the OpenWA gateway network, where generic `postgres` and `redis` DNS names may resolve to the
@@ -149,10 +145,9 @@ docker compose exec -T postgres \
   > /var/backups/wa-runtime/runtime-$(date -u +%Y%m%dT%H%M%SZ).dump
 ```
 
-For an installation still on legacy database identifiers, substitute its current database and role
-in the backup command. Never change only `WA_RUNTIME_DB_NAME`, `WA_RUNTIME_DB_USER` or the volume
-variables: PostgreSQL database/role creation runs only when the data directory is empty, so existing
-storage requires the explicit migration procedure.
+For an installation still on older database identifiers, substitute its current database and role
+in the source backup command. PostgreSQL database/role creation runs only when the data directory is
+empty, so existing storage requires the explicit migration procedure.
 
 Test restoration periodically into an isolated database. A restore replaces or merges durable
 business data and must be performed during a declared maintenance window with API, scheduler and

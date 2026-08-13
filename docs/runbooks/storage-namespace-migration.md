@@ -35,8 +35,9 @@ the installation without printing secrets into logs or shell history.
 5. Start a clean Redis service backed by `wa-runtime_redis-data`. Redis is recoverable transport;
    allow the scheduler and workers to republish durable pending work from PostgreSQL instead of
    copying stale process heartbeats or scheduler telemetry.
-6. Remove any temporary `WA_RUNTIME_POSTGRES_VOLUME` and `WA_RUNTIME_REDIS_VOLUME` compatibility
-   overrides. Set `WA_RUNTIME_DB_NAME`, `WA_RUNTIME_DB_USER` and `DATABASE_URL` to `wa_runtime`.
+6. Set `WA_RUNTIME_DB_NAME`, `WA_RUNTIME_DB_USER` and `DATABASE_URL` to `wa_runtime`. The Compose
+   file always uses the target volumes; source-volume attachment must be handled outside the target
+   configuration during the maintenance procedure.
 7. Start one scheduler, one worker and the API. Scale workers only after readiness is stable.
 
 ## Verification
@@ -51,12 +52,14 @@ The migration passes only when all of the following are recorded:
 - no container label, active mount, database connection or operational probe uses a legacy name;
 - a restore test of the retained logical dump succeeds in an isolated database.
 
-Keep the source volumes stopped and unmodified during the rollback retention period. Do not delete
-them as part of this runbook.
+Keep the source volumes stopped and unmodified until backup verification, data reconciliation and
+application smoke tests pass. They may then be explicitly removed when the operator accepts the
+logical backup as the rollback artifact.
 
 ## Rollback
 
 If verification fails, stop the target stack before any additional writes occur, restore the prior
-environment and explicit legacy volume overrides, and start the pinned previous release. Record any
-target-side writes before deciding whether they must be reconciled back into the source database.
+environment and explicitly attach the recorded source volumes outside the target Compose
+configuration, then start the pinned previous release. Record any target-side writes before deciding
+whether they must be reconciled back into the source database.
 Never point two PostgreSQL instances at the same data volume.

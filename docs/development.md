@@ -179,7 +179,7 @@ send a WhatsApp message.
 Within Docker, OpenWA posts directly to:
 
 ```text
-http://automation-api:3100/api/v1/webhooks/openwa
+http://wa-runtime-api:3100/api/v1/webhooks/openwa
 ```
 
 Both services must use the same webhook secret. If a temporary public callback is needed, expose
