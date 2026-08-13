@@ -18,8 +18,9 @@ describe('ContactSyncService', () => {
     const repository = {
       beginObservedSnapshot: vi.fn().mockResolvedValue(3),
       ingestObservedPage: vi.fn()
-        .mockResolvedValueOnce({ observed: 1, enriched: 2, conflicts: 0 })
-        .mockResolvedValueOnce({ observed: 1, enriched: 0, conflicts: 1 }),
+        .mockResolvedValueOnce({ observed: 1, enriched: 2 })
+        .mockResolvedValueOnce({ observed: 1, enriched: 0 }),
+      reconcileObservedIdentities: vi.fn().mockResolvedValue({ enriched: 1, merged: 1, conflicts: 1 }),
       completeObservedSnapshot: vi.fn().mockResolvedValue(undefined),
       failObservedSnapshot: vi.fn(),
     } as unknown as ContactRepository;
@@ -27,6 +28,8 @@ describe('ContactSyncService', () => {
     await new ContactSyncService(repository, openwa).reconcileObservedContacts('session-1');
 
     expect(repository.ingestObservedPage).toHaveBeenCalledTimes(2);
+    expect(repository.ingestObservedPage).toHaveBeenNthCalledWith(1, 'session-1', 3, pages[0]);
+    expect(repository.reconcileObservedIdentities).toHaveBeenCalledWith('session-1', 3);
     expect(repository.completeObservedSnapshot).toHaveBeenCalledWith('session-1', 3, 2);
     expect(repository.failObservedSnapshot).not.toHaveBeenCalled();
   });

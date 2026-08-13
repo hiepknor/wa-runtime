@@ -37,12 +37,11 @@ export class ContactRepository {
     return Number(result.rows[0]!.sync_generation);
   }
 
-  async ingestObservedPage(sessionId: string, contacts: OpenWAContact[]): Promise<{
+  async ingestObservedPage(sessionId: string, generation: number, contacts: OpenWAContact[]): Promise<{
     observed: number;
     enriched: number;
-    conflicts: number;
   }> {
-    if (contacts.length === 0) return { observed: 0, enriched: 0, conflicts: 0 };
+    if (contacts.length === 0) return { observed: 0, enriched: 0 };
     const rows = contacts.map(contact => {
       const identity = normalizeContactIdentity(contact.id);
       const contactName = normalizeContactName(contact.name, identity);
@@ -89,6 +88,15 @@ export class ContactRepository {
          ON CONFLICT (session_id, identity_type, identity_value) DO UPDATE SET
            last_observed_at = now(), updated_at = now()`,
         [sessionId, pageJson],
+      );
+      await client.query(
+        `WITH input AS MATERIALIZED (SELECT * FROM ${pageRelation})
+         INSERT INTO contact_identity_evidence
+           (session_id, sync_generation, identity_type, identity_value, phone)
+         SELECT $1, $3, identity_type, identity_value, phone FROM input WHERE phone IS NOT NULL
+         ON CONFLICT (session_id, sync_generation, identity_type, identity_value) DO UPDATE SET
+           phone = EXCLUDED.phone, observed_at = now()`,
+        [sessionId, pageJson, generation],
       );
       await client.query(
         `WITH input AS MATERIALIZED (SELECT * FROM ${pageRelation}),
@@ -173,7 +181,7 @@ export class ContactRepository {
              IS DISTINCT FROM (effective.name_value, effective.name_source)`,
         [sessionId, pageJson],
       );
-      const result = await client.query<{ enriched: string; conflicts: string }>(
+      const result = await client.query<{ enriched: string }>(
         `WITH input AS MATERIALIZED (SELECT * FROM ${pageRelation}),
          affected AS MATERIALIZED (
            SELECT DISTINCT identifier.contact_id, input.phone,
@@ -196,15 +204,183 @@ export class ContactRepository {
                IS DISTINCT FROM (contact.effective_display_name, contact.display_name_source)
            RETURNING member.contact_id
          )
-         SELECT (SELECT count(*) FROM member_writes)::text AS enriched,
-           (SELECT count(*) FROM affected WHERE phone IS NOT NULL AND phone_contact_id IS NOT NULL
-             AND phone_contact_id <> contact_id)::text AS conflicts`,
+         SELECT (SELECT count(*) FROM member_writes)::text AS enriched`,
         [sessionId, pageJson],
       );
       return {
         observed: rows.length,
         enriched: Number(result.rows[0]?.enriched ?? 0),
+      };
+    });
+  }
+
+  async reconcileObservedIdentities(
+    sessionId: string,
+    generation: number,
+  ): Promise<{ merged: number; conflicts: number; enriched: number }> {
+    return this.database.transaction(async client => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [sessionId]);
+      await client.query(
+        `CREATE TEMP TABLE contact_merge_plan ON COMMIT DROP AS
+         WITH RECURSIVE phone_cardinality AS MATERIALIZED (
+           SELECT phone, count(DISTINCT (identity_type, identity_value)) AS identity_count
+           FROM contact_identity_evidence
+           WHERE session_id = $1 AND sync_generation = $2 GROUP BY phone
+         ), edges AS MATERIALIZED (
+           SELECT DISTINCT exact_identifier.contact_id AS left_id,
+             phone_identifier.contact_id AS right_id
+           FROM contact_identity_evidence evidence
+           JOIN phone_cardinality ON phone_cardinality.phone = evidence.phone
+             AND phone_cardinality.identity_count = 1
+           JOIN contact_identifiers exact_identifier
+             ON exact_identifier.session_id = evidence.session_id
+            AND exact_identifier.identity_type = evidence.identity_type
+            AND exact_identifier.identity_value = evidence.identity_value
+           JOIN contact_identifiers phone_identifier
+             ON phone_identifier.session_id = evidence.session_id
+            AND phone_identifier.identity_type = 'PHONE'
+            AND phone_identifier.identity_value = evidence.phone
+           WHERE evidence.session_id = $1 AND evidence.sync_generation = $2
+             AND exact_identifier.contact_id <> phone_identifier.contact_id
+         ), undirected AS (
+           SELECT left_id AS source, right_id AS target FROM edges
+           UNION SELECT right_id, left_id FROM edges
+         ), reach(root, node) AS (
+           SELECT source, source FROM undirected
+           UNION
+           SELECT reach.root, undirected.target FROM reach
+           JOIN undirected ON undirected.source = reach.node
+         ), component AS (
+           SELECT node, min(root::text)::uuid AS component_id FROM reach GROUP BY node
+         ), ranked AS (
+           SELECT component.node,
+             first_value(component.node) OVER (
+               PARTITION BY component.component_id ORDER BY contact.created_at, component.node
+             ) AS winner_id
+           FROM component JOIN contacts contact ON contact.session_id = $1 AND contact.id = component.node
+         )
+         SELECT winner_id, node AS loser_id FROM ranked WHERE node <> winner_id`,
+        [sessionId, generation],
+      );
+      const mappingRelation = 'contact_merge_plan AS mapping';
+      await client.query(
+        `WITH mapping AS MATERIALIZED (SELECT * FROM ${mappingRelation}),
+         ranked AS MATERIALIZED (
+           SELECT mapping.winner_id, name.name_source, name.name_value,
+             name.first_observed_at, name.last_observed_at,
+             row_number() OVER (
+               PARTITION BY mapping.winner_id, name.name_source
+               ORDER BY name.last_observed_at DESC, name.contact_id, name.name_value
+             ) AS rank
+           FROM mapping JOIN contact_names name
+             ON name.session_id = $1 AND name.contact_id IN (mapping.winner_id, mapping.loser_id)
+         )
+         INSERT INTO contact_names
+           (session_id, contact_id, name_source, name_value, first_observed_at, last_observed_at)
+         SELECT $1, winner_id, name_source, name_value, first_observed_at, last_observed_at
+         FROM ranked WHERE rank = 1
+         ON CONFLICT (session_id, contact_id, name_source) DO UPDATE SET
+           name_value = EXCLUDED.name_value,
+           first_observed_at = LEAST(contact_names.first_observed_at, EXCLUDED.first_observed_at),
+           last_observed_at = GREATEST(contact_names.last_observed_at, EXCLUDED.last_observed_at),
+           updated_at = now()`,
+        [sessionId],
+      );
+      await client.query(
+        `DELETE FROM contact_names name USING ${mappingRelation}
+         WHERE name.session_id = $1 AND name.contact_id = mapping.loser_id`,
+        [sessionId],
+      );
+      await client.query(
+        `UPDATE contact_identifiers identifier SET contact_id = mapping.winner_id, updated_at = now()
+         FROM ${mappingRelation}
+         WHERE identifier.session_id = $1 AND identifier.contact_id = mapping.loser_id`,
+        [sessionId],
+      );
+      await client.query(
+        `UPDATE group_members member SET contact_id = mapping.winner_id, updated_at = now()
+         FROM ${mappingRelation}
+         WHERE member.session_id = $1 AND member.contact_id = mapping.loser_id`,
+        [sessionId],
+      );
+      await client.query(
+        `WITH mapping AS MATERIALIZED (SELECT * FROM ${mappingRelation}), aggregates AS (
+           SELECT mapping.winner_id, min(contact.first_observed_at) AS first_observed_at,
+             max(contact.last_observed_at) AS last_observed_at
+           FROM mapping JOIN contacts contact
+             ON contact.session_id = $1 AND contact.id IN (mapping.winner_id, mapping.loser_id)
+           GROUP BY mapping.winner_id
+         )
+         UPDATE contacts winner SET first_observed_at = aggregates.first_observed_at,
+           last_observed_at = aggregates.last_observed_at, updated_at = now()
+         FROM aggregates WHERE winner.session_id = $1 AND winner.id = aggregates.winner_id`,
+        [sessionId],
+      );
+      await client.query(
+        `DELETE FROM contacts contact USING ${mappingRelation}
+         WHERE contact.session_id = $1 AND contact.id = mapping.loser_id`,
+        [sessionId],
+      );
+      await client.query(
+        `WITH affected AS MATERIALIZED (
+           SELECT DISTINCT winner_id AS contact_id FROM contact_merge_plan
+         ), effective AS MATERIALIZED (
+           SELECT affected.contact_id,
+             COALESCE(contact_source.name_value, participant_source.name_value, push_source.name_value) AS name_value,
+             CASE
+               WHEN contact_source.name_value IS NOT NULL THEN 'OPENWA_CONTACT_NAME'
+               WHEN participant_source.name_value IS NOT NULL THEN 'GROUP_PARTICIPANT_NAME'
+               WHEN push_source.name_value IS NOT NULL THEN 'OPENWA_PUSH_NAME'
+               ELSE NULL
+             END AS name_source
+           FROM affected
+           LEFT JOIN contact_names contact_source ON contact_source.session_id = $1
+             AND contact_source.contact_id = affected.contact_id AND contact_source.name_source = 'OPENWA_CONTACT_NAME'
+           LEFT JOIN contact_names participant_source ON participant_source.session_id = $1
+             AND participant_source.contact_id = affected.contact_id AND participant_source.name_source = 'GROUP_PARTICIPANT_NAME'
+           LEFT JOIN contact_names push_source ON push_source.session_id = $1
+             AND push_source.contact_id = affected.contact_id AND push_source.name_source = 'OPENWA_PUSH_NAME'
+         )
+         UPDATE contacts contact SET effective_display_name = effective.name_value,
+           display_name_source = effective.name_source, updated_at = now()
+         FROM effective WHERE contact.session_id = $1 AND contact.id = effective.contact_id`,
+        [sessionId],
+      );
+      const result = await client.query<{ merged: string; conflicts: string; enriched: string }>(
+        `WITH affected AS MATERIALIZED (
+           SELECT DISTINCT winner_id AS contact_id FROM contact_merge_plan
+         ), member_writes AS (
+           UPDATE group_members member SET display_name = contact.effective_display_name,
+             display_name_source = contact.display_name_source,
+             display_name_updated_at = CASE WHEN contact.effective_display_name IS NULL THEN NULL ELSE now() END,
+             updated_at = now()
+           FROM contacts contact, affected
+           WHERE contact.session_id = $1 AND contact.id = affected.contact_id
+             AND member.session_id = $1 AND member.contact_id = contact.id
+             AND (member.display_name, member.display_name_source)
+               IS DISTINCT FROM (contact.effective_display_name, contact.display_name_source)
+           RETURNING member.contact_id
+         ), ambiguous AS (
+           SELECT evidence.phone
+           FROM contact_identity_evidence evidence
+           WHERE evidence.session_id = $1 AND evidence.sync_generation = $2
+           GROUP BY evidence.phone
+           HAVING count(DISTINCT (evidence.identity_type, evidence.identity_value)) > 1
+         )
+         SELECT (SELECT count(*) FROM contact_merge_plan)::text AS merged,
+           (SELECT count(*) FROM contact_identity_evidence evidence JOIN ambiguous USING (phone)
+             WHERE evidence.session_id = $1 AND evidence.sync_generation = $2)::text AS conflicts,
+           (SELECT count(*) FROM member_writes)::text AS enriched`,
+        [sessionId, generation],
+      );
+      await client.query(
+        `DELETE FROM contact_identity_evidence WHERE session_id = $1 AND sync_generation <= $2`,
+        [sessionId, generation],
+      );
+      return {
+        merged: Number(result.rows[0]?.merged ?? 0),
         conflicts: Number(result.rows[0]?.conflicts ?? 0),
+        enriched: Number(result.rows[0]?.enriched ?? 0),
       };
     });
   }
@@ -220,7 +396,10 @@ export class ContactRepository {
 
   async failObservedSnapshot(sessionId: string, generation: number, code: string): Promise<void> {
     await this.database.query(
-      `UPDATE contact_sync_state SET last_error_code = $3, updated_at = now()
+      `WITH evidence_cleanup AS (
+         DELETE FROM contact_identity_evidence WHERE session_id = $1 AND sync_generation = $2
+       )
+       UPDATE contact_sync_state SET last_error_code = $3, updated_at = now()
        WHERE session_id = $1 AND sync_generation = $2`,
       [sessionId, generation, code],
     );

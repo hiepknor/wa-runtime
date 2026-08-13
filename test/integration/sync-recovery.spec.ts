@@ -623,7 +623,7 @@ describe('gateway sync recovery', () => {
       }],
     });
     const generation = await contacts.beginObservedSnapshot(INTEGRATION_SESSION_ID);
-    await expect(contacts.ingestObservedPage(INTEGRATION_SESSION_ID, [
+    await expect(contacts.ingestObservedPage(INTEGRATION_SESSION_ID, generation, [
       {
         id: '628222@c.us', number: '628222', name: 'Contact name', pushName: 'Push name',
         isMyContact: true, isBlocked: false,
@@ -632,7 +632,7 @@ describe('gateway sync recovery', () => {
         id: 'unseen@lid', number: 'unseen', name: null, pushName: 'Observed only',
         isMyContact: true, isBlocked: false,
       },
-    ])).resolves.toMatchObject({ observed: 2, enriched: 1, conflicts: 0 });
+    ])).resolves.toMatchObject({ observed: 2, enriched: 1 });
     await contacts.completeObservedSnapshot(INTEGRATION_SESSION_ID, generation, 2);
 
     const member = await pool.query<{ display_name: string; display_name_source: string }>(
@@ -649,6 +649,79 @@ describe('gateway sync recovery', () => {
       [INTEGRATION_SESSION_ID],
     );
     expect(observedOnly.rows[0]?.count).toBe('1');
+  });
+
+  it('merges a LID and phone contact only when one OpenWA record links both identities', async () => {
+    const contacts = new ContactRepository(database);
+    const session = await new OpenWAClient().getSession(INTEGRATION_SESSION_ID);
+    await gateway.upsertSession(session);
+    await gateway.upsertGroupDetails(INTEGRATION_SESSION_ID, {
+      id: INTEGRATION_GROUP_ID,
+      name: 'Identity merge',
+      participants: [
+        { id: 'linked@lid', number: 'linked', name: null, isAdmin: false, isSuperAdmin: false },
+        { id: '628333@c.us', number: '628333', name: null, isAdmin: false, isSuperAdmin: false },
+      ],
+    });
+
+    const generation = await contacts.beginObservedSnapshot(INTEGRATION_SESSION_ID);
+    await expect(contacts.ingestObservedPage(INTEGRATION_SESSION_ID, generation, [{
+      id: 'linked@lid', number: '628333', name: 'Authoritative contact', pushName: null,
+      isMyContact: true, isBlocked: false,
+    }])).resolves.toMatchObject({ observed: 1, enriched: 1 });
+    await expect(contacts.reconcileObservedIdentities(INTEGRATION_SESSION_ID, generation))
+      .resolves.toMatchObject({ enriched: 1, merged: 1, conflicts: 0 });
+
+    const identifiers = await pool.query<{ identity_type: string; contact_id: string }>(
+      `SELECT identity_type, contact_id FROM contact_identifiers
+       WHERE session_id = $1 AND identity_value IN ('linked@lid', '628333', '628333@c.us')
+       ORDER BY identity_type`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(new Set(identifiers.rows.map(row => row.contact_id)).size).toBe(1);
+    const members = await pool.query<{ contact_id: string; display_name: string }>(
+      `SELECT contact_id, display_name FROM group_members
+       WHERE session_id = $1 AND group_id = $2 ORDER BY participant_id`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+    expect(new Set(members.rows.map(row => row.contact_id)).size).toBe(1);
+    expect(members.rows.map(row => row.display_name)).toEqual([
+      'Authoritative contact', 'Authoritative contact',
+    ]);
+  });
+
+  it('keeps identities separate when one phone is claimed by multiple LIDs across pages', async () => {
+    const contacts = new ContactRepository(database);
+    const session = await new OpenWAClient().getSession(INTEGRATION_SESSION_ID);
+    await gateway.upsertSession(session);
+    await gateway.upsertGroupDetails(INTEGRATION_SESSION_ID, {
+      id: INTEGRATION_GROUP_ID,
+      name: 'Ambiguous identity',
+      participants: [
+        { id: 'first@lid', number: 'first', name: null, isAdmin: false, isSuperAdmin: false },
+        { id: 'second@lid', number: 'second', name: null, isAdmin: false, isSuperAdmin: false },
+        { id: '628444@c.us', number: '628444', name: null, isAdmin: false, isSuperAdmin: false },
+      ],
+    });
+
+    const generation = await contacts.beginObservedSnapshot(INTEGRATION_SESSION_ID);
+    await expect(contacts.ingestObservedPage(INTEGRATION_SESSION_ID, generation, [{
+      id: 'first@lid', number: '628444', name: 'First', pushName: null,
+      isMyContact: true, isBlocked: false,
+    }])).resolves.toMatchObject({ observed: 1, enriched: 1 });
+    await expect(contacts.ingestObservedPage(INTEGRATION_SESSION_ID, generation, [{
+      id: 'second@lid', number: '628444', name: 'Second', pushName: null,
+      isMyContact: true, isBlocked: false,
+    }])).resolves.toMatchObject({ observed: 1, enriched: 1 });
+    await expect(contacts.reconcileObservedIdentities(INTEGRATION_SESSION_ID, generation))
+      .resolves.toMatchObject({ enriched: 0, merged: 0, conflicts: 2 });
+
+    const identities = await pool.query<{ contact_id: string }>(
+      `SELECT DISTINCT contact_id FROM contact_identifiers
+       WHERE session_id = $1 AND identity_value IN ('first@lid', 'second@lid', '628444')`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(identities.rows).toHaveLength(3);
   });
 
   it('allows only one in-flight group-detail request per session', async () => {

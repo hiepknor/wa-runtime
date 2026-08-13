@@ -16,17 +16,21 @@ export class ContactSyncService {
     const startedAt = Date.now();
     let records = 0;
     let enriched = 0;
+    let merged = 0;
     let conflicts = 0;
     try {
       for await (const page of this.openwa.listContactPages(sessionId)) {
-        const result = await this.repository.ingestObservedPage(sessionId, page);
+        const result = await this.repository.ingestObservedPage(sessionId, generation, page);
         records += result.observed;
         enriched += result.enriched;
-        conflicts += result.conflicts;
       }
+      const identityResult = await this.repository.reconcileObservedIdentities(sessionId, generation);
+      enriched += identityResult.enriched;
+      merged += identityResult.merged;
+      conflicts += identityResult.conflicts;
       await this.repository.completeObservedSnapshot(sessionId, generation, records);
       this.logger.log({
-        event: 'contacts.snapshot.completed', records, enriched, conflicts,
+        event: 'contacts.snapshot.completed', records, enriched, merged, conflicts,
         durationMs: Date.now() - startedAt,
       });
     } catch (error) {
@@ -37,4 +41,3 @@ export class ContactSyncService {
     }
   }
 }
-
