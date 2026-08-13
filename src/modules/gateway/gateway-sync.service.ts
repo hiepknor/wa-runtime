@@ -208,6 +208,7 @@ export class GatewaySyncService {
       this.logger.log({
         event: 'gateway.group_reconciliation.completed', source: 'WEBHOOK',
         sessionId, durationMs: Date.now() - startedAt,
+        queueAgeMs: Date.now() - claim.requestedAt.valueOf(),
         coalescedEvents: claim.coalescedCount, outcome,
       });
       return { members: result.members, pending: outcome === 'PENDING' };
