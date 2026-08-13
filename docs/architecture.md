@@ -64,6 +64,12 @@ PostgreSQL is the source of truth. It stores:
 - sync runs and group capabilities;
 - campaigns, target selections, immutable run snapshots and per-group deliveries.
 
+Group browsing is served directly from `gateway_groups`. Optional literal substring search across
+name, ID and description uses PostgreSQL trigram indexes; capability, freshness and active filters
+are applied in the same database predicate used by both the page and count queries. Capability
+freshness is authoritative when `capability_invalidated_at` is null (current) or non-null (stale).
+Group members are not joined into list queries.
+
 Business state is committed before queue work is published. If Redis is unavailable after a commit,
 the scheduler retries publication from the durable row. Webhooks, message jobs and sync runs use
 leases so crashed work is recovered according to its side-effect semantics.

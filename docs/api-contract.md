@@ -69,7 +69,7 @@ GET  /sessions/{id}
 POST /sessions/{id}/sync
 GET  /sessions/{id}/sync-runs/{runId}
 
-GET  /groups?sessionId={sessionId}
+GET  /groups?sessionId={sessionId}&limit=50&offset=0&query={search}&capabilityStatus={statuses}&capabilityFreshness={freshness}&isActive={boolean}
 GET  /groups/{id}?sessionId={sessionId}
 GET  /groups/{id}/members?sessionId={sessionId}&limit=50&offset=0&query={search}
 POST /groups/{id}/refresh-capability?sessionId={sessionId}
@@ -77,11 +77,19 @@ GET  /messages?sessionId={sessionId}&groupId={groupId}
 ```
 
 Session and group reads come from the Runtime's durable read model, not a synchronous pass-through
-to OpenWA. Group detail contains metadata only; synchronized members are fetched separately with
-database-backed pagination and optional literal substring search across display name, phone number
-and participant ID. Member results are ordered deterministically, and `meta.total` counts matching
-synchronized member rows rather than the group's upstream participant count. Full sync and
-capability refresh endpoints are asynchronous.
+to OpenWA. Group list search is a trimmed, case-insensitive literal substring match across group
+name, ID and description. `capabilityStatus` and `capabilityFreshness` are comma-separated arrays;
+values within one parameter are ORed and different filter types are ANDed. `CURRENT` means
+`sendCapability.invalidatedAt` is null and `STALE` means an invalidation is pending. Omitting
+`isActive` preserves the active-only behavior. Group list results use name then group ID ordering,
+and `meta.total` counts the complete filtered dataset before pagination.
+
+Group detail contains metadata only; synchronized members are fetched separately with database-
+backed pagination and optional literal substring search across display name, phone number and
+participant ID. Member results are ordered deterministically, and `meta.total` counts matching
+synchronized member rows rather than the group's upstream participant count. Neither group-list
+search nor capability filtering joins or loads members. Full sync and capability refresh endpoints
+are asynchronous.
 
 #### Group-member coordinated release gate
 
