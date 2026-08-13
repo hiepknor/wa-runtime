@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import type { GroupQueryDto } from '../../contracts/groups/group-query.dto';
 import { GatewayRepository } from './gateway.repository';
 import { SessionScopeService } from './session-scope.service';
 
@@ -9,10 +10,10 @@ export class GroupService {
     private readonly sessions: SessionScopeService,
   ) {}
 
-  async list(sessionId: string, limit: number, offset: number) {
-    this.sessions.assertVisible(sessionId);
-    const result = await this.repository.listGroups(sessionId, limit, offset);
-    return { data: result.data, meta: { total: result.total, limit, offset } };
+  async list(query: GroupQueryDto) {
+    this.sessions.assertVisible(query.sessionId);
+    const result = await this.repository.listGroups(query);
+    return { data: result.data, meta: { total: result.total, limit: query.limit, offset: query.offset } };
   }
 
   async get(sessionId: string, groupId: string) {

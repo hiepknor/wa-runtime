@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import type { GroupDto, GroupMemberDto } from '../../contracts/groups/group.dto';
+import type { GroupQueryDto } from '../../contracts/groups/group-query.dto';
 import type { SessionDto } from '../../contracts/sessions/session.dto';
 import type { SyncRunDto, SyncRunStatus } from '../../contracts/sessions/sync-run.dto';
 import { DatabaseService } from '../../core/database/database.service';
@@ -488,15 +489,53 @@ export class GatewayRepository {
     return result.rowCount ?? 0;
   }
 
-  async listGroups(sessionId: string, limit: number, offset: number): Promise<{ data: GroupDto[]; total: number }> {
-    const [rows, count] = await Promise.all([
-      this.database.query<GroupRow>(
-        `SELECT * FROM gateway_groups WHERE session_id = $1 AND is_active = true
-         ORDER BY name, id LIMIT $2 OFFSET $3`, [sessionId, limit, offset]),
-      this.database.query<{ count: string }>(
-        'SELECT count(*)::text AS count FROM gateway_groups WHERE session_id = $1 AND is_active = true', [sessionId]),
-    ]);
-    return { data: rows.rows.map(mapGroup), total: Number(count.rows[0]?.count ?? 0) };
+  async listGroups(query: GroupQueryDto): Promise<{ data: GroupDto[]; total: number }> {
+    const normalizedQuery = query.query?.trim();
+    const searchPattern = normalizedQuery
+      ? `%${normalizedQuery.replace(/[\\%_]/g, '\\$&')}%`
+      : null;
+    const activeFilter = query.isActive ?? true;
+    const statuses = query.capabilityStatus ?? null;
+    const freshness = query.capabilityFreshness ?? null;
+    return this.database.transaction(async client => {
+      await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+      const values = [
+        query.sessionId,
+        activeFilter,
+        normalizedQuery || null,
+        searchPattern,
+        statuses,
+        freshness,
+      ];
+      const predicate = `session_id = $1 AND is_active = $2
+        AND ($4::text IS NULL
+          OR id = $3
+          OR name ILIKE $4 ESCAPE '\\'
+          OR id ILIKE $4 ESCAPE '\\'
+          OR description ILIKE $4 ESCAPE '\\')
+        AND ($5::group_send_capability[] IS NULL OR send_capability = ANY($5))
+        AND ($6::text[] IS NULL
+          OR ('CURRENT' = ANY($6) AND capability_invalidated_at IS NULL)
+          OR ('STALE' = ANY($6) AND capability_invalidated_at IS NOT NULL))`;
+      const rows = await client.query<GroupRow>(
+        `SELECT session_id, id, name, description, owner_id, linked_parent_id,
+           participants_count, is_admin, is_read_only, is_announce, settings_locked, is_active,
+           details_synced_at, synced_at, send_capability, send_capability_reason,
+           capability_checked_at, capability_invalidated_at, capability_revision,
+           capability_refresh_attempt_count, capability_refresh_lease_token,
+           capability_refresh_lease_expires_at
+         FROM gateway_groups
+         WHERE ${predicate}
+         ORDER BY name ASC, id ASC
+         LIMIT $7 OFFSET $8`,
+        [...values, query.limit, query.offset],
+      );
+      const count = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM gateway_groups WHERE ${predicate}`,
+        values,
+      );
+      return { data: rows.rows.map(mapGroup), total: Number(count.rows[0]?.count ?? 0) };
+    });
   }
 
   async findGroup(sessionId: string, groupId: string): Promise<GroupDto | null> {

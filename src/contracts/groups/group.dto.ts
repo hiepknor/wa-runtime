@@ -84,12 +84,17 @@ export class GroupDto {
 
 export class GroupDetailDto extends GroupDto {}
 
+export class GroupListPageMetaDto extends PageMetaDto {
+  @ApiProperty({ description: 'Total synchronized group records matching all current search and filter predicates' })
+  declare total: number;
+}
+
 export class GroupListDto {
   @ApiProperty({ type: [GroupDto] })
   data!: GroupDto[];
 
-  @ApiProperty({ type: PageMetaDto })
-  meta!: PageMetaDto;
+  @ApiProperty({ type: GroupListPageMetaDto })
+  meta!: GroupListPageMetaDto;
 }
 
 export class GroupMemberPageMetaDto extends PageMetaDto {

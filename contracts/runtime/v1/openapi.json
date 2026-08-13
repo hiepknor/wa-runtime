@@ -146,6 +146,7 @@
     },
     "/api/v1/groups": {
       "get": {
+        "description": "Results are ordered deterministically by group name and group ID. Search and filters are applied before pagination and meta.total counts the filtered dataset.",
         "operationId": "GroupController_list",
         "parameters": [
           {
@@ -178,6 +179,61 @@
               "format": "uuid",
               "type": "string"
             }
+          },
+          {
+            "name": "query",
+            "required": false,
+            "in": "query",
+            "description": "Case-insensitive literal substring search across group name, group ID, and description. Whitespace is trimmed; an empty value disables search.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "capabilityStatus",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated capability statuses. Values are ORed; this filter is ANDed with other filters.",
+            "style": "form",
+            "explode": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "ALLOWED",
+                  "DENIED",
+                  "UNKNOWN"
+                ]
+              }
+            }
+          },
+          {
+            "name": "capabilityFreshness",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated freshness values. CURRENT means no capability invalidation is pending; STALE means invalidated. Values are ORed.",
+            "style": "form",
+            "explode": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "CURRENT",
+                  "STALE"
+                ]
+              }
+            }
+          },
+          {
+            "name": "isActive",
+            "required": false,
+            "in": "query",
+            "description": "Filter active or inactive synchronized groups. Omission preserves the active-only list behavior.",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -197,7 +253,7 @@
             "runtime-key": []
           }
         ],
-        "summary": "List active groups from the Runtime read model",
+        "summary": "Search and filter synchronized groups from the Runtime read model",
         "tags": [
           "groups"
         ]
@@ -1430,11 +1486,12 @@
           "sendCapability"
         ]
       },
-      "PageMetaDto": {
+      "GroupListPageMetaDto": {
         "type": "object",
         "properties": {
           "total": {
-            "type": "number"
+            "type": "number",
+            "description": "Total synchronized group records matching all current search and filter predicates"
           },
           "limit": {
             "type": "number"
@@ -1459,7 +1516,7 @@
             }
           },
           "meta": {
-            "$ref": "#/components/schemas/PageMetaDto"
+            "$ref": "#/components/schemas/GroupListPageMetaDto"
           }
         },
         "required": [
@@ -1714,6 +1771,25 @@
           "targetCount",
           "createdAt",
           "updatedAt"
+        ]
+      },
+      "PageMetaDto": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "limit": {
+            "type": "number"
+          },
+          "offset": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "total",
+          "limit",
+          "offset"
         ]
       },
       "CampaignListDto": {

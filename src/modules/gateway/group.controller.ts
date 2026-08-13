@@ -1,5 +1,5 @@
 import { Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
-import { ApiAcceptedResponse, ApiOkResponse, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { ApiAcceptedResponse, ApiOkResponse, ApiOperation, ApiQuery, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { GroupDetailDto, GroupListDto, GroupMemberListDto } from '../../contracts/groups/group.dto';
 import { GroupIdentityQueryDto, GroupMemberQueryDto, GroupQueryDto } from '../../contracts/groups/group-query.dto';
 import { GroupService } from './group.service';
@@ -11,10 +11,29 @@ export class GroupController {
   constructor(private readonly groups: GroupService) {}
 
   @Get()
-  @ApiOperation({ summary: 'List active groups from the Runtime read model' })
+  @ApiQuery({
+    name: 'capabilityStatus',
+    required: false,
+    enum: ['ALLOWED', 'DENIED', 'UNKNOWN'],
+    isArray: true,
+    style: 'form',
+    explode: false,
+  })
+  @ApiQuery({
+    name: 'capabilityFreshness',
+    required: false,
+    enum: ['CURRENT', 'STALE'],
+    isArray: true,
+    style: 'form',
+    explode: false,
+  })
+  @ApiOperation({
+    summary: 'Search and filter synchronized groups from the Runtime read model',
+    description: 'Results are ordered deterministically by group name and group ID. Search and filters are applied before pagination and meta.total counts the filtered dataset.',
+  })
   @ApiOkResponse({ type: GroupListDto })
   list(@Query() query: GroupQueryDto) {
-    return this.groups.list(query.sessionId, query.limit, query.offset);
+    return this.groups.list(query);
   }
 
   @Get(':id')
