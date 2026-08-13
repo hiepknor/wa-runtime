@@ -7,6 +7,7 @@ import { RuntimeEventRepository } from '../../src/modules/webhooks/runtime-event
 import { GatewayGroupIntentRepository } from '../../src/modules/gateway/gateway-group-intent.repository';
 import { GatewayRepository } from '../../src/modules/gateway/gateway.repository';
 import { ContactRepository } from '../../src/modules/contacts/contact.repository';
+import { ContactMessageObserverService } from '../../src/modules/contacts/contact-message-observer.service';
 import { GatewaySyncItemRepository } from '../../src/modules/gateway/gateway-sync-item.repository';
 import { GatewaySyncService } from '../../src/modules/gateway/gateway-sync.service';
 import type { OpenWAClient } from '../../src/integrations/openwa/openwa.client';
@@ -50,6 +51,7 @@ describe('durable webhook processing', () => {
       webhooks,
       runtimeEvents,
       { updateStatusByOpenWAMessageId: vi.fn() } as unknown as MessageJobRepository,
+      new ContactMessageObserverService(new ContactRepository(database), true),
     );
 
     expect(await webhooks.insert(envelope)).toBe(true);
@@ -66,6 +68,64 @@ describe('durable webhook processing', () => {
     expect(stored.rows[0]).toMatchObject({
       processing_state: 'PROCESSED', event_type: 'message.received', body: 'hello',
     });
+  });
+
+  it('enriches a synchronized member from message push-name evidence without storing raw contact data', async () => {
+    await seedSendableGroup(pool);
+    const memberId = '84970000000@c.us';
+    await pool.query(
+      `INSERT INTO group_members
+         (session_id, group_id, participant_id, phone_number, is_admin, is_super_admin)
+       VALUES ($1, $2, $3, '84970000000', false, false)`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, memberId],
+    );
+    const contacts = new ContactRepository(database);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await contacts.seedGroupMembers(client, INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, [{
+        id: memberId, number: '84970000000', name: null, isAdmin: false, isSuperAdmin: false,
+      }]);
+      await client.query('COMMIT');
+    } finally {
+      client.release();
+    }
+    const envelope: OpenWAWebhookEnvelope = {
+      event: 'message.received', timestamp: '2026-08-11T00:00:00.000Z',
+      sessionId: INTEGRATION_SESSION_ID, idempotencyKey: 'contact-event', deliveryId: 'contact-delivery',
+      data: {
+        id: 'message-contact', chatId: INTEGRATION_GROUP_ID, author: memberId, body: 'hello',
+        type: 'text', fromMe: false, isGroup: true,
+        contact: { pushName: 'Observed sender', privateField: 'must not persist' },
+      },
+    };
+    const runtimeEvents = new RuntimeEventRepository(
+      database,
+      { invalidate: vi.fn() } as unknown as SessionStateCacheService,
+      new GatewayGroupIntentRepository(database),
+    );
+    const processor = new WebhookProcessorService(
+      webhooks, runtimeEvents,
+      { updateStatusByOpenWAMessageId: vi.fn() } as unknown as MessageJobRepository,
+      new ContactMessageObserverService(contacts, true),
+    );
+
+    await webhooks.insert(envelope);
+    await processor.process(envelope.idempotencyKey);
+
+    const member = await pool.query<{ display_name: string; display_name_source: string }>(
+      `SELECT display_name, display_name_source FROM group_members
+       WHERE session_id = $1 AND group_id = $2 AND participant_id = $3`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, memberId],
+    );
+    expect(member.rows[0]).toEqual({
+      display_name: 'Observed sender', display_name_source: 'OPENWA_PUSH_NAME',
+    });
+    const runtimeEvent = await pool.query<{ payload: Record<string, unknown> }>(
+      `SELECT payload FROM runtime_events WHERE event_id = $1`, [envelope.idempotencyKey],
+    );
+    expect(JSON.stringify(runtimeEvent.rows[0]?.payload)).not.toContain('Observed sender');
+    expect(JSON.stringify(runtimeEvent.rows[0]?.payload)).not.toContain('privateField');
   });
 
   it('recovers an expired lease and eventually dead-letters a poison event', async () => {
@@ -141,6 +201,7 @@ describe('durable webhook processing', () => {
       webhooks,
       runtimeEvents,
       { updateStatusByOpenWAMessageId: vi.fn() } as unknown as MessageJobRepository,
+      new ContactMessageObserverService(new ContactRepository(database), true),
     );
     const event = (index: number): OpenWAWebhookEnvelope => ({
       event: 'group.update', timestamp: '2026-08-11T00:00:00.000Z',

@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { MessageJobRepository } from '../messages/message-job.repository';
 import type { MessageJobStatus } from '../messages/message-job.types';
 import { normalizeOpenWAWebhook } from './webhook-normalizer';
 import { RuntimeEventRepository } from './runtime-event.repository';
 import { WebhookRepository } from './webhook.repository';
+import { ContactMessageObserverService } from '../contacts/contact-message-observer.service';
 
 const webhookStatus = (event: string, data: Record<string, unknown>): MessageJobStatus | null => {
   if (event === 'message.sent') return 'SENT';
@@ -15,10 +16,13 @@ const webhookStatus = (event: string, data: Record<string, unknown>): MessageJob
 
 @Injectable()
 export class WebhookProcessorService {
+  private readonly logger = new Logger(WebhookProcessorService.name);
+
   constructor(
     private readonly webhooks: WebhookRepository,
     private readonly runtimeEvents: RuntimeEventRepository,
     private readonly messages: MessageJobRepository,
+    private readonly contacts: ContactMessageObserverService,
   ) {}
 
   async process(idempotencyKey: string): Promise<unknown> {
@@ -27,6 +31,18 @@ export class WebhookProcessorService {
     const { envelope, leaseToken } = claim;
     try {
       await this.runtimeEvents.store(normalizeOpenWAWebhook(envelope));
+      if (envelope.event === 'message.received') {
+        const senderId = String(envelope.data.author ?? envelope.data.from ?? '');
+        const contact = typeof envelope.data.contact === 'object' && envelope.data.contact !== null
+          ? envelope.data.contact as Record<string, unknown>
+          : null;
+        const pushName = typeof contact?.pushName === 'string' ? contact.pushName : null;
+        if (senderId && pushName) {
+          await this.contacts.observe(envelope.sessionId, senderId, pushName).catch(() => {
+            this.logger.warn({ event: 'contacts.message_sender.observe_failed' });
+          });
+        }
+      }
       const status = webhookStatus(envelope.event, envelope.data);
       const messageId = String(envelope.data.messageId ?? envelope.data.id ?? '');
       if (status && messageId) await this.messages.updateStatusByOpenWAMessageId(messageId, status);

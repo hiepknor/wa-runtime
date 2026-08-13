@@ -46,6 +46,7 @@ const schema = z
     GATEWAY_SYNC_MIN_GROUPS_PER_MINUTE: z.coerce.number().int().min(1).max(120).default(5),
     GATEWAY_SYNC_RATE_RECOVERY_SUCCESSES: z.coerce.number().int().min(1).max(1_000).default(25),
     CONTACT_SNAPSHOT_SYNC_ENABLED: booleanFromEnv(false),
+    CONTACT_MESSAGE_ENRICHMENT_ENABLED: booleanFromEnv(false),
   })
   .superRefine((value, context) => {
     if (value.OUTBOUND_MAX_DELAY_MS < value.OUTBOUND_MIN_DELAY_MS) {

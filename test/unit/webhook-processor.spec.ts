@@ -3,6 +3,7 @@ import type { MessageJobRepository } from '../../src/modules/messages/message-jo
 import type { RuntimeEventRepository } from '../../src/modules/webhooks/runtime-event.repository';
 import { WebhookProcessorService } from '../../src/modules/webhooks/webhook-processor.service';
 import type { OpenWAWebhookEnvelope, WebhookRepository } from '../../src/modules/webhooks/webhook.repository';
+import type { ContactMessageObserverService } from '../../src/modules/contacts/contact-message-observer.service';
 
 const envelope: OpenWAWebhookEnvelope = {
   event: 'message.ack', timestamp: '2026-08-11T00:00:00.000Z', sessionId: 'session-1',
@@ -23,6 +24,7 @@ describe('WebhookProcessorService', () => {
       webhooks as unknown as WebhookRepository,
       runtimeEvents as unknown as RuntimeEventRepository,
       messages as unknown as MessageJobRepository,
+      {} as ContactMessageObserverService,
     );
 
     await processor.process(envelope.idempotencyKey);
@@ -43,6 +45,7 @@ describe('WebhookProcessorService', () => {
       webhooks as unknown as WebhookRepository,
       runtimeEvents as unknown as RuntimeEventRepository,
       {} as MessageJobRepository,
+      {} as ContactMessageObserverService,
     );
 
     await expect(processor.process(envelope.idempotencyKey)).rejects.toThrow('database unavailable');
@@ -52,5 +55,53 @@ describe('WebhookProcessorService', () => {
       'database unavailable',
     );
     expect(webhooks.markProcessed).not.toHaveBeenCalled();
+  });
+
+  it('observes only the normalized sender and push name from an inbound message', async () => {
+    const messageEnvelope: OpenWAWebhookEnvelope = {
+      ...envelope,
+      event: 'message.received',
+      data: {
+        id: 'inbound-1', author: 'sender@lid', from: 'group@g.us',
+        contact: { pushName: ' Sender name ', phone: 'must-not-be-forwarded' },
+      },
+    };
+    const webhooks = {
+      claimForProcessing: vi.fn().mockResolvedValue({ ...claim, envelope: messageEnvelope }),
+      markProcessed: vi.fn().mockResolvedValue(true), markFailed: vi.fn(),
+    };
+    const contacts = { observe: vi.fn().mockResolvedValue(true) };
+    const processor = new WebhookProcessorService(
+      webhooks as unknown as WebhookRepository,
+      { store: vi.fn() } as unknown as RuntimeEventRepository,
+      {} as MessageJobRepository,
+      contacts as unknown as ContactMessageObserverService,
+    );
+
+    await processor.process(messageEnvelope.idempotencyKey);
+
+    expect(contacts.observe).toHaveBeenCalledWith('session-1', 'sender@lid', ' Sender name ');
+  });
+
+  it('does not poison a message webhook when optional contact enrichment fails', async () => {
+    const messageEnvelope: OpenWAWebhookEnvelope = {
+      ...envelope,
+      event: 'message.received',
+      data: { id: 'inbound-1', author: 'sender@lid', contact: { pushName: 'Sender' } },
+    };
+    const webhooks = {
+      claimForProcessing: vi.fn().mockResolvedValue({ ...claim, envelope: messageEnvelope }),
+      markProcessed: vi.fn().mockResolvedValue(true), markFailed: vi.fn(),
+    };
+    const processor = new WebhookProcessorService(
+      webhooks as unknown as WebhookRepository,
+      { store: vi.fn().mockResolvedValue(undefined) } as unknown as RuntimeEventRepository,
+      {} as MessageJobRepository,
+      { observe: vi.fn().mockRejectedValue(new Error('contacts unavailable')) } as unknown as ContactMessageObserverService,
+    );
+
+    await expect(processor.process(messageEnvelope.idempotencyKey)).resolves.toEqual({ statusUpdated: false });
+    expect(webhooks.markProcessed).toHaveBeenCalledOnce();
+    expect(webhooks.markFailed).not.toHaveBeenCalled();
   });
 });

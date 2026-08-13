@@ -405,6 +405,68 @@ export class ContactRepository {
     );
   }
 
+  async observeMessageSender(
+    sessionId: string,
+    rawIdentity: string,
+    rawPushName: string | null | undefined,
+  ): Promise<boolean> {
+    const identity = normalizeContactIdentity(rawIdentity);
+    if (identity.type !== 'LID' && identity.type !== 'PHONE_JID') return false;
+    const pushName = normalizeContactName(rawPushName, identity);
+    if (!pushName) return false;
+    const candidateContactId = randomUUID();
+    return this.database.transaction(async client => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [sessionId]);
+      await client.query(
+        `WITH existing AS MATERIALIZED (
+           SELECT contact_id FROM contact_identifiers
+           WHERE session_id = $1 AND identity_type = $2 AND identity_value = $3
+         ), created AS (
+           INSERT INTO contacts (session_id, id)
+           SELECT $1, $4 WHERE NOT EXISTS (SELECT 1 FROM existing)
+           ON CONFLICT DO NOTHING
+         )
+         INSERT INTO contact_identifiers
+           (session_id, contact_id, identity_type, identity_value, mapping_source)
+         SELECT $1, COALESCE((SELECT contact_id FROM existing), $4), $2, $3, 'MESSAGE_IDENTITY'
+         ON CONFLICT (session_id, identity_type, identity_value) DO UPDATE SET
+           last_observed_at = now(), updated_at = now()`,
+        [sessionId, identity.type, identity.value, candidateContactId],
+      );
+      const result = await client.query(
+        `WITH resolved AS MATERIALIZED (
+           SELECT contact_id FROM contact_identifiers
+           WHERE session_id = $1 AND identity_type = $2 AND identity_value = $3
+         ), name_write AS (
+           INSERT INTO contact_names (session_id, contact_id, name_source, name_value)
+           SELECT $1, contact_id, 'OPENWA_PUSH_NAME', $4 FROM resolved
+           ON CONFLICT (session_id, contact_id, name_source) DO UPDATE SET
+             name_value = EXCLUDED.name_value, last_observed_at = now(), updated_at = now()
+           RETURNING contact_id
+         ), contact_write AS (
+           UPDATE contacts contact SET
+             effective_display_name = CASE
+               WHEN contact.display_name_source IN ('OPENWA_CONTACT_NAME', 'GROUP_PARTICIPANT_NAME')
+                 THEN contact.effective_display_name ELSE $4 END,
+             display_name_source = CASE
+               WHEN contact.display_name_source IN ('OPENWA_CONTACT_NAME', 'GROUP_PARTICIPANT_NAME')
+                 THEN contact.display_name_source ELSE 'OPENWA_PUSH_NAME' END,
+             last_observed_at = now(), updated_at = now()
+           FROM name_write WHERE contact.session_id = $1 AND contact.id = name_write.contact_id
+           RETURNING contact.id, contact.effective_display_name, contact.display_name_source
+         )
+         UPDATE group_members member SET display_name = contact_write.effective_display_name,
+           display_name_source = contact_write.display_name_source,
+           display_name_updated_at = now(), updated_at = now()
+         FROM contact_write WHERE member.session_id = $1 AND member.contact_id = contact_write.id
+           AND (member.display_name, member.display_name_source)
+             IS DISTINCT FROM (contact_write.effective_display_name, contact_write.display_name_source)`,
+        [sessionId, identity.type, identity.value, pushName],
+      );
+      return result.rowCount !== null;
+    });
+  }
+
   async seedGroupMembers(
     client: PoolClient,
     sessionId: string,
