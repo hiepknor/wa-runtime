@@ -11,6 +11,7 @@ export interface ClaimedGatewaySyncItem extends GatewaySyncItemDispatch {
   leaseToken: string;
   attemptNumber: number;
   syncEpoch: string;
+  observedSummaryFingerprint: string | null;
 }
 
 export interface SyncItemWriteFence {
@@ -19,4 +20,10 @@ export interface SyncItemWriteFence {
   sessionId: string;
   leaseToken: string;
   syncEpoch: string;
+}
+
+export interface GatewaySyncFailurePolicy {
+  retryable: boolean;
+  ratePressure: boolean;
+  code: string;
 }

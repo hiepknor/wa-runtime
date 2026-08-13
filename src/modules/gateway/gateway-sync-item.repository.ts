@@ -6,7 +6,11 @@ import { DatabaseService } from '../../core/database/database.service';
 import { pendingGroupName, type OpenWAGroupSummary } from '../../integrations/openwa/openwa.client';
 import type { GatewaySyncMode } from '../../contracts/sessions/sync-request.dto';
 import type { SyncWriteFence } from './gateway.repository';
-import type { ClaimedGatewaySyncItem, GatewaySyncItemDispatch } from './gateway-sync-item.types';
+import type {
+  ClaimedGatewaySyncItem,
+  GatewaySyncFailurePolicy,
+  GatewaySyncItemDispatch,
+} from './gateway-sync-item.types';
 
 const summaryFingerprint = (group: OpenWAGroupSummary): string => createHash('sha256').update(JSON.stringify({
   id: group.id,
@@ -15,6 +19,10 @@ const summaryFingerprint = (group: OpenWAGroupSummary): string => createHash('sh
   isAdmin: group.isAdmin ?? null,
   linkedParentJID: group.linkedParentJID ?? null,
 })).digest('hex');
+
+const snapshotFingerprint = (groups: OpenWAGroupSummary[]): string => createHash('sha256')
+  .update(JSON.stringify(groups.map(group => group.id).sort()))
+  .digest('hex');
 
 @Injectable()
 export class GatewaySyncItemRepository {
@@ -27,20 +35,59 @@ export class GatewaySyncItemRepository {
     sessionId: string,
     mode: GatewaySyncMode,
     groups: OpenWAGroupSummary[],
-  ): Promise<{ discovered: number; scheduled: number; completed: boolean }> {
+  ): Promise<{ discovered: number; scheduled: number; completed: boolean; deferred: boolean }> {
     return this.database.transaction(async client => {
       await this.assertDiscoveryOwnership(client, fence, sessionId);
       const current = await client.query<{
         id: string;
-        summary_fingerprint: string | null;
+        reconciled_summary_fingerprint: string | null;
         details_synced_at: Date | null;
         capability_invalidated_at: Date | null;
       }>(
-        `SELECT id, summary_fingerprint, details_synced_at, capability_invalidated_at
+        `SELECT id, reconciled_summary_fingerprint, details_synced_at, capability_invalidated_at
          FROM gateway_groups WHERE session_id = $1 FOR UPDATE`,
         [sessionId],
       );
       const existing = new Map(current.rows.map(row => [row.id, row]));
+      const snapshot = snapshotFingerprint(groups);
+      const sessionState = await client.query<{
+        group_snapshot_count: number | null;
+        suspicious_group_snapshot_fingerprint: string | null;
+        suspicious_group_snapshot_count: number | null;
+        suspicious_group_snapshot_confirmations: number;
+      }>(
+        `SELECT group_snapshot_count, suspicious_group_snapshot_fingerprint,
+           suspicious_group_snapshot_count, suspicious_group_snapshot_confirmations
+         FROM gateway_sessions WHERE id = $1 FOR UPDATE`,
+        [sessionId],
+      );
+      const state = sessionState.rows[0];
+      const baseline = state?.group_snapshot_count ?? existing.size;
+      const suspicious = baseline >= this.config.GATEWAY_SYNC_SNAPSHOT_MIN_BASELINE
+        && groups.length < baseline * this.config.GATEWAY_SYNC_SNAPSHOT_DROP_RATIO;
+      const matchingConfirmation = suspicious
+        && state?.suspicious_group_snapshot_fingerprint === snapshot
+        && state.suspicious_group_snapshot_count === groups.length;
+      const confirmations = matchingConfirmation
+        ? state.suspicious_group_snapshot_confirmations + 1
+        : 1;
+      if (suspicious && confirmations < this.config.GATEWAY_SYNC_SNAPSHOT_CONFIRMATIONS) {
+        await client.query(
+          `UPDATE gateway_sessions SET suspicious_group_snapshot_fingerprint = $2,
+             suspicious_group_snapshot_count = $3, suspicious_group_snapshot_confirmations = $4,
+             updated_at = now() WHERE id = $1`,
+          [sessionId, snapshot, groups.length, confirmations],
+        );
+        await client.query(
+          `UPDATE sync_runs SET status = 'PENDING', sync_epoch = NULL,
+             attempt_count = GREATEST(attempt_count - 1, 0),
+             next_attempt_at = now() + interval '5 seconds', lease_token = NULL,
+             lease_expires_at = NULL, error = 'SUSPICIOUS_GROUP_SNAPSHOT', updated_at = now()
+           WHERE id = $1 AND lease_token = $2`,
+          [fence.syncRunId, fence.leaseToken],
+        );
+        return { discovered: groups.length, scheduled: 0, completed: false, deferred: true };
+      }
       await this.replaceSummaries(client, sessionId, groups);
 
       const staleBefore = new Date(Date.now() - this.config.GATEWAY_GROUP_DETAILS_STALE_AFTER_HOURS * 3_600_000);
@@ -51,19 +98,22 @@ export class GatewaySyncItemRepository {
         if (mode === 'FULL') reason = 'FULL';
         else if (!before?.details_synced_at) reason = 'MISSING_DETAILS';
         else if (before.capability_invalidated_at) reason = 'CAPABILITY_INVALIDATED';
-        else if (before.summary_fingerprint !== fingerprint) reason = 'SUMMARY_CHANGED';
+        else if (before.reconciled_summary_fingerprint !== fingerprint) reason = 'SUMMARY_NOT_RECONCILED';
         else if (before.details_synced_at < staleBefore) reason = 'DETAILS_STALE';
         return reason ? [{ group, ordinal, reason, fingerprint }] : [];
       });
 
       if (selected.length > 0) {
         await client.query(
-          `INSERT INTO gateway_sync_items (sync_run_id, session_id, group_id, ordinal, reason)
-           SELECT $1, $2, item.group_id, item.ordinal, item.reason
-           FROM jsonb_to_recordset($3::jsonb) AS item(group_id text, ordinal integer, reason text)
+          `INSERT INTO gateway_sync_items
+             (sync_run_id, session_id, group_id, ordinal, reason, observed_summary_fingerprint)
+           SELECT $1, $2, item.group_id, item.ordinal, item.reason, item.fingerprint
+           FROM jsonb_to_recordset($3::jsonb)
+             AS item(group_id text, ordinal integer, reason text, fingerprint text)
            ON CONFLICT (sync_run_id, group_id) DO NOTHING`,
           [fence.syncRunId, sessionId, JSON.stringify(selected.map(item => ({
             group_id: item.group.id, ordinal: item.ordinal, reason: item.reason,
+            fingerprint: item.fingerprint,
           })))],
         );
       }
@@ -78,6 +128,12 @@ export class GatewaySyncItemRepository {
 
       const completed = selected.length === 0;
       await client.query(
+        `UPDATE gateway_sessions SET group_snapshot_count = $2,
+           suspicious_group_snapshot_fingerprint = NULL, suspicious_group_snapshot_count = NULL,
+           suspicious_group_snapshot_confirmations = 0, updated_at = now() WHERE id = $1`,
+        [sessionId, groups.length],
+      );
+      await client.query(
         `UPDATE sync_runs SET phase = $3, groups_discovered = $4, groups_scheduled = $5,
            status = CASE WHEN $6 THEN 'COMPLETED'::gateway_sync_status ELSE status END,
            completed_at = CASE WHEN $6 THEN now() ELSE NULL END,
@@ -86,7 +142,7 @@ export class GatewaySyncItemRepository {
         [fence.syncRunId, fence.leaseToken, completed ? 'COMPLETED' : 'RECONCILING',
           groups.length, selected.length, completed],
       );
-      return { discovered: groups.length, scheduled: selected.length, completed };
+      return { discovered: groups.length, scheduled: selected.length, completed, deferred: false };
     });
   }
 
@@ -142,7 +198,12 @@ export class GatewaySyncItemRepository {
     });
   }
 
-  async recordSessionRequestOutcome(sessionId: string, leaseToken: string, success: boolean): Promise<void> {
+  async recordSessionRequestOutcome(
+    sessionId: string,
+    leaseToken: string,
+    success: boolean,
+    ratePressure = false,
+  ): Promise<void> {
     if (success) {
       await this.database.query(
         `UPDATE gateway_sync_rate_limits SET consecutive_failures = 0, cooldown_until = NULL,
@@ -153,12 +214,14 @@ export class GatewaySyncItemRepository {
       return;
     }
     await this.database.query(
-      `UPDATE gateway_sync_rate_limits SET consecutive_failures = consecutive_failures + 1,
-         cooldown_until = now() + (CASE LEAST(consecutive_failures + 1, 4)
-           WHEN 1 THEN 5 WHEN 2 THEN 15 WHEN 3 THEN 30 ELSE 60 END * interval '1 second'),
+      `UPDATE gateway_sync_rate_limits SET
+         consecutive_failures = CASE WHEN $3 THEN consecutive_failures + 1 ELSE consecutive_failures END,
+         cooldown_until = CASE WHEN $3 THEN now() + (CASE LEAST(consecutive_failures + 1, 4)
+           WHEN 1 THEN 5 WHEN 2 THEN 15 WHEN 3 THEN 30 ELSE 60 END * interval '1 second')
+           ELSE cooldown_until END,
          active_lease_token = NULL, active_lease_expires_at = NULL, updated_at = now()
        WHERE session_id = $1 AND active_lease_token = $2`,
-      [sessionId, leaseToken],
+      [sessionId, leaseToken, ratePressure],
     );
   }
 
@@ -166,8 +229,10 @@ export class GatewaySyncItemRepository {
     return this.database.transaction(async client => {
       const candidate = await client.query<{
         sync_run_id: string; session_id: string; group_id: string; sync_epoch: string;
+        observed_summary_fingerprint: string | null;
       }>(
-        `SELECT items.sync_run_id, items.session_id, items.group_id, runs.sync_epoch
+        `SELECT items.sync_run_id, items.session_id, items.group_id, runs.sync_epoch,
+           items.observed_summary_fingerprint
          FROM gateway_sync_items items JOIN sync_runs runs ON runs.id = items.sync_run_id
          WHERE items.id = $1 AND runs.status = 'RUNNING' FOR UPDATE OF items`,
         [id],
@@ -207,8 +272,18 @@ export class GatewaySyncItemRepository {
       return {
         id, syncRunId: row.sync_run_id, sessionId: row.session_id, groupId: row.group_id,
         syncEpoch: row.sync_epoch, leaseToken: claim.lease_token, attemptNumber: claim.attempt_count,
+        observedSummaryFingerprint: row.observed_summary_fingerprint,
       };
     });
+  }
+
+  async renewLease(id: string, leaseToken: string): Promise<boolean> {
+    const result = await this.database.query(
+      `UPDATE gateway_sync_items SET lease_expires_at = now() + interval '2 minutes', updated_at = now()
+       WHERE id = $1 AND status = 'RUNNING' AND lease_token = $2 AND lease_expires_at > now()`,
+      [id, leaseToken],
+    );
+    return result.rowCount === 1;
   }
 
   async complete(id: string, leaseToken: string, members: number): Promise<boolean> {
@@ -222,6 +297,14 @@ export class GatewaySyncItemRepository {
       );
       const row = result.rows[0];
       if (!row) return false;
+      await client.query(
+        `UPDATE gateway_groups groups SET reconciled_summary_fingerprint =
+             COALESCE(items.observed_summary_fingerprint, groups.reconciled_summary_fingerprint),
+           updated_at = now()
+         FROM gateway_sync_items items
+         WHERE items.id = $1 AND groups.session_id = items.session_id AND groups.id = items.group_id`,
+        [id],
+      );
       await client.query(
         `UPDATE gateway_sync_rate_limits SET consecutive_failures = 0, cooldown_until = NULL,
            active_lease_token = NULL, active_lease_expires_at = NULL, updated_at = now()
@@ -255,7 +338,12 @@ export class GatewaySyncItemRepository {
     });
   }
 
-  async fail(id: string, leaseToken: string, error: string, retryable: boolean): Promise<'RETRY' | 'FAILED' | 'LOST_OWNERSHIP'> {
+  async fail(
+    id: string,
+    leaseToken: string,
+    error: string,
+    policy: GatewaySyncFailurePolicy,
+  ): Promise<'RETRY' | 'FAILED' | 'LOST_OWNERSHIP'> {
     return this.database.transaction(async client => {
       const owned = await client.query<{
         sync_run_id: string; session_id: string; attempt_count: number;
@@ -267,7 +355,7 @@ export class GatewaySyncItemRepository {
       );
       const row = owned.rows[0];
       if (!row) return 'LOST_OWNERSHIP';
-      const willRetry = retryable && row.attempt_count < this.config.GATEWAY_SYNC_ITEM_MAX_ATTEMPTS;
+      const willRetry = policy.retryable && row.attempt_count < this.config.GATEWAY_SYNC_ITEM_MAX_ATTEMPTS;
       const delaySeconds = Math.min(300, 5 * 2 ** Math.max(0, row.attempt_count - 1))
         * (0.8 + Math.random() * 0.4);
       await client.query(
@@ -279,13 +367,14 @@ export class GatewaySyncItemRepository {
         [id, leaseToken, willRetry ? 'RETRY' : 'FAILED', error, delaySeconds],
       );
       await client.query(
-        `UPDATE gateway_sync_rate_limits SET consecutive_failures = consecutive_failures + 1,
-           cooldown_until = now() + (CASE LEAST(consecutive_failures + 1, 4)
+        `UPDATE gateway_sync_rate_limits SET
+           consecutive_failures = CASE WHEN $3 THEN consecutive_failures + 1 ELSE consecutive_failures END,
+           cooldown_until = CASE WHEN $3 THEN now() + (CASE LEAST(consecutive_failures + 1, 4)
              WHEN 1 THEN 5 WHEN 2 THEN 15 WHEN 3 THEN 30 ELSE 60 END
-             * (0.8 + random() * 0.4) * interval '1 second'),
+             * (0.8 + random() * 0.4) * interval '1 second') ELSE cooldown_until END,
            active_lease_token = NULL, active_lease_expires_at = NULL, updated_at = now()
          WHERE session_id = $1 AND active_lease_token = $2`,
-        [row.session_id, leaseToken],
+        [row.session_id, leaseToken, policy.ratePressure],
       );
       await this.refreshParent(client, row.sync_run_id);
       return willRetry ? 'RETRY' : 'FAILED';

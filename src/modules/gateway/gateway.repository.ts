@@ -15,6 +15,7 @@ import {
 } from '../../integrations/openwa/openwa.client';
 import { evaluateGroupCapability, type GroupSendCapabilityReason, type GroupSendCapabilityStatus } from './group-capability';
 import type { SyncItemWriteFence } from './gateway-sync-item.types';
+import { GatewaySyncModeConflictError } from './gateway-sync.types';
 
 interface SessionRow {
   id: string;
@@ -79,7 +80,13 @@ interface SyncRunRow {
   groups_scheduled: number;
   groups_failed: number;
   groups_skipped: number;
+  groups_pending?: number;
+  groups_running?: number;
+  groups_retrying?: number;
   members_synced: number;
+  item_next_attempt_at?: Date | null;
+  next_attempt_at: Date;
+  cooldown_until?: Date | null;
   error: string | null;
   requested_at: Date;
   started_at: Date | null;
@@ -202,7 +209,12 @@ const mapSyncRun = (row: SyncRunRow): SyncRunDto => ({
   groupsScheduled: row.groups_scheduled,
   groupsFailed: row.groups_failed,
   groupsSkipped: row.groups_skipped,
+  groupsPending: row.groups_pending ?? 0,
+  groupsRunning: row.groups_running ?? 0,
+  groupsRetrying: row.groups_retrying ?? 0,
   membersSynced: row.members_synced,
+  nextAttemptAt: row.item_next_attempt_at ?? (row.status === 'PENDING' ? row.next_attempt_at : null),
+  cooldownUntil: row.cooldown_until ?? null,
   error: row.error,
   requestedAt: row.requested_at,
   startedAt: row.started_at,
@@ -417,6 +429,15 @@ export class GatewayRepository {
           ],
         );
       }
+      if (options.syncItemFence) {
+        const renewed = await client.query(
+          `UPDATE gateway_sync_items SET lease_expires_at = clock_timestamp() + interval '2 minutes',
+             updated_at = clock_timestamp()
+           WHERE id = $1 AND status = 'RUNNING' AND lease_token = $2`,
+          [options.syncItemFence.itemId, options.syncItemFence.leaseToken],
+        );
+        if (renewed.rowCount !== 1) throw new Error('Gateway sync item lost write ownership');
+      }
       return { members: group.participants.length, applied: true };
     });
   }
@@ -511,25 +532,26 @@ export class GatewayRepository {
     expectedRevision: number,
     leaseToken: string,
     error: string,
+    retryable = true,
   ): Promise<CapabilityRefreshAttemptResult> {
     const result = await this.database.query<{ exhausted: boolean }>(
       `UPDATE gateway_groups SET
          send_capability = 'UNKNOWN',
-         send_capability_reason = CASE WHEN capability_refresh_attempt_count >= 3
+         send_capability_reason = CASE WHEN NOT $6 OR capability_refresh_attempt_count >= 3
            THEN 'REFRESH_FAILED' ELSE send_capability_reason END,
-         capability_checked_at = CASE WHEN capability_refresh_attempt_count >= 3
+         capability_checked_at = CASE WHEN NOT $6 OR capability_refresh_attempt_count >= 3
            THEN now() ELSE capability_checked_at END,
-         capability_invalidated_at = CASE WHEN capability_refresh_attempt_count >= 3
+         capability_invalidated_at = CASE WHEN NOT $6 OR capability_refresh_attempt_count >= 3
            THEN NULL ELSE capability_invalidated_at END,
-         capability_refresh_next_attempt_at = CASE WHEN capability_refresh_attempt_count >= 3
+         capability_refresh_next_attempt_at = CASE WHEN NOT $6 OR capability_refresh_attempt_count >= 3
            THEN capability_refresh_next_attempt_at
            ELSE now() + LEAST(300, 5 * power(2, capability_refresh_attempt_count - 1)) * interval '1 second' END,
          capability_refresh_lease_token = NULL, capability_refresh_lease_expires_at = NULL,
          capability_refresh_error = $5, updated_at = now()
        WHERE session_id = $1 AND id = $2 AND capability_revision = $3
          AND capability_refresh_lease_token = $4 AND capability_refresh_lease_expires_at > now()
-       RETURNING capability_refresh_attempt_count >= 3 AS exhausted`,
-      [sessionId, groupId, expectedRevision, leaseToken, error],
+       RETURNING NOT $6 OR capability_refresh_attempt_count >= 3 AS exhausted`,
+      [sessionId, groupId, expectedRevision, leaseToken, error, retryable],
     );
     const row = result.rows[0];
     return row ? (row.exhausted ? 'FAILED' : 'RETRY') : 'LOST_OWNERSHIP';
@@ -651,18 +673,27 @@ export class GatewayRepository {
   }
 
   async createSyncRun(sessionId: string, mode: GatewaySyncMode = GatewaySyncMode.FULL): Promise<SyncRunDto> {
-    return this.database.transaction(async client => {
+    const id = await this.database.transaction(async client => {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`gateway-sync:${sessionId}`]);
       const active = await client.query<SyncRunRow>(
         `SELECT * FROM sync_runs WHERE session_id = $1 AND status IN ('PENDING','RUNNING')
          ORDER BY requested_at LIMIT 1`,
         [sessionId],
       );
-      if (active.rows[0]) return mapSyncRun(active.rows[0]);
-      const result = await client.query<SyncRunRow>(
-        `INSERT INTO sync_runs (session_id, sync_type) VALUES ($1, $2) RETURNING *`, [sessionId, mode]);
-      return mapSyncRun(result.rows[0]!);
+      if (active.rows[0]) {
+        const existing = mapSyncRun(active.rows[0]);
+        if (existing.syncType !== mode) {
+          throw new GatewaySyncModeConflictError(existing.id, existing.syncType);
+        }
+        return existing.id;
+      }
+      const result = await client.query<{ id: string }>(
+        `INSERT INTO sync_runs (session_id, sync_type) VALUES ($1, $2) RETURNING id`, [sessionId, mode]);
+      return result.rows[0]!.id;
     });
+    const run = await this.findSyncRun(id);
+    if (!run) throw new Error('Created sync run was not found');
+    return run;
   }
 
   async findSyncRunProgress(id: string, sessionId: string): Promise<{
@@ -689,7 +720,20 @@ export class GatewayRepository {
   }
 
   async findSyncRun(id: string): Promise<SyncRunDto | null> {
-    const result = await this.database.query<SyncRunRow>('SELECT * FROM sync_runs WHERE id = $1', [id]);
+    const result = await this.database.query<SyncRunRow>(
+      `SELECT runs.*,
+         count(items.id) FILTER (WHERE items.status = 'PENDING')::integer AS groups_pending,
+         count(items.id) FILTER (WHERE items.status = 'RUNNING')::integer AS groups_running,
+         count(items.id) FILTER (WHERE items.status = 'RETRY')::integer AS groups_retrying,
+         min(items.next_attempt_at) FILTER (WHERE items.status IN ('PENDING','RETRY')) AS item_next_attempt_at,
+         CASE WHEN runs.status IN ('PENDING','RUNNING') THEN limits.cooldown_until END AS cooldown_until
+       FROM sync_runs runs
+       LEFT JOIN gateway_sync_items items ON items.sync_run_id = runs.id
+       LEFT JOIN gateway_sync_rate_limits limits ON limits.session_id = runs.session_id
+       WHERE runs.id = $1
+       GROUP BY runs.id, limits.cooldown_until`,
+      [id],
+    );
     return result.rows[0] ? mapSyncRun(result.rows[0]) : null;
   }
 

@@ -1,10 +1,11 @@
-import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { runtimeConfig } from '../../core/config/runtime-config';
 import type { SyncRunDto } from '../../contracts/sessions/sync-run.dto';
 import { GatewaySyncMode } from '../../contracts/sessions/sync-request.dto';
 import { OpenWAClient, OpenWAHttpError, OpenWAResponseValidationError } from '../../integrations/openwa/openwa.client';
 import { GatewayRepository, type SyncWriteFence } from './gateway.repository';
 import { GatewaySyncItemRepository } from './gateway-sync-item.repository';
+import { GatewaySyncModeConflictError } from './gateway-sync.types';
 
 @Injectable()
 export class GatewaySyncService {
@@ -21,7 +22,17 @@ export class GatewaySyncService {
     if (!this.config.OPENWA_ALLOWED_SESSION_IDS.includes(sessionId)) {
       throw new ForbiddenException('Session is not in OPENWA_ALLOWED_SESSION_IDS');
     }
-    return this.repository.createSyncRun(sessionId, mode);
+    try {
+      return await this.repository.createSyncRun(sessionId, mode);
+    } catch (error) {
+      if (error instanceof GatewaySyncModeConflictError) {
+        throw new ConflictException({
+          statusCode: 409, code: 'SYNC_MODE_CONFLICT', message: error.message,
+          activeRunId: error.activeRunId, activeMode: error.activeMode,
+        });
+      }
+      throw error;
+    }
   }
 
   async perform(syncRunId: string): Promise<{ groups?: number; members?: number; skipped?: boolean }> {
@@ -55,6 +66,13 @@ export class GatewaySyncService {
       const discovery = await this.items.publishDiscovery(
         syncFence, sessionId, run.syncType, groups,
       );
+      if (discovery.deferred) {
+        this.logger.warn({
+          event: 'gateway.sync.discovery.suspicious', syncRunId, sessionId,
+          groupsDiscovered: discovery.discovered,
+        });
+        return { skipped: true };
+      }
       this.logger.log({
         event: 'gateway.sync.discovery.completed', syncRunId, sessionId,
         mode: run.syncType, groupsDiscovered: discovery.discovered,
@@ -79,8 +97,28 @@ export class GatewaySyncService {
   async reconcileGroup(itemId: string): Promise<{ members?: number; skipped?: boolean }> {
     const claim = await this.items.claim(itemId);
     if (!claim) return { skipped: true };
+    let ownershipLost = false;
+    let renewalInFlight = false;
+    const heartbeat = setInterval(() => {
+      if (renewalInFlight || ownershipLost) return;
+      renewalInFlight = true;
+      void this.items.renewLease(claim.id, claim.leaseToken)
+        .then(renewed => { if (!renewed) ownershipLost = true; })
+        .catch(() => { ownershipLost = true; })
+        .finally(() => { renewalInFlight = false; });
+    }, 30_000);
+    heartbeat.unref();
+    let stage: 'UPSTREAM' | 'PERSISTENCE' = 'UPSTREAM';
     try {
       const group = await this.openwa.getGroup(claim.sessionId, claim.groupId);
+      stage = 'PERSISTENCE';
+      if (ownershipLost || !await this.items.renewLease(claim.id, claim.leaseToken)) {
+        this.logger.warn({
+          event: 'gateway.sync.item.lost_ownership', syncRunId: claim.syncRunId,
+          sessionId: claim.sessionId,
+        });
+        return { skipped: true };
+      }
       const result = await this.repository.upsertGroupDetails(claim.sessionId, group, {
         syncItemFence: {
           itemId: claim.id,
@@ -99,7 +137,7 @@ export class GatewaySyncService {
       });
       return { members: result.members };
     } catch (error) {
-      if (error instanceof OpenWAHttpError && error.status === 404) {
+      if (stage === 'UPSTREAM' && error instanceof OpenWAHttpError && error.status === 404) {
         await this.items.skip(claim.id, claim.leaseToken, error.message);
         this.logger.warn({
           event: 'gateway.sync.item.skipped', syncRunId: claim.syncRunId,
@@ -107,11 +145,14 @@ export class GatewaySyncService {
         });
         return { skipped: true };
       }
+      const policy = stage === 'UPSTREAM'
+        ? this.classifyGroupReadFailure(error)
+        : { retryable: true, ratePressure: false, code: 'PERSISTENCE_ERROR' };
       const outcome = await this.items.fail(
         claim.id,
         claim.leaseToken,
-        error instanceof Error ? error.message : String(error),
-        this.isRetryableGroupRead(error),
+        policy.code,
+        policy,
       );
       this.logger.warn({
         event: 'gateway.sync.item.failed', syncRunId: claim.syncRunId,
@@ -119,15 +160,22 @@ export class GatewaySyncService {
         statusCode: error instanceof OpenWAHttpError ? error.status : undefined,
       });
       throw error;
+    } finally {
+      clearInterval(heartbeat);
     }
   }
 
-  private isRetryableGroupRead(error: unknown): boolean {
-    if (error instanceof OpenWAResponseValidationError) return false;
-    if (error instanceof OpenWAHttpError) {
-      return error.status === 409 || error.status === 429 || error.status >= 500;
+  private classifyGroupReadFailure(error: unknown) {
+    if (error instanceof OpenWAResponseValidationError) {
+      return { retryable: false, ratePressure: false, code: 'INVALID_RESPONSE' };
     }
-    return true;
+    if (error instanceof OpenWAHttpError) {
+      if (error.status === 429) return { retryable: true, ratePressure: true, code: 'RATE_LIMITED' };
+      if (error.status >= 500) return { retryable: true, ratePressure: true, code: 'UPSTREAM_SERVER_ERROR' };
+      if (error.status === 409) return { retryable: true, ratePressure: false, code: 'UPSTREAM_CONFLICT' };
+      return { retryable: false, ratePressure: false, code: `UPSTREAM_HTTP_${error.status}` };
+    }
+    return { retryable: true, ratePressure: true, code: 'UPSTREAM_NETWORK_ERROR' };
   }
 
   private async assertSyncOwnership(
@@ -155,8 +203,10 @@ export class GatewaySyncService {
       await this.items.recordSessionRequestOutcome(sessionId, pacingLease, true);
       return { applied: false };
     }
+    let stage: 'UPSTREAM' | 'PERSISTENCE' = 'UPSTREAM';
     try {
       const group = await this.openwa.getGroup(sessionId, groupId);
+      stage = 'PERSISTENCE';
       const result = await this.repository.upsertGroupDetails(
         sessionId,
         group,
@@ -165,13 +215,17 @@ export class GatewaySyncService {
       await this.items.recordSessionRequestOutcome(sessionId, pacingLease, true);
       return { applied: result.applied };
     } catch (error) {
-      await this.items.recordSessionRequestOutcome(sessionId, pacingLease, false);
+      const policy = stage === 'UPSTREAM'
+        ? this.classifyGroupReadFailure(error)
+        : { retryable: true, ratePressure: false, code: 'PERSISTENCE_ERROR' };
+      await this.items.recordSessionRequestOutcome(sessionId, pacingLease, false, policy.ratePressure);
       await this.repository.failCapabilityRefreshAttempt(
         sessionId,
         groupId,
         expectedRevision,
         claim.leaseToken,
-        error instanceof Error ? error.message : String(error),
+        policy.code,
+        policy.retryable,
       );
       throw error;
     }

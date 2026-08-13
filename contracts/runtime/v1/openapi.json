@@ -97,6 +97,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "A different sync mode is already active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncModeConflictDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1385,8 +1395,31 @@
             "type": "number",
             "description": "Groups skipped because they disappeared during reconciliation"
           },
+          "groupsPending": {
+            "type": "number",
+            "description": "Group reconciliations waiting for their first attempt"
+          },
+          "groupsRunning": {
+            "type": "number",
+            "description": "Group reconciliations that currently own a processing lease"
+          },
+          "groupsRetrying": {
+            "type": "number",
+            "description": "Group reconciliations waiting for a durable retry"
+          },
           "membersSynced": {
-            "type": "number"
+            "type": "number",
+            "description": "Members observed in successfully reconciled group snapshots; not rows changed"
+          },
+          "nextAttemptAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "cooldownUntil": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
           },
           "error": {
             "type": "string",
@@ -1418,11 +1451,51 @@
           "groupsScheduled",
           "groupsFailed",
           "groupsSkipped",
+          "groupsPending",
+          "groupsRunning",
+          "groupsRetrying",
           "membersSynced",
+          "nextAttemptAt",
+          "cooldownUntil",
           "error",
           "requestedAt",
           "startedAt",
           "completedAt"
+        ]
+      },
+      "SyncModeConflictDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 409
+          },
+          "code": {
+            "type": "string",
+            "example": "SYNC_MODE_CONFLICT"
+          },
+          "message": {
+            "type": "string",
+            "example": "A different synchronization mode is already active"
+          },
+          "activeRunId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "activeMode": {
+            "type": "string",
+            "enum": [
+              "FULL",
+              "INCREMENTAL"
+            ]
+          }
+        },
+        "required": [
+          "statusCode",
+          "code",
+          "message",
+          "activeRunId",
+          "activeMode"
         ]
       },
       "GroupSendCapabilityDto": {

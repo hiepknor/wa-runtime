@@ -1,3 +1,5 @@
+import type { GatewaySyncMode } from '../../contracts/sessions/sync-request.dto';
+
 export interface FullGatewaySyncPayload {
   syncRunId: string;
   sessionId: string;
@@ -14,4 +16,14 @@ export interface GroupCapabilityRefreshPayload {
   sessionId: string;
   groupId: string;
   expectedRevision: number;
+}
+
+export class GatewaySyncModeConflictError extends Error {
+  constructor(
+    readonly activeRunId: string,
+    readonly activeMode: GatewaySyncMode,
+  ) {
+    super('A different synchronization mode is already active');
+    this.name = 'GatewaySyncModeConflictError';
+  }
 }

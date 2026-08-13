@@ -35,8 +35,23 @@ export class SyncRunDto {
   @ApiProperty({ description: 'Groups skipped because they disappeared during reconciliation' })
   groupsSkipped!: number;
 
-  @ApiProperty()
+  @ApiProperty({ description: 'Group reconciliations waiting for their first attempt' })
+  groupsPending!: number;
+
+  @ApiProperty({ description: 'Group reconciliations that currently own a processing lease' })
+  groupsRunning!: number;
+
+  @ApiProperty({ description: 'Group reconciliations waiting for a durable retry' })
+  groupsRetrying!: number;
+
+  @ApiProperty({ description: 'Members observed in successfully reconciled group snapshots; not rows changed' })
   membersSynced!: number;
+
+  @ApiProperty({ type: String, format: 'date-time', nullable: true })
+  nextAttemptAt!: Date | null;
+
+  @ApiProperty({ type: String, format: 'date-time', nullable: true })
+  cooldownUntil!: Date | null;
 
   @ApiProperty({ type: String, nullable: true })
   error!: string | null;

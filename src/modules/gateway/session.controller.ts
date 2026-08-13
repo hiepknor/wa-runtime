@@ -1,8 +1,9 @@
 import { Body, Controller, Get, HttpCode, NotFoundException, Param, ParseUUIDPipe, Post } from '@nestjs/common';
-import { ApiAcceptedResponse, ApiBody, ApiOkResponse, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { ApiAcceptedResponse, ApiBody, ApiConflictResponse, ApiOkResponse, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { SessionDto, SessionListDto } from '../../contracts/sessions/session.dto';
 import { SyncRunDto } from '../../contracts/sessions/sync-run.dto';
 import { SyncRequestDto } from '../../contracts/sessions/sync-request.dto';
+import { SyncModeConflictDto } from '../../contracts/sessions/sync-mode-conflict.dto';
 import { GatewayRepository } from './gateway.repository';
 import { GatewaySyncService } from './gateway-sync.service';
 import { SessionService } from './session.service';
@@ -34,6 +35,7 @@ export class SessionController {
   @ApiOperation({ summary: 'Queue durable discovery and group reconciliation' })
   @ApiBody({ type: SyncRequestDto, required: false })
   @ApiAcceptedResponse({ type: SyncRunDto })
+  @ApiConflictResponse({ type: SyncModeConflictDto, description: 'A different sync mode is already active' })
   requestSync(@Param('id', ParseUUIDPipe) id: string, @Body() request: SyncRequestDto = new SyncRequestDto()) {
     return this.sync.request(id, request.mode);
   }
