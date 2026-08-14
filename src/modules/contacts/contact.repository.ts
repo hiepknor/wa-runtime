@@ -5,6 +5,7 @@ import type { OpenWAGroupParticipant } from '../../integrations/openwa/openwa.cl
 import type { OpenWAContact } from '../../integrations/openwa/openwa.client';
 import { normalizeContactIdentity, normalizeContactName } from './contact-normalization';
 import { DatabaseService } from '../../core/database/database.service';
+import { contactNameProjectionSql, memberNameProjectionSql } from './contact-name-resolution.sql';
 
 interface GroupMemberContactInput {
   participant_id: string;
@@ -19,6 +20,30 @@ const inputRelation = `jsonb_to_recordset($3::jsonb) AS member(
   participant_id text, identity_type text, identity_value text, phone text,
   participant_name text, candidate_contact_id uuid
 )`;
+
+const contactProjection = contactNameProjectionSql({
+  contactName: 'contact_source.name_value',
+  pushName: 'push_source.name_value',
+});
+const observedContactProjection = contactNameProjectionSql({
+  contactName: 'contact_source.name_value',
+  pushName: 'name_write.name_value',
+});
+const memberProjection = memberNameProjectionSql({
+  contactName: 'contact.effective_display_name',
+  contactSource: 'contact.display_name_source',
+  participantName: 'member.participant_display_name',
+});
+const observedMemberProjection = memberNameProjectionSql({
+  contactName: 'contact_write.effective_display_name',
+  contactSource: 'contact_write.display_name_source',
+  participantName: 'member.participant_display_name',
+});
+const resolvedMemberProjection = memberNameProjectionSql({
+  contactName: 'resolved.effective_display_name',
+  contactSource: 'resolved.contact_name_source',
+  participantName: 'resolved.participant_name',
+});
 
 @Injectable()
 export class ContactRepository {
@@ -205,22 +230,40 @@ export class ContactRepository {
              ON identifier.session_id = $1 AND identifier.identity_type = input.identity_type
             AND identifier.identity_value = input.identity_value
          ), contact_names_write AS (
-           INSERT INTO contact_names (session_id, contact_id, name_source, name_value)
+           INSERT INTO contact_names
+             (session_id, contact_id, name_source, name_value,
+              source_observed_at, source_observation_key)
            SELECT DISTINCT ON (matched.contact_id)
-             $1, matched.contact_id, 'OPENWA_CONTACT_NAME', matched.contact_name
+             $1, matched.contact_id, 'OPENWA_CONTACT_NAME', matched.contact_name,
+             now(), 'snapshot:' || $3::text || ':contact:'
+               || md5(matched.identity_type || ':' || matched.identity_value)
            FROM matched WHERE matched.contact_name IS NOT NULL
            ORDER BY matched.contact_id, matched.identity_value
            ON CONFLICT (session_id, contact_id, name_source) DO UPDATE SET
-             name_value = EXCLUDED.name_value, last_observed_at = now(), updated_at = now()
+             name_value = EXCLUDED.name_value,
+             source_observed_at = EXCLUDED.source_observed_at,
+             source_observation_key = EXCLUDED.source_observation_key,
+             last_observed_at = now(), updated_at = now()
+           WHERE (contact_names.source_observed_at, contact_names.source_observation_key)
+             < (EXCLUDED.source_observed_at, EXCLUDED.source_observation_key)
          )
-         INSERT INTO contact_names (session_id, contact_id, name_source, name_value)
+         INSERT INTO contact_names
+           (session_id, contact_id, name_source, name_value,
+            source_observed_at, source_observation_key)
          SELECT DISTINCT ON (matched.contact_id)
-           $1, matched.contact_id, 'OPENWA_PUSH_NAME', matched.push_name
+           $1, matched.contact_id, 'OPENWA_PUSH_NAME', matched.push_name,
+           now(), 'snapshot:' || $3::text || ':push:'
+             || md5(matched.identity_type || ':' || matched.identity_value)
          FROM matched WHERE matched.push_name IS NOT NULL
          ORDER BY matched.contact_id, matched.identity_value
          ON CONFLICT (session_id, contact_id, name_source) DO UPDATE SET
-           name_value = EXCLUDED.name_value, last_observed_at = now(), updated_at = now()`,
-        [sessionId, pageJson],
+           name_value = EXCLUDED.name_value,
+           source_observed_at = EXCLUDED.source_observed_at,
+           source_observation_key = EXCLUDED.source_observation_key,
+           last_observed_at = now(), updated_at = now()
+         WHERE (contact_names.source_observed_at, contact_names.source_observation_key)
+           < (EXCLUDED.source_observed_at, EXCLUDED.source_observation_key)`,
+        [sessionId, pageJson, generation],
       );
       await client.query(
         `WITH affected AS MATERIALIZED (
@@ -230,18 +273,11 @@ export class ContactRepository {
             AND identifier.identity_value = contact.identity_value
          ), effective AS MATERIALIZED (
            SELECT affected.contact_id,
-             COALESCE(contact_source.name_value, participant_source.name_value, push_source.name_value) AS name_value,
-             CASE
-               WHEN contact_source.name_value IS NOT NULL THEN 'OPENWA_CONTACT_NAME'
-               WHEN participant_source.name_value IS NOT NULL THEN 'GROUP_PARTICIPANT_NAME'
-               WHEN push_source.name_value IS NOT NULL THEN 'OPENWA_PUSH_NAME'
-               ELSE NULL
-             END AS name_source
+             ${contactProjection.name} AS name_value,
+             ${contactProjection.source} AS name_source
            FROM affected
            LEFT JOIN contact_names contact_source ON contact_source.session_id = $1
              AND contact_source.contact_id = affected.contact_id AND contact_source.name_source = 'OPENWA_CONTACT_NAME'
-           LEFT JOIN contact_names participant_source ON participant_source.session_id = $1
-             AND participant_source.contact_id = affected.contact_id AND participant_source.name_source = 'GROUP_PARTICIPANT_NAME'
            LEFT JOIN contact_names push_source ON push_source.session_id = $1
              AND push_source.contact_id = affected.contact_id AND push_source.name_source = 'OPENWA_PUSH_NAME'
          )
@@ -264,15 +300,15 @@ export class ContactRepository {
              ON phone_identifier.session_id = $1 AND phone_identifier.identity_type = 'PHONE'
             AND phone_identifier.identity_value = input.phone
          ), member_writes AS (
-           UPDATE group_members member SET display_name = contact.effective_display_name,
-             display_name_source = contact.display_name_source,
-             display_name_updated_at = CASE WHEN contact.effective_display_name IS NULL THEN NULL ELSE now() END,
+           UPDATE group_members member SET display_name = ${memberProjection.name},
+             display_name_source = ${memberProjection.source},
+             display_name_updated_at = CASE WHEN ${memberProjection.name} IS NULL THEN NULL ELSE now() END,
              updated_at = now()
            FROM contacts contact, affected
            WHERE contact.session_id = $1 AND contact.id = affected.contact_id
              AND member.session_id = $1 AND member.contact_id = contact.id
              AND (member.display_name, member.display_name_source)
-               IS DISTINCT FROM (contact.effective_display_name, contact.display_name_source)
+               IS DISTINCT FROM (${memberProjection.name}, ${memberProjection.source})
            RETURNING member.contact_id
          )
          SELECT (SELECT count(*) FROM member_writes)::text AS enriched`,
@@ -347,22 +383,30 @@ export class ContactRepository {
          ranked AS MATERIALIZED (
            SELECT mapping.winner_id, name.name_source, name.name_value,
              name.first_observed_at, name.last_observed_at,
+             name.source_observed_at, name.source_observation_key,
              row_number() OVER (
                PARTITION BY mapping.winner_id, name.name_source
-               ORDER BY name.last_observed_at DESC, name.contact_id, name.name_value
+               ORDER BY name.source_observed_at DESC, name.source_observation_key DESC,
+                 name.contact_id, name.name_value
              ) AS rank
            FROM mapping JOIN contact_names name
              ON name.session_id = $1 AND name.contact_id IN (mapping.winner_id, mapping.loser_id)
          )
          INSERT INTO contact_names
-           (session_id, contact_id, name_source, name_value, first_observed_at, last_observed_at)
-         SELECT $1, winner_id, name_source, name_value, first_observed_at, last_observed_at
+           (session_id, contact_id, name_source, name_value, first_observed_at, last_observed_at,
+            source_observed_at, source_observation_key)
+         SELECT $1, winner_id, name_source, name_value, first_observed_at, last_observed_at,
+           source_observed_at, source_observation_key
          FROM ranked WHERE rank = 1
          ON CONFLICT (session_id, contact_id, name_source) DO UPDATE SET
            name_value = EXCLUDED.name_value,
            first_observed_at = LEAST(contact_names.first_observed_at, EXCLUDED.first_observed_at),
            last_observed_at = GREATEST(contact_names.last_observed_at, EXCLUDED.last_observed_at),
-           updated_at = now()`,
+           source_observed_at = EXCLUDED.source_observed_at,
+           source_observation_key = EXCLUDED.source_observation_key,
+           updated_at = now()
+         WHERE (contact_names.source_observed_at, contact_names.source_observation_key)
+           <= (EXCLUDED.source_observed_at, EXCLUDED.source_observation_key)`,
         [sessionId],
       );
       await client.query(
@@ -405,18 +449,11 @@ export class ContactRepository {
            SELECT DISTINCT winner_id AS contact_id FROM contact_merge_plan
          ), effective AS MATERIALIZED (
            SELECT affected.contact_id,
-             COALESCE(contact_source.name_value, participant_source.name_value, push_source.name_value) AS name_value,
-             CASE
-               WHEN contact_source.name_value IS NOT NULL THEN 'OPENWA_CONTACT_NAME'
-               WHEN participant_source.name_value IS NOT NULL THEN 'GROUP_PARTICIPANT_NAME'
-               WHEN push_source.name_value IS NOT NULL THEN 'OPENWA_PUSH_NAME'
-               ELSE NULL
-             END AS name_source
+             ${contactProjection.name} AS name_value,
+             ${contactProjection.source} AS name_source
            FROM affected
            LEFT JOIN contact_names contact_source ON contact_source.session_id = $1
              AND contact_source.contact_id = affected.contact_id AND contact_source.name_source = 'OPENWA_CONTACT_NAME'
-           LEFT JOIN contact_names participant_source ON participant_source.session_id = $1
-             AND participant_source.contact_id = affected.contact_id AND participant_source.name_source = 'GROUP_PARTICIPANT_NAME'
            LEFT JOIN contact_names push_source ON push_source.session_id = $1
              AND push_source.contact_id = affected.contact_id AND push_source.name_source = 'OPENWA_PUSH_NAME'
          )
@@ -429,15 +466,15 @@ export class ContactRepository {
         `WITH affected AS MATERIALIZED (
            SELECT DISTINCT winner_id AS contact_id FROM contact_merge_plan
          ), member_writes AS (
-           UPDATE group_members member SET display_name = contact.effective_display_name,
-             display_name_source = contact.display_name_source,
-             display_name_updated_at = CASE WHEN contact.effective_display_name IS NULL THEN NULL ELSE now() END,
+           UPDATE group_members member SET display_name = ${memberProjection.name},
+             display_name_source = ${memberProjection.source},
+             display_name_updated_at = CASE WHEN ${memberProjection.name} IS NULL THEN NULL ELSE now() END,
              updated_at = now()
            FROM contacts contact, affected
            WHERE contact.session_id = $1 AND contact.id = affected.contact_id
              AND member.session_id = $1 AND member.contact_id = contact.id
              AND (member.display_name, member.display_name_source)
-               IS DISTINCT FROM (contact.effective_display_name, contact.display_name_source)
+               IS DISTINCT FROM (${memberProjection.name}, ${memberProjection.source})
            RETURNING member.contact_id
          ), ambiguous AS (
            SELECT evidence.phone
@@ -499,6 +536,8 @@ export class ContactRepository {
     sessionId: string,
     rawIdentity: string,
     rawPushName: string | null | undefined,
+    observedAt: Date,
+    observationKey: string,
   ): Promise<boolean> {
     const identity = normalizeContactIdentity(rawIdentity);
     if (identity.type !== 'LID' && identity.type !== 'PHONE_JID') return false;
@@ -523,37 +562,54 @@ export class ContactRepository {
            last_observed_at = now(), updated_at = now()`,
         [sessionId, identity.type, identity.value, candidateContactId],
       );
-      const result = await client.query(
+      const result = await client.query<{ accepted: boolean }>(
         `WITH resolved AS MATERIALIZED (
            SELECT contact_id FROM contact_identifiers
            WHERE session_id = $1 AND identity_type = $2 AND identity_value = $3
          ), name_write AS (
-           INSERT INTO contact_names (session_id, contact_id, name_source, name_value)
-           SELECT $1, contact_id, 'OPENWA_PUSH_NAME', $4 FROM resolved
+           INSERT INTO contact_names
+             (session_id, contact_id, name_source, name_value,
+              source_observed_at, source_observation_key)
+           SELECT $1, contact_id, 'OPENWA_PUSH_NAME', $4, $5, $6 FROM resolved
            ON CONFLICT (session_id, contact_id, name_source) DO UPDATE SET
-             name_value = EXCLUDED.name_value, last_observed_at = now(), updated_at = now()
-           RETURNING contact_id
+             name_value = EXCLUDED.name_value,
+             source_observed_at = EXCLUDED.source_observed_at,
+             source_observation_key = EXCLUDED.source_observation_key,
+             last_observed_at = now(), updated_at = now()
+           WHERE (contact_names.source_observed_at, contact_names.source_observation_key)
+             < (EXCLUDED.source_observed_at, EXCLUDED.source_observation_key)
+           RETURNING contact_id, name_value
+         ), effective AS MATERIALIZED (
+           SELECT name_write.contact_id,
+             ${observedContactProjection.name} AS name_value,
+             ${observedContactProjection.source} AS name_source
+           FROM name_write
+           LEFT JOIN contact_names contact_source ON contact_source.session_id = $1
+             AND contact_source.contact_id = name_write.contact_id
+             AND contact_source.name_source = 'OPENWA_CONTACT_NAME'
          ), contact_write AS (
            UPDATE contacts contact SET
-             effective_display_name = CASE
-               WHEN contact.display_name_source IN ('OPENWA_CONTACT_NAME', 'GROUP_PARTICIPANT_NAME')
-                 THEN contact.effective_display_name ELSE $4 END,
-             display_name_source = CASE
-               WHEN contact.display_name_source IN ('OPENWA_CONTACT_NAME', 'GROUP_PARTICIPANT_NAME')
-                 THEN contact.display_name_source ELSE 'OPENWA_PUSH_NAME' END,
+             effective_display_name = effective.name_value,
+             display_name_source = effective.name_source,
              last_observed_at = now(), updated_at = now()
-           FROM name_write WHERE contact.session_id = $1 AND contact.id = name_write.contact_id
+           FROM effective WHERE contact.session_id = $1 AND contact.id = effective.contact_id
            RETURNING contact.id, contact.effective_display_name, contact.display_name_source
          )
-         UPDATE group_members member SET display_name = contact_write.effective_display_name,
-           display_name_source = contact_write.display_name_source,
-           display_name_updated_at = now(), updated_at = now()
-         FROM contact_write WHERE member.session_id = $1 AND member.contact_id = contact_write.id
-           AND (member.display_name, member.display_name_source)
-             IS DISTINCT FROM (contact_write.effective_display_name, contact_write.display_name_source)`,
-        [sessionId, identity.type, identity.value, pushName],
+         , member_write AS (
+           UPDATE group_members member SET display_name = ${observedMemberProjection.name},
+             display_name_source = ${observedMemberProjection.source},
+             display_name_updated_at = CASE WHEN ${observedMemberProjection.name} IS NULL
+               THEN NULL ELSE now() END,
+             updated_at = now()
+           FROM contact_write WHERE member.session_id = $1 AND member.contact_id = contact_write.id
+             AND (member.display_name, member.display_name_source)
+               IS DISTINCT FROM (${observedMemberProjection.name}, ${observedMemberProjection.source})
+           RETURNING member.contact_id
+         )
+         SELECT EXISTS (SELECT 1 FROM name_write) AS accepted`,
+        [sessionId, identity.type, identity.value, pushName, observedAt, observationKey],
       );
-      return result.rowCount !== null;
+      return result.rows[0]?.accepted ?? false;
     });
   }
 
@@ -631,34 +687,6 @@ export class ContactRepository {
     );
 
     await client.query(
-      `WITH input AS MATERIALIZED (SELECT * FROM ${inputRelation} WHERE $2::text IS NOT NULL),
-       name_writes AS (
-         INSERT INTO contact_names (session_id, contact_id, name_source, name_value)
-         SELECT DISTINCT ON (identifier.contact_id)
-           $1, identifier.contact_id, 'GROUP_PARTICIPANT_NAME', input.participant_name
-         FROM input
-         JOIN contact_identifiers identifier
-           ON identifier.session_id = $1 AND identifier.identity_type = input.identity_type
-          AND identifier.identity_value = input.identity_value
-         WHERE input.participant_name IS NOT NULL
-         ORDER BY identifier.contact_id, input.participant_id
-         ON CONFLICT (session_id, contact_id, name_source) DO UPDATE SET
-           name_value = EXCLUDED.name_value, last_observed_at = now(), updated_at = now()
-         RETURNING contact_id, name_value
-       )
-       UPDATE contacts contact
-       SET effective_display_name = names.name_value,
-           display_name_source = 'GROUP_PARTICIPANT_NAME',
-           last_observed_at = now(), updated_at = now()
-       FROM name_writes names
-       WHERE contact.session_id = $1 AND contact.id = names.contact_id
-         AND (contact.display_name_source IS NULL OR contact.display_name_source = 'GROUP_PARTICIPANT_NAME')
-         AND (contact.effective_display_name, contact.display_name_source)
-           IS DISTINCT FROM (names.name_value, 'GROUP_PARTICIPANT_NAME')`,
-      values,
-    );
-
-    await client.query(
       `WITH input AS MATERIALIZED (SELECT * FROM ${inputRelation}),
        resolved AS MATERIALIZED (
          SELECT input.*, identifier.contact_id, contact.effective_display_name,
@@ -675,18 +703,10 @@ export class ContactRepository {
            resolved_phone_number = CASE WHEN resolved.identity_type = 'PHONE_JID'
              THEN resolved.phone ELSE NULL END,
            participant_display_name = resolved.participant_name,
-           display_name = CASE
-             WHEN resolved.contact_name_source = 'OPENWA_CONTACT_NAME' THEN resolved.effective_display_name
-             WHEN resolved.participant_name IS NOT NULL THEN resolved.participant_name
-             ELSE resolved.effective_display_name
-           END,
-           display_name_source = CASE
-             WHEN resolved.contact_name_source = 'OPENWA_CONTACT_NAME' THEN resolved.contact_name_source
-             WHEN resolved.participant_name IS NOT NULL THEN 'GROUP_PARTICIPANT_NAME'
-             ELSE resolved.contact_name_source
-           END,
+           display_name = ${resolvedMemberProjection.name},
+           display_name_source = ${resolvedMemberProjection.source},
            display_name_updated_at = CASE
-             WHEN COALESCE(resolved.effective_display_name, resolved.participant_name) IS NULL THEN NULL
+             WHEN ${resolvedMemberProjection.name} IS NULL THEN NULL
              ELSE now()
            END,
            updated_at = now()
@@ -696,16 +716,7 @@ export class ContactRepository {
          AND (member.contact_id, member.participant_display_name, member.display_name, member.display_name_source)
            IS DISTINCT FROM
            (resolved.contact_id, resolved.participant_name,
-            CASE
-              WHEN resolved.contact_name_source = 'OPENWA_CONTACT_NAME' THEN resolved.effective_display_name
-              WHEN resolved.participant_name IS NOT NULL THEN resolved.participant_name
-              ELSE resolved.effective_display_name
-            END,
-            CASE
-              WHEN resolved.contact_name_source = 'OPENWA_CONTACT_NAME' THEN resolved.contact_name_source
-              WHEN resolved.participant_name IS NOT NULL THEN 'GROUP_PARTICIPANT_NAME'
-              ELSE resolved.contact_name_source
-            END)`,
+            ${resolvedMemberProjection.name}, ${resolvedMemberProjection.source})`,
       values,
     );
   }

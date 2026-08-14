@@ -80,7 +80,13 @@ describe('WebhookProcessorService', () => {
 
     await processor.process(messageEnvelope.idempotencyKey);
 
-    expect(contacts.observe).toHaveBeenCalledWith('session-1', 'sender@lid', ' Sender name ');
+    expect(contacts.observe).toHaveBeenCalledWith(
+      'session-1',
+      'sender@lid',
+      ' Sender name ',
+      new Date('2026-08-11T00:00:00.000Z'),
+      'event-1',
+    );
   });
 
   it('does not poison a message webhook when optional contact enrichment fails', async () => {

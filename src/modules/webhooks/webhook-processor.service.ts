@@ -30,7 +30,8 @@ export class WebhookProcessorService {
     if (!claim) return { skipped: true };
     const { envelope, leaseToken } = claim;
     try {
-      await this.runtimeEvents.store(normalizeOpenWAWebhook(envelope));
+      const runtimeEvent = normalizeOpenWAWebhook(envelope);
+      await this.runtimeEvents.store(runtimeEvent);
       if (envelope.event === 'message.received') {
         const senderId = String(envelope.data.author ?? envelope.data.from ?? '');
         const contact = typeof envelope.data.contact === 'object' && envelope.data.contact !== null
@@ -38,7 +39,13 @@ export class WebhookProcessorService {
           : null;
         const pushName = typeof contact?.pushName === 'string' ? contact.pushName : null;
         if (senderId && pushName) {
-          await this.contacts.observe(envelope.sessionId, senderId, pushName).catch(() => {
+          await this.contacts.observe(
+            envelope.sessionId,
+            senderId,
+            pushName,
+            runtimeEvent.occurredAt,
+            envelope.idempotencyKey,
+          ).catch(() => {
             this.logger.warn({ event: 'contacts.message_sender.observe_failed' });
           });
         }

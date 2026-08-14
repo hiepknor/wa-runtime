@@ -2,6 +2,8 @@ import type { NormalizedContactIdentity } from './contact.types';
 
 const deviceSuffix = /:\d+(?=@)/u;
 const phoneJidSuffix = /@(?:c\.us|s\.whatsapp\.net)$/u;
+const controlCharacter = /\p{Cc}/u;
+const maxContactNameCodePoints = 256;
 
 export function normalizeContactIdentity(rawIdentity: string): NormalizedContactIdentity {
   const identity = rawIdentity.trim().replace(deviceSuffix, '');
@@ -18,7 +20,13 @@ export function normalizeContactName(
   identity: NormalizedContactIdentity,
 ): string | null {
   const name = rawName?.trim().normalize('NFC');
-  if (!name || name === identity.value || name === identity.phone) return null;
+  if (
+    !name
+    || [...name].length > maxContactNameCodePoints
+    || controlCharacter.test(name)
+    || name === identity.value
+    || name === identity.phone
+    || normalizeContactIdentity(name).value === identity.value
+  ) return null;
   return name;
 }
-

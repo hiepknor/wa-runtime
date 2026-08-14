@@ -31,7 +31,14 @@ describe('contact normalization', () => {
     expect(normalizeContactName('  Nguye\u0302̃n  ', identity)).toBe('Nguyễn');
     expect(normalizeContactName('628111', identity)).toBeNull();
     expect(normalizeContactName('628111@c.us', identity)).toBeNull();
+    expect(normalizeContactName('628111:9@s.whatsapp.net', identity)).toBeNull();
     expect(normalizeContactName('   ', identity)).toBeNull();
   });
-});
 
+  it('rejects control characters and names beyond the storage bound', () => {
+    const identity = normalizeContactIdentity('628111@c.us');
+    expect(normalizeContactName('unsafe\u0000name', identity)).toBeNull();
+    expect(normalizeContactName('a'.repeat(256), identity)).toBe('a'.repeat(256));
+    expect(normalizeContactName('a'.repeat(257), identity)).toBeNull();
+  });
+});

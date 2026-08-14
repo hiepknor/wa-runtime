@@ -61,8 +61,8 @@ describe('GatewayRepository bulk member replacement', () => {
     expect(memberInserts[0]?.[0]).toContain('IS DISTINCT FROM');
     expect(memberInserts[0]?.[1][2]).toHaveLength(1000);
     const contactBatches = query.mock.calls.filter(([sql]) => String(sql).includes('jsonb_to_recordset'));
-    expect(contactBatches).toHaveLength(4);
+    expect(contactBatches).toHaveLength(3);
     expect(contactBatches.every(call => JSON.parse(String(call[1][2])).length === 1000)).toBe(true);
-    expect(query).toHaveBeenCalledTimes(9);
+    expect(query).toHaveBeenCalledTimes(8);
   });
 });

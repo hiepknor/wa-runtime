@@ -8,8 +8,20 @@ export class ContactMessageObserverService {
     private readonly enabled: boolean,
   ) {}
 
-  async observe(sessionId: string, senderId: string, pushName: string): Promise<boolean> {
+  async observe(
+    sessionId: string,
+    senderId: string,
+    pushName: string,
+    observedAt: Date,
+    observationKey: string,
+  ): Promise<boolean> {
     if (!this.enabled) return false;
-    return this.repository.observeMessageSender(sessionId, senderId, pushName);
+    return this.repository.observeMessageSender(
+      sessionId,
+      senderId,
+      pushName,
+      observedAt,
+      observationKey,
+    );
   }
 }
