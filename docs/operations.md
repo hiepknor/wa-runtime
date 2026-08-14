@@ -179,6 +179,20 @@ After restart:
 Before ADR 001 is fully implemented, do not start a second scheduler or worker as a recovery
 shortcut. Restart the single process and let PostgreSQL-backed discovery republish the durable rows.
 
+## OpenWA webhook registration gate
+
+Runtime validates and processes OpenWA webhooks but does not currently create or reconcile the
+upstream registration automatically. After creating, restoring, re-pairing or replacing an OpenWA
+session, verify that exactly one active callback targets the Runtime HTTPS webhook endpoint and
+subscribes to the reviewed message, session and group event set. An empty registration list means
+inbound activity cannot reach Runtime even when both services are healthy.
+
+Use the same `OPENWA_WEBHOOK_SECRET` on both sides. Do not print the callback secret, callback URL,
+session identifier or webhook payload while checking registration. OpenWA's destination policy may
+reject Docker-internal callback names; staging and production use the TLS Runtime endpoint. After
+registration, send a controlled inbound message and require a processed webhook with no retry/dead
+transition before enabling event-driven contact enrichment.
+
 Pause a run before planned intervention when possible. Cancel stops only pending/queued work; it
 cannot recall a message already processing or accepted by OpenWA.
 
