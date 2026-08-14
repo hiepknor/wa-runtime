@@ -17,6 +17,7 @@ const target = (status: 'ALLOWED' | 'DENIED' | 'UNKNOWN'): CampaignTargetDto => 
 });
 
 const ready = { status: 'ready', engineLoaded: true, restricted: false };
+const revisions = { campaignRevision: 7, targetsRevision: 4 };
 
 describe('evaluateCampaignPreflight', () => {
   it('passes a live campaign only when all capabilities and the kill switch allow it', () => {
@@ -26,6 +27,7 @@ describe('evaluateCampaignPreflight', () => {
       targets: [target('ALLOWED')],
       session: ready,
       liveSendsEnabled: true,
+      ...revisions,
     });
     expect(report.status).toBe('PASS');
   });
@@ -37,9 +39,15 @@ describe('evaluateCampaignPreflight', () => {
       targets: [target('ALLOWED'), target('DENIED'), target('UNKNOWN')],
       session: ready,
       liveSendsEnabled: false,
+      ...revisions,
     });
     expect(report.status).toBe('WARN');
     expect(report).toMatchObject({ allowedTargets: 1, deniedTargets: 1, unknownTargets: 1 });
+    expect(report.totalTargets).toBe(report.allowedTargets + report.deniedTargets + report.unknownTargets);
+    expect(report.targetIssues.map(issue => issue.reason)).toEqual([
+      'TARGET_CAPABILITY_DENIED', 'TARGET_CAPABILITY_UNKNOWN',
+    ]);
+    expect(report).toMatchObject(revisions);
   });
 
   it('blocks live runs when the session, targets or live-send interlock is unsafe', () => {
@@ -49,10 +57,29 @@ describe('evaluateCampaignPreflight', () => {
       targets: [target('UNKNOWN')],
       session: { status: 'disconnected', engineLoaded: true, restricted: false },
       liveSendsEnabled: false,
+      ...revisions,
     });
     expect(report.status).toBe('BLOCK');
     expect(report.checks.filter(check => check.status === 'BLOCK').map(check => check.code)).toEqual([
       'SESSION_SENDABLE', 'GROUP_CAPABILITY', 'LIVE_SEND_ALLOWED',
     ]);
+  });
+
+  it('applies BLOCK over WARN over PASS precedence using stable check codes', () => {
+    const warn = evaluateCampaignPreflight({
+      executionMode: CampaignExecutionMode.DRY_RUN,
+      text: 'hello', targets: [target('UNKNOWN')], session: ready, liveSendsEnabled: false, ...revisions,
+    });
+    expect(warn.status).toBe('WARN');
+    expect(warn.checks.map(check => check.code)).toEqual([
+      'CONTENT_VALID', 'TARGETS_VALID', 'SESSION_SENDABLE', 'GROUP_CAPABILITY', 'LIVE_SEND_ALLOWED',
+    ]);
+
+    const block = evaluateCampaignPreflight({
+      executionMode: CampaignExecutionMode.DRY_RUN,
+      text: '', targets: [target('UNKNOWN')], session: ready, liveSendsEnabled: false, ...revisions,
+    });
+    expect(block.checks.some(check => check.status === 'WARN')).toBe(true);
+    expect(block.status).toBe('BLOCK');
   });
 });

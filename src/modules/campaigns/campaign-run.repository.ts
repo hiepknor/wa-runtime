@@ -18,6 +18,8 @@ interface CampaignRunRow {
   status: string;
   status_reason: string | null;
   payload_snapshot: { text: string };
+  campaign_revision: string | number;
+  targets_revision: string | number;
   preflight_report: CampaignPreflightDto | null;
   scheduled_at: Date;
   started_at: Date | null;
@@ -154,7 +156,10 @@ export class CampaignRunRepository {
         payload: { text: string };
         schedule_type: CampaignScheduleType;
         scheduled_at: Date | null;
-      }>('SELECT id, session_id, payload, schedule_type, scheduled_at FROM campaigns WHERE id = $1 FOR SHARE', [input.campaignId]);
+        revision: string | number;
+        targets_revision: string | number;
+      }>(`SELECT id, session_id, payload, schedule_type, scheduled_at, revision, targets_revision
+           FROM campaigns WHERE id = $1 FOR SHARE`, [input.campaignId]);
       const campaign = campaignResult.rows[0];
       if (!campaign) return { run: null, created: false, campaignFound: false, idempotencyConflict: false };
 
@@ -162,12 +167,13 @@ export class CampaignRunRepository {
         ? campaign.scheduled_at
         : new Date();
       const inserted = await client.query<{ id: string }>(
-        `INSERT INTO campaign_runs
-           (campaign_id, session_id, idempotency_key, execution_mode, payload_snapshot, scheduled_at)
-         VALUES ($1,$2,$3,$4,$5::jsonb,$6)
+         `INSERT INTO campaign_runs
+           (campaign_id, session_id, idempotency_key, execution_mode, payload_snapshot, scheduled_at,
+            campaign_revision, targets_revision)
+         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8)
          ON CONFLICT (campaign_id, idempotency_key) DO NOTHING RETURNING id`,
         [campaign.id, campaign.session_id, input.idempotencyKey, input.executionMode,
-          JSON.stringify(campaign.payload), scheduledAt],
+          JSON.stringify(campaign.payload), scheduledAt, campaign.revision, campaign.targets_revision],
       );
       if (!inserted.rows[0]) {
         const existing = await client.query<CampaignRunRow>(
@@ -267,9 +273,13 @@ export class CampaignRunRepository {
   async getPreflightContext(runId: string): Promise<{
     run: CampaignRunDto;
     targets: CampaignTargetDto[];
+    campaignRevision: number;
+    targetsRevision: number;
   } | null> {
-    const run = await this.find(runId);
-    if (!run) return null;
+    const runResult = await this.database.query<CampaignRunRow>(`${runSelect} WHERE cr.id = $1`, [runId]);
+    const row = runResult.rows[0];
+    if (!row) return null;
+    const run = mapRun(row);
     const result = await this.database.query<PreflightTargetRow>(
       `SELECT crt.group_id, crt.group_name, g.send_capability, g.send_capability_reason,
          g.capability_checked_at, g.capability_invalidated_at, g.capability_revision
@@ -278,7 +288,12 @@ export class CampaignRunRepository {
        WHERE crt.run_id = $1 ORDER BY crt.group_name, crt.group_id`,
       [runId],
     );
-    return { run, targets: result.rows.map(mapPreflightTarget) };
+    return {
+      run,
+      targets: result.rows.map(mapPreflightTarget),
+      campaignRevision: Number(row.campaign_revision),
+      targetsRevision: Number(row.targets_revision),
+    };
   }
 
   async applyPreflight(runId: string, leaseToken: string, report: CampaignPreflightDto): Promise<boolean> {

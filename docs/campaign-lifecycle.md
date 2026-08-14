@@ -36,13 +36,27 @@ cannot overwrite a newer group event.
 ## Draft and targets
 
 Campaign targets are replaced atomically. Target IDs must be unique group JIDs ending in `@g.us`,
-must belong to the campaign's session and must exist as active groups. A draft may retain denied or
-unknown groups so clients can show them and preflight can explain the problem.
+must belong to the campaign's session and must exist in the durable group read model. Inactive,
+denied and unknown groups may be retained so clients can show them and preflight can explain the
+policy result. Replacement rejects duplicate IDs and more than 1,000 unique IDs. It validates the
+whole input before changing any row and returns the canonical complete list ordered by group name
+then group ID.
 
 Supported schedules:
 
 - `IMMEDIATE`: run as soon as preparation succeeds;
 - `ONCE`: requires `scheduledAt`; preparation happens immediately and dispatch waits until due.
+
+Create defaults an omitted `scheduleType` to `IMMEDIATE`. Its canonical `scheduledAt` is null.
+`ONCE` timestamps must be valid future ISO-8601 values at create or when scheduling is edited. A
+content-only PATCH preserves the stored schedule, even after the scheduled instant has elapsed;
+changing `ONCE` to `IMMEDIATE` clears `scheduledAt`. PostgreSQL stores `timestamptz`, and API
+responses serialize timestamps in UTC.
+
+Campaign content/schedule changes advance `revision`; target-set changes independently advance
+`targetsRevision`. Material no-op writes do not advance either counter. These revisions bind a
+preflight result to the definition it checked; PATCH and PUT remain last-write-wins in this milestone
+and do not yet accept an optimistic-concurrency precondition.
 
 ## Preflight
 
@@ -58,6 +72,29 @@ Preflight policy version 1 evaluates five checks:
 
 The result is `PASS`, `WARN` or `BLOCK`. `DRY_RUN` may proceed with capability warnings and never
 calls OpenWA's send endpoint. A run with a blocking result enters `BLOCKED` without message jobs.
+Standalone `POST /campaigns/{id}/preflight` is read-only for both `DRY_RUN` and `LIVE`: it does not
+create a campaign run, run target, delivery or message job and does not enqueue or call a send
+adapter. `BLOCK` takes precedence over `WARN`, which takes precedence over `PASS`. Target issue
+reasons are stable `TARGET_CAPABILITY_DENIED` or `TARGET_CAPABILITY_UNKNOWN` codes; the underlying
+capability remains a separate field. Reports include the campaign and target revisions they checked.
+
+## Reusable staging fixture
+
+Use one dedicated staging session and one stable UUID idempotency key. The reset command creates the
+draft once, then resets content, immediate scheduling and the complete target set without creating a
+run or sending a message:
+
+```bash
+CAMPAIGN_FIXTURE_RUNTIME_URL=https://wa-runtime-staging.example \
+CAMPAIGN_FIXTURE_RUNTIME_KEY=... \
+CAMPAIGN_FIXTURE_SESSION_ID=... \
+CAMPAIGN_FIXTURE_IDEMPOTENCY_KEY=... \
+CAMPAIGN_FIXTURE_GROUP_IDS=first@g.us,second@g.us \
+npm run campaign:fixture:reset
+```
+
+The fixture campaign must remain `DRAFT`; if another workflow changes its status, provision a new
+dedicated fixture key rather than modifying status directly.
 
 ## Creating a run
 

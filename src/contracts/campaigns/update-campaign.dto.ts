@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsISO8601, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsEnum, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 import { CampaignScheduleType } from './create-campaign.dto';
 
 export class UpdateCampaignDto {
@@ -22,8 +22,13 @@ export class UpdateCampaignDto {
   @IsEnum(CampaignScheduleType)
   scheduleType?: CampaignScheduleType;
 
-  @ApiPropertyOptional({ format: 'date-time', nullable: true })
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    description: 'Required when changing to ONCE; null is the canonical value for IMMEDIATE.',
+  })
   @IsOptional()
-  @IsISO8601()
+  @IsString()
   scheduledAt?: string | null;
 }

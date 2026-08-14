@@ -37,6 +37,8 @@ export class CampaignRunService {
         sessionId: context.run.sessionId,
         text: context.run.text,
         targets: context.targets,
+        campaignRevision: context.campaignRevision,
+        targetsRevision: context.targetsRevision,
       });
       await this.repository.applyPreflight(runId, claim.leaseToken, report);
     } catch (error) {
@@ -91,6 +93,8 @@ export class CampaignRunService {
       sessionId: context.run.sessionId,
       text: context.run.text,
       targets: context.targets,
+      campaignRevision: context.campaignRevision,
+      targetsRevision: context.targetsRevision,
     });
     if (report.status === 'BLOCK') {
       await this.repository.recordBlockedResume(id, report);

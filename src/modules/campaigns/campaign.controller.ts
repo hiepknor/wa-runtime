@@ -1,7 +1,13 @@
-import { Body, Controller, Get, Headers, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res } from '@nestjs/common';
-import { ApiCreatedResponse, ApiHeader, ApiOkResponse, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import {
+  Body, Controller, Get, Headers, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res, UseFilters,
+} from '@nestjs/common';
+import {
+  ApiBadRequestResponse, ApiConflictResponse, ApiCreatedResponse, ApiHeader, ApiNotFoundResponse,
+  ApiOkResponse, ApiOperation, ApiResponse, ApiSecurity, ApiTags, ApiUnprocessableEntityResponse,
+} from '@nestjs/swagger';
 import type { Response } from 'express';
 import { PaginationQueryDto } from '../../contracts/common/pagination.dto';
+import { RuntimeErrorDto } from '../../contracts/common/runtime-error.dto';
 import { CampaignDto, CampaignListDto } from '../../contracts/campaigns/campaign.dto';
 import { CampaignQueryDto } from '../../contracts/campaigns/campaign-query.dto';
 import { CampaignPreflightDto, CampaignPreflightRequestDto } from '../../contracts/campaigns/campaign-preflight.dto';
@@ -11,9 +17,15 @@ import { UpdateCampaignDto } from '../../contracts/campaigns/update-campaign.dto
 import { CampaignRunDto, CampaignRunListDto, CreateCampaignRunDto } from '../../contracts/campaigns/campaign-run.dto';
 import { CampaignRunService } from './campaign-run.service';
 import { CampaignService } from './campaign.service';
+import { CampaignHttpExceptionFilter } from './campaign-http-exception.filter';
 
 @ApiTags('campaigns')
 @ApiSecurity('runtime-key')
+@ApiBadRequestResponse({ type: RuntimeErrorDto })
+@ApiNotFoundResponse({ type: RuntimeErrorDto })
+@ApiConflictResponse({ type: RuntimeErrorDto })
+@ApiUnprocessableEntityResponse({ type: RuntimeErrorDto })
+@UseFilters(CampaignHttpExceptionFilter)
 @Controller('campaigns')
 export class CampaignController {
   constructor(
@@ -23,8 +35,18 @@ export class CampaignController {
 
   @Post()
   @ApiOperation({ summary: 'Create a text campaign draft' })
+  @ApiHeader({ name: 'Idempotency-Key', required: true, schema: { type: 'string', format: 'uuid' } })
   @ApiCreatedResponse({ type: CampaignDto })
-  create(@Body() dto: CreateCampaignDto) { return this.campaigns.create(dto); }
+  @ApiResponse({ status: 200, type: CampaignDto, description: 'Idempotent replay' })
+  async create(
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Body() dto: CreateCampaignDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.campaigns.create(dto, idempotencyKey);
+    response.status(result.created ? 201 : 200);
+    return result.campaign;
+  }
 
   @Get()
   @ApiOperation({ summary: 'List campaigns for allowlisted sessions' })

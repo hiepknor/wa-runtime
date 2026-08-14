@@ -44,6 +44,7 @@ OpenWA key in configuration, logs or local state.
 These creation endpoints require an `Idempotency-Key` header:
 
 - `POST /message-jobs`;
+- `POST /campaigns`;
 - `POST /campaigns/{id}/runs`.
 
 Keys describe one operator intent and should be stable across HTTP retry, timeout and client
@@ -51,6 +52,9 @@ restart. Do not generate a new key merely because the response was lost. Reusing
 with a different execution mode returns HTTP 409. Message-job keys are scoped separately from
 campaign delivery keys and are bound to a request fingerprint; reusing one with different content,
 recipient, schedule or execution mode also returns HTTP 409.
+Campaign-create keys are UUIDs, are bound to the canonical trimmed payload and schedule, and return
+the original draft with HTTP 200 on an exact replay. Reusing a key for another payload returns HTTP
+409 `CAMPAIGN_IDEMPOTENCY_CONFLICT`.
 
 ## Endpoint groups
 
@@ -121,6 +125,17 @@ POST  /campaigns/{id}/preflight
 POST  /campaigns/{id}/runs
 GET   /campaigns/{id}/runs
 ```
+
+Campaign create defaults `scheduleType` to `IMMEDIATE`, whose canonical `scheduledAt` is null.
+`ONCE` requires a valid future ISO-8601 date-time; create or scheduling updates reject past times.
+A content-only PATCH preserves scheduling, while changing back to `IMMEDIATE` clears the timestamp.
+All timestamps are emitted as ISO-8601 UTC. Only `DRAFT` campaigns can be edited.
+
+Target replacement rejects duplicates and more than 1,000 IDs, validates the complete set before
+writing, and returns the complete canonical list ordered by group name then ID. Existing inactive,
+denied and unknown groups may remain targets; preflight owns capability policy. Campaign responses
+carry independent `revision` and `targetsRevision` counters. Preflight binds its result to both
+counters, uses stable check/target-reason enums, and never creates a run, job or delivery.
 
 ### Campaign runs
 

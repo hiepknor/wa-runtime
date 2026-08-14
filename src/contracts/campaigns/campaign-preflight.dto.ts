@@ -6,6 +6,25 @@ export enum CampaignExecutionMode {
   LIVE = 'LIVE',
 }
 
+export enum CampaignPreflightStatus {
+  PASS = 'PASS',
+  WARN = 'WARN',
+  BLOCK = 'BLOCK',
+}
+
+export enum CampaignPreflightCheckCode {
+  CONTENT_VALID = 'CONTENT_VALID',
+  TARGETS_VALID = 'TARGETS_VALID',
+  SESSION_SENDABLE = 'SESSION_SENDABLE',
+  GROUP_CAPABILITY = 'GROUP_CAPABILITY',
+  LIVE_SEND_ALLOWED = 'LIVE_SEND_ALLOWED',
+}
+
+export enum CampaignTargetIssueReason {
+  TARGET_CAPABILITY_DENIED = 'TARGET_CAPABILITY_DENIED',
+  TARGET_CAPABILITY_UNKNOWN = 'TARGET_CAPABILITY_UNKNOWN',
+}
+
 export class CampaignPreflightRequestDto {
   @ApiProperty({ enum: CampaignExecutionMode, default: CampaignExecutionMode.DRY_RUN })
   @IsEnum(CampaignExecutionMode)
@@ -13,11 +32,11 @@ export class CampaignPreflightRequestDto {
 }
 
 export class CampaignPreflightCheckDto {
-  @ApiProperty()
-  code!: string;
+  @ApiProperty({ enum: CampaignPreflightCheckCode })
+  code!: CampaignPreflightCheckCode;
 
-  @ApiProperty({ enum: ['PASS', 'WARN', 'BLOCK'] })
-  status!: string;
+  @ApiProperty({ enum: CampaignPreflightStatus })
+  status!: CampaignPreflightStatus;
 
   @ApiProperty()
   message!: string;
@@ -33,16 +52,22 @@ export class CampaignTargetIssueDto {
   @ApiProperty({ enum: ['ALLOWED', 'DENIED', 'UNKNOWN'] })
   capability!: string;
 
-  @ApiProperty()
-  reason!: string;
+  @ApiProperty({ enum: CampaignTargetIssueReason })
+  reason!: CampaignTargetIssueReason;
 }
 
 export class CampaignPreflightDto {
-  @ApiProperty({ enum: ['PASS', 'WARN', 'BLOCK'] })
-  status!: string;
+  @ApiProperty({ enum: CampaignPreflightStatus })
+  status!: CampaignPreflightStatus;
 
   @ApiProperty()
   policyVersion!: number;
+
+  @ApiProperty({ minimum: 1 })
+  campaignRevision!: number;
+
+  @ApiProperty({ minimum: 0 })
+  targetsRevision!: number;
 
   @ApiProperty({ enum: CampaignExecutionMode })
   executionMode!: CampaignExecutionMode;

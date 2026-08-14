@@ -453,7 +453,17 @@
     "/api/v1/campaigns": {
       "post": {
         "operationId": "CampaignController_create",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -465,12 +475,62 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "Idempotent replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignDto"
+                }
+              }
+            }
+          },
           "201": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CampaignDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
                 }
               }
             }
@@ -530,6 +590,46 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -563,6 +663,46 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CampaignDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
                 }
               }
             }
@@ -610,6 +750,46 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -643,6 +823,46 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CampaignTargetListDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
                 }
               }
             }
@@ -690,6 +910,46 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -733,6 +993,46 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CampaignPreflightDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
                 }
               }
             }
@@ -790,6 +1090,46 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -842,6 +1182,46 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CampaignRunListDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
                 }
               }
             }
@@ -1847,6 +2227,35 @@
           "meta"
         ]
       },
+      "RuntimeErrorDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "CAMPAIGN_NOT_FOUND"
+          },
+          "message": {
+            "type": "string"
+          },
+          "fieldErrors": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
       "CreateCampaignDto": {
         "type": "object",
         "properties": {
@@ -1873,7 +2282,7 @@
           "scheduledAt": {
             "type": "string",
             "format": "date-time",
-            "description": "Required only for ONCE scheduling"
+            "description": "Required for ONCE. Ignored and returned as null for IMMEDIATE."
           }
         },
         "required": [
@@ -1923,6 +2332,16 @@
           "targetCount": {
             "type": "number"
           },
+          "revision": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Revision of campaign content and scheduling."
+          },
+          "targetsRevision": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Revision of the complete target set."
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
@@ -1941,6 +2360,8 @@
           "scheduledAt",
           "status",
           "targetCount",
+          "revision",
+          "targetsRevision",
           "createdAt",
           "updatedAt"
         ]
@@ -2001,9 +2422,10 @@
             ]
           },
           "scheduledAt": {
-            "type": "object",
+            "type": "string",
             "format": "date-time",
-            "nullable": true
+            "nullable": true,
+            "description": "Required when changing to ONCE; null is the canonical value for IMMEDIATE."
           }
         }
       },
@@ -2049,6 +2471,8 @@
         "properties": {
           "groupIds": {
             "maxItems": 1000,
+            "uniqueItems": true,
+            "description": "Complete replacement set. Duplicate IDs are rejected and response order is canonical.",
             "example": [
               "120363000000000000@g.us"
             ],
@@ -2082,7 +2506,14 @@
         "type": "object",
         "properties": {
           "code": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "CONTENT_VALID",
+              "TARGETS_VALID",
+              "SESSION_SENDABLE",
+              "GROUP_CAPABILITY",
+              "LIVE_SEND_ALLOWED"
+            ]
           },
           "status": {
             "type": "string",
@@ -2120,7 +2551,11 @@
             ]
           },
           "reason": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "TARGET_CAPABILITY_DENIED",
+              "TARGET_CAPABILITY_UNKNOWN"
+            ]
           }
         },
         "required": [
@@ -2143,6 +2578,14 @@
           },
           "policyVersion": {
             "type": "number"
+          },
+          "campaignRevision": {
+            "type": "number",
+            "minimum": 1
+          },
+          "targetsRevision": {
+            "type": "number",
+            "minimum": 0
           },
           "executionMode": {
             "type": "string",
@@ -2183,6 +2626,8 @@
         "required": [
           "status",
           "policyVersion",
+          "campaignRevision",
+          "targetsRevision",
           "executionMode",
           "checkedAt",
           "totalTargets",

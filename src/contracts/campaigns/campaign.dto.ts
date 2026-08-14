@@ -27,6 +27,12 @@ export class CampaignDto {
   @ApiProperty()
   targetCount!: number;
 
+  @ApiProperty({ minimum: 1, description: 'Revision of campaign content and scheduling.' })
+  revision!: number;
+
+  @ApiProperty({ minimum: 0, description: 'Revision of the complete target set.' })
+  targetsRevision!: number;
+
   @ApiProperty({ format: 'date-time' })
   createdAt!: Date;
 

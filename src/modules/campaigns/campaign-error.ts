@@ -1,0 +1,29 @@
+import { HttpException, HttpStatus } from '@nestjs/common';
+import type { RuntimeErrorDto } from '../../contracts/common/runtime-error.dto';
+
+export type CampaignErrorCode =
+  | 'CAMPAIGN_NOT_FOUND'
+  | 'CAMPAIGN_SESSION_NOT_FOUND'
+  | 'CAMPAIGN_NOT_EDITABLE'
+  | 'CAMPAIGN_SCHEDULE_REQUIRED'
+  | 'CAMPAIGN_SCHEDULE_INVALID'
+  | 'CAMPAIGN_SCHEDULE_IN_PAST'
+  | 'CAMPAIGN_TARGET_LIMIT_EXCEEDED'
+  | 'CAMPAIGN_TARGET_DUPLICATE'
+  | 'CAMPAIGN_TARGET_SESSION_MISMATCH'
+  | 'CAMPAIGN_TARGET_NOT_FOUND'
+  | 'CAMPAIGN_IDEMPOTENCY_KEY_REQUIRED'
+  | 'CAMPAIGN_IDEMPOTENCY_KEY_INVALID'
+  | 'CAMPAIGN_IDEMPOTENCY_CONFLICT';
+
+export class CampaignError extends HttpException {
+  constructor(
+    status: HttpStatus,
+    code: CampaignErrorCode,
+    message: string,
+    details?: Record<string, unknown>,
+  ) {
+    const body: RuntimeErrorDto = { code, message, ...(details ? { details } : {}) };
+    super(body, status);
+  }
+}

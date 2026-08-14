@@ -3,27 +3,38 @@ import { runtimeConfig } from '../../core/config/runtime-config';
 import type { CampaignExecutionMode } from '../../contracts/campaigns/campaign-preflight.dto';
 import type { CampaignTargetDto } from '../../contracts/campaigns/campaign-target.dto';
 import { evaluateCampaignPreflight } from './campaign-preflight';
-import { SessionStateCacheService } from '../gateway/session-state-cache.service';
+import { GatewayRepository } from '../gateway/gateway.repository';
 
 @Injectable()
 export class CampaignPreflightService {
   private readonly config = runtimeConfig();
 
-  constructor(private readonly sessionStates: SessionStateCacheService) {}
+  constructor(private readonly gateway: GatewayRepository) {}
 
   async evaluate(input: {
     executionMode: CampaignExecutionMode;
     sessionId: string;
     text: string;
     targets: CampaignTargetDto[];
+    campaignRevision: number;
+    targetsRevision: number;
   }) {
-    const session = await this.sessionStates.get(input.sessionId);
+    const persistedSession = await this.gateway.findSession(input.sessionId);
+    const session = persistedSession
+      ? {
+          status: persistedSession.status,
+          engineLoaded: persistedSession.engineLoaded,
+          restricted: persistedSession.restriction !== null,
+        }
+      : { status: 'missing', engineLoaded: false, restricted: true };
     return evaluateCampaignPreflight({
       executionMode: input.executionMode,
       text: input.text,
       targets: input.targets,
       session,
       liveSendsEnabled: this.config.ALLOW_LIVE_SENDS,
+      campaignRevision: input.campaignRevision,
+      targetsRevision: input.targetsRevision,
     });
   }
 }
