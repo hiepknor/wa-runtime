@@ -803,6 +803,56 @@ describe('durable contact projection', () => {
     expect(state.rows[0]).toEqual({ status: 'COMPLETED', rows_processed: '2' });
   });
 
+  it('catches up late membership evidence after the one-shot backfill has completed', async () => {
+    await pool.query(
+      `UPDATE contact_evidence_backfill_state SET status = 'COMPLETED', completed_at = now()
+       WHERE job_name = 'MEMBER_EVIDENCE_V2'`,
+    );
+    await seedSendableGroup(pool, DISALLOWED_SESSION_ID);
+    await pool.query(
+      `INSERT INTO group_members
+         (session_id, group_id, participant_id, phone_number, participant_display_name,
+          is_admin, is_super_admin)
+       VALUES
+         ($1, $2, 'late-evidence@lid', 'late-evidence', 'Late LID', false, false),
+         ($1, $2, '84970000001@c.us', '84970000001', 'Late phone', false, false),
+         ($3, $2, '84970000002@c.us', '84970000002', 'Outside allowlist', false, false)`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, DISALLOWED_SESSION_ID],
+    );
+    const scoped = new ContactProjectionRepository(database, false, [INTEGRATION_SESSION_ID]);
+
+    expect(await scoped.catchUpMissingEvidence(1)).toBe(1);
+    expect(await scoped.catchUpMissingEvidence(1)).toBe(1);
+    expect(await scoped.catchUpMissingEvidence(1)).toBe(0);
+
+    const members = await pool.query<{
+      session_id: string;
+      participant_id: string;
+      evidence_identity_id: string | null;
+      identity_type: string | null;
+    }>(
+      `SELECT session_id, participant_id, evidence_identity_id, identity_type
+       FROM group_members WHERE participant_id LIKE 'late-evidence%'
+          OR participant_id LIKE '8497000000%@c.us'
+       ORDER BY session_id, participant_id`,
+    );
+    const allowed = members.rows.filter(member => member.session_id === INTEGRATION_SESSION_ID);
+    const outside = members.rows.find(member => member.session_id === DISALLOWED_SESSION_ID);
+    expect(allowed).toHaveLength(2);
+    expect(allowed.every(member => member.evidence_identity_id !== null)).toBe(true);
+    expect(allowed.map(member => member.identity_type).sort()).toEqual(['LID', 'PHONE_JID']);
+    expect(outside?.evidence_identity_id).toBeNull();
+
+    const phones = await pool.query<{ identity_value: string }>(
+      `SELECT identity_value FROM observed_contact_identities
+       WHERE session_id = $1 AND identity_type = 'PHONE' ORDER BY identity_value`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(phones.rows).toEqual([{ identity_value: '84970000001' }]);
+    expect(await scoped.catchUpUnprojected(10)).toBe(0);
+    expect(await drain()).toBe(2);
+  });
+
   it('switches member search and ordering to completed shadow rows only when enabled', async () => {
     await pool.query(
       `INSERT INTO group_members

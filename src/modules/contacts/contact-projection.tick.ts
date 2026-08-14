@@ -27,6 +27,7 @@ export class ContactProjectionTick {
     }
     await this.repository.enqueueBootstrap(this.options.bootstrapBatchSize);
     await this.repository.coalesceResolvedAliases(this.options.bootstrapBatchSize);
+    await this.repository.catchUpMissingEvidence(this.options.bootstrapBatchSize);
     await this.repository.catchUpUnprojected(this.options.bootstrapBatchSize);
     let updated = 0;
     let completed = 0;
