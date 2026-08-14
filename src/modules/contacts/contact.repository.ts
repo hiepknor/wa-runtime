@@ -7,6 +7,7 @@ import { normalizeContactIdentity, normalizeContactName } from './contact-normal
 import { DatabaseService } from '../../core/database/database.service';
 import { contactNameProjectionSql, memberNameProjectionSql } from './contact-name-resolution.sql';
 import { ContactSnapshotConflictError } from './contact-snapshot.errors';
+import { ContactEvidenceWriter } from './contact-evidence.writer';
 
 interface GroupMemberContactInput {
   participant_id: string;
@@ -52,6 +53,7 @@ export class ContactRepository {
     private readonly database: DatabaseService,
     private readonly snapshotStagingEnabled = false,
     private readonly snapshotRetentionDays = 30,
+    private readonly evidenceWriter = new ContactEvidenceWriter(false),
   ) {}
 
   async listPeriodicSessionIds(allowedSessionIds: string[], limit: number): Promise<string[]> {
@@ -592,6 +594,15 @@ export class ContactRepository {
       return;
     }
     await this.database.transaction(async client => {
+      const ownership = await client.query(
+        `SELECT 1 FROM contact_sync_state
+         WHERE session_id = $1 AND sync_generation = $2 AND lease_token = $3
+           AND lease_expires_at > now()
+         FOR UPDATE`,
+        [sessionId, generation, leaseToken],
+      );
+      if (ownership.rowCount !== 1) throw new Error('Contact snapshot lost write ownership');
+      await this.evidenceWriter.publishSnapshot(client, sessionId, generation);
       const generationResult = await client.query(
         `UPDATE contact_snapshot_generations generation_state
          SET state = 'PUBLISHED',
@@ -665,6 +676,18 @@ export class ContactRepository {
          ON CONFLICT (session_id, identity_type, identity_value) DO UPDATE SET
            last_observed_at = now(), updated_at = now()`,
         [sessionId, identity.type, identity.value, candidateContactId],
+      );
+      await this.evidenceWriter.observeMessageSender(
+        client,
+        sessionId,
+        {
+          identity_type: identity.type,
+          identity_value: identity.value,
+          phone: identity.phone,
+        },
+        pushName,
+        observedAt,
+        observationKey,
       );
       const result = await client.query<{ accepted: boolean }>(
         `WITH resolved AS MATERIALIZED (
@@ -742,6 +765,7 @@ export class ContactRepository {
     const values = [sessionId, groupId, JSON.stringify(inputs)];
 
     await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [sessionId]);
+    await this.evidenceWriter.observeGroupMembers(client, sessionId, groupId, inputs);
     await client.query(
       `WITH input AS MATERIALIZED (SELECT * FROM ${inputRelation} WHERE $2::text IS NOT NULL),
        missing AS MATERIALIZED (

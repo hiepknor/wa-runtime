@@ -334,6 +334,13 @@ generations older than `CONTACT_SNAPSHOT_RETENTION_DAYS` are removed when the ne
 while the newest published generation is always retained. A superseded `RECEIVING` generation is
 marked `FAILED` with the bounded `LEASE_EXPIRED` code.
 
+Migration 024 adds immutable exact-identity, name-observation and identity-link evidence. Keep
+`CONTACT_EVIDENCE_DUAL_WRITE_ENABLED=false` until migration 024 is applied and snapshot staging is
+enabled. With the flag on, group, inbound-message and published-snapshot producers dual-write evidence
+in their existing PostgreSQL transaction; legacy Contacts and `group_members` remain authoritative.
+Snapshot evidence is committed only with a `PUBLISHED` generation. Disable the flag to stop new
+evidence without changing current API reads or deleting collected evidence.
+
 Identity evidence from an inbound message's bounded `contact.pushName` field is independently gated by
 `CONTACT_MESSAGE_ENRICHMENT_ENABLED`. Runtime extracts only sender identity and push name, then discards
 the upstream contact object; a contact write failure never retries or dead-letters the message webhook.

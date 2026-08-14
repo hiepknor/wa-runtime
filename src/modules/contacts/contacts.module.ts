@@ -9,18 +9,26 @@ import { OpenWAClient } from '../../integrations/openwa/openwa.client';
 import { ContactMemberIdentityBackfillRepository } from './contact-member-identity-backfill.repository';
 import { ContactMemberIdentityBackfillTick } from './contact-member-identity-backfill.tick';
 import { DatabaseService } from '../../core/database/database.service';
+import { ContactEvidenceWriter } from './contact-evidence.writer';
 
 @Module({
   imports: [OpenWAModule],
   providers: [
     {
+      provide: ContactEvidenceWriter,
+      useFactory: () => new ContactEvidenceWriter(
+        runtimeConfig().CONTACT_EVIDENCE_DUAL_WRITE_ENABLED,
+      ),
+    },
+    {
       provide: ContactRepository,
-      useFactory: (database: DatabaseService) => new ContactRepository(
+      useFactory: (database: DatabaseService, evidenceWriter: ContactEvidenceWriter) => new ContactRepository(
         database,
         runtimeConfig().CONTACT_SNAPSHOT_STAGING_ENABLED,
         runtimeConfig().CONTACT_SNAPSHOT_RETENTION_DAYS,
+        evidenceWriter,
       ),
-      inject: [DatabaseService],
+      inject: [DatabaseService, ContactEvidenceWriter],
     },
     ContactMemberIdentityBackfillRepository,
     {
@@ -66,6 +74,7 @@ import { DatabaseService } from '../../core/database/database.service';
     ContactMessageObserverService,
     ContactPeriodicSyncTick,
     ContactMemberIdentityBackfillTick,
+    ContactEvidenceWriter,
   ],
 })
 export class ContactsModule {}
