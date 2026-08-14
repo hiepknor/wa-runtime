@@ -229,6 +229,41 @@ export class ContactProjectionRepository {
     });
   }
 
+  async coalesceResolvedAliases(limit: number): Promise<number> {
+    return this.database.transaction(async client => {
+      const result = await client.query<{ session_id: string; identity_id: string }>(
+        `SELECT work.session_id, work.identity_id
+         FROM contact_projection_work work
+         JOIN LATERAL (
+           SELECT run.id FROM contact_resolution_runs run
+           WHERE run.session_id = work.session_id AND run.status = 'COMPLETED'
+           ORDER BY run.completed_at DESC, run.id DESC LIMIT 1
+         ) latest_run ON true
+         JOIN resolved_identity_assignments assignment
+           ON assignment.session_id = work.session_id AND assignment.run_id = latest_run.id
+          AND assignment.identity_id = work.identity_id
+         WHERE work.status IN ('PENDING', 'RETRY', 'FAILED')
+           AND assignment.resolution_status = 'RESOLVED'
+           AND assignment.cluster_id <> work.identity_id
+           AND ($2::text[] IS NULL OR work.session_id = ANY($2::text[]))
+         ORDER BY work.first_requested_at, work.session_id, work.identity_id
+         FOR UPDATE OF work SKIP LOCKED LIMIT $1`,
+        [limit, this.allowedSessionIds],
+      );
+      const bySession = new Map<string, string[]>();
+      for (const row of result.rows) {
+        const identities = bySession.get(row.session_id) ?? [];
+        identities.push(row.identity_id);
+        bySession.set(row.session_id, identities);
+      }
+      let enqueued = 0;
+      for (const [sessionId, identities] of bySession) {
+        enqueued += await enqueueContactProjectionWork(client, sessionId, identities);
+      }
+      return enqueued;
+    });
+  }
+
   async catchUpUnprojected(limit: number): Promise<number> {
     return this.database.transaction(async client => {
       const lock = await client.query<{ acquired: boolean }>(

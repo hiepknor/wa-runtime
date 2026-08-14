@@ -2,7 +2,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
 import { DatabaseService } from '../../src/core/database/database.service';
 import { ContactEvidenceWriter } from '../../src/modules/contacts/contact-evidence.writer';
-import { enqueueContactProjectionWork } from '../../src/modules/contacts/contact-projection.enqueue';
 import { ContactProjectionRepository } from '../../src/modules/contacts/contact-projection.repository';
 import { ContactResolutionRepository } from '../../src/modules/contacts/contact-resolution.repository';
 import { ContactRepository } from '../../src/modules/contacts/contact.repository';
@@ -746,11 +745,7 @@ describe('durable contact projection', () => {
       [INTEGRATION_SESSION_ID, alias.identity_id],
     );
 
-    expect(await database.transaction(client => enqueueContactProjectionWork(
-      client,
-      INTEGRATION_SESSION_ID,
-      [alias.identity_id],
-    ))).toBe(1);
+    expect(await projections.coalesceResolvedAliases(1)).toBe(1);
     const work = await pool.query<{ identity_id: string; status: string }>(
       `SELECT identity_id, status FROM contact_projection_work
        WHERE session_id = $1 AND identity_id = ANY($2::uuid[])
