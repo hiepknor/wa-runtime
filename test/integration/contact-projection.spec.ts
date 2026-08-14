@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
 import { DatabaseService } from '../../src/core/database/database.service';
 import { ContactEvidenceWriter } from '../../src/modules/contacts/contact-evidence.writer';
+import { enqueueContactProjectionWork } from '../../src/modules/contacts/contact-projection.enqueue';
 import { ContactProjectionRepository } from '../../src/modules/contacts/contact-projection.repository';
 import { ContactResolutionRepository } from '../../src/modules/contacts/contact-resolution.repository';
 import { ContactRepository } from '../../src/modules/contacts/contact.repository';
@@ -721,6 +722,45 @@ describe('durable contact projection', () => {
       completed: true,
     });
     expect(await projections.catchUpUnprojected(10)).toBe(0);
+  });
+
+  it('coalesces pending alias work into its resolved cluster', async () => {
+    await publishAndResolve();
+    await drain();
+    const assignment = await pool.query<{ identity_id: string; cluster_id: string }>(
+      `SELECT assignment.identity_id, assignment.cluster_id
+       FROM contact_resolution_runs run
+       JOIN resolved_identity_assignments assignment
+         ON assignment.session_id = run.session_id AND assignment.run_id = run.id
+       WHERE run.session_id = $1 AND run.status = 'COMPLETED'
+         AND assignment.resolution_status = 'RESOLVED'
+         AND assignment.identity_id <> assignment.cluster_id
+       ORDER BY run.completed_at DESC, assignment.identity_id LIMIT 1`,
+      [INTEGRATION_SESSION_ID],
+    );
+    const alias = assignment.rows[0]!;
+    await pool.query(
+      `INSERT INTO contact_projection_work (session_id, identity_id)
+       VALUES ($1, $2)
+       ON CONFLICT (session_id, identity_id) DO UPDATE SET status = 'PENDING'`,
+      [INTEGRATION_SESSION_ID, alias.identity_id],
+    );
+
+    expect(await database.transaction(client => enqueueContactProjectionWork(
+      client,
+      INTEGRATION_SESSION_ID,
+      [alias.identity_id],
+    ))).toBe(1);
+    const work = await pool.query<{ identity_id: string; status: string }>(
+      `SELECT identity_id, status FROM contact_projection_work
+       WHERE session_id = $1 AND identity_id = ANY($2::uuid[])
+       ORDER BY identity_id`,
+      [INTEGRATION_SESSION_ID, [alias.identity_id, alias.cluster_id]],
+    );
+    expect(new Map(work.rows.map(row => [row.identity_id, row.status]))).toEqual(new Map([
+      [alias.identity_id, 'IDLE'],
+      [alias.cluster_id, 'PENDING'],
+    ]));
   });
 
   it('backfills exact member evidence in bounded durable pages without treating a LID as a phone', async () => {
