@@ -55,6 +55,10 @@ const schema = z
     CONTACT_EVIDENCE_DUAL_WRITE_ENABLED: booleanFromEnv(false),
     CONTACT_RESOLUTION_SHADOW_ENABLED: booleanFromEnv(false),
     CONTACT_RESOLUTION_MAX_RUNS_PER_TICK: z.coerce.number().int().min(1).max(20).default(2),
+    CONTACT_PROJECTION_SHADOW_ENABLED: booleanFromEnv(false),
+    CONTACT_PROJECTION_BATCH_SIZE: z.coerce.number().int().min(1).max(5_000).default(500),
+    CONTACT_PROJECTION_MAX_JOBS_PER_TICK: z.coerce.number().int().min(1).max(100).default(10),
+    CONTACT_PROJECTION_MAX_BATCHES_PER_JOB: z.coerce.number().int().min(1).max(100).default(4),
     CONTACT_MESSAGE_ENRICHMENT_ENABLED: booleanFromEnv(false),
     CONTACT_PERIODIC_SYNC_ENABLED: booleanFromEnv(false),
     CONTACT_PERIODIC_SYNC_INTERVAL_MS: z.coerce.number().int().min(300_000).default(86_400_000),
@@ -118,6 +122,13 @@ const schema = z
         code: 'custom',
         path: ['CONTACT_RESOLUTION_SHADOW_ENABLED'],
         message: 'CONTACT_RESOLUTION_SHADOW_ENABLED requires CONTACT_EVIDENCE_DUAL_WRITE_ENABLED',
+      });
+    }
+    if (value.CONTACT_PROJECTION_SHADOW_ENABLED && !value.CONTACT_RESOLUTION_SHADOW_ENABLED) {
+      context.addIssue({
+        code: 'custom',
+        path: ['CONTACT_PROJECTION_SHADOW_ENABLED'],
+        message: 'CONTACT_PROJECTION_SHADOW_ENABLED requires CONTACT_RESOLUTION_SHADOW_ENABLED',
       });
     }
   });

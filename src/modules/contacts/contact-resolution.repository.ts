@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../../core/database/database.service';
+import { enqueueContactProjectionWork } from './contact-projection.enqueue';
 
 export interface ContactResolutionClaim {
   sessionId: string;
@@ -16,7 +17,10 @@ export interface ContactResolutionResult {
 
 @Injectable()
 export class ContactResolutionRepository {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly projectionEnabled = false,
+  ) {}
 
   async enqueuePublished(limit: number): Promise<number> {
     const result = await this.database.query(
@@ -69,8 +73,8 @@ export class ContactResolutionRepository {
 
   async resolve(claim: ContactResolutionClaim): Promise<ContactResolutionResult> {
     return this.database.transaction(async client => {
-      const owned = await client.query<{ source_generation: string; evidence_cutoff_at: Date }>(
-        `SELECT source_generation::text, evidence_cutoff_at FROM contact_resolution_runs
+      const owned = await client.query<{ source_generation: string; evidence_cutoff_at: string }>(
+        `SELECT source_generation::text, evidence_cutoff_at::text FROM contact_resolution_runs
          WHERE session_id = $1 AND id = $2 AND status = 'RUNNING' AND lease_token = $3
            AND lease_expires_at > now()
          FOR UPDATE`,
@@ -260,6 +264,18 @@ export class ContactResolutionRepository {
       );
       const row = result.rows[0];
       if (!row) throw new Error('Contact resolution lost completion ownership');
+      if (this.projectionEnabled) {
+        const clusters = await client.query<{ cluster_id: string }>(
+          `SELECT cluster_id FROM resolved_contact_clusters
+           WHERE session_id = $1 AND run_id = $2 ORDER BY cluster_id`,
+          [claim.sessionId, claim.runId],
+        );
+        await enqueueContactProjectionWork(
+          client,
+          claim.sessionId,
+          clusters.rows.map(cluster => cluster.cluster_id),
+        );
+      }
       return {
         identities: Number(row.identities),
         clusters: Number(row.clusters),

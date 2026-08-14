@@ -12,6 +12,8 @@ import { DatabaseService } from '../../core/database/database.service';
 import { ContactEvidenceWriter } from './contact-evidence.writer';
 import { ContactResolutionRepository } from './contact-resolution.repository';
 import { ContactResolutionTick } from './contact-resolution.tick';
+import { ContactProjectionRepository } from './contact-projection.repository';
+import { ContactProjectionTick } from './contact-projection.tick';
 
 @Module({
   imports: [OpenWAModule],
@@ -20,6 +22,7 @@ import { ContactResolutionTick } from './contact-resolution.tick';
       provide: ContactEvidenceWriter,
       useFactory: () => new ContactEvidenceWriter(
         runtimeConfig().CONTACT_EVIDENCE_DUAL_WRITE_ENABLED,
+        runtimeConfig().CONTACT_PROJECTION_SHADOW_ENABLED,
       ),
     },
     {
@@ -33,7 +36,14 @@ import { ContactResolutionTick } from './contact-resolution.tick';
       inject: [DatabaseService, ContactEvidenceWriter],
     },
     ContactMemberIdentityBackfillRepository,
-    ContactResolutionRepository,
+    {
+      provide: ContactResolutionRepository,
+      useFactory: (database: DatabaseService) => new ContactResolutionRepository(
+        database,
+        runtimeConfig().CONTACT_PROJECTION_SHADOW_ENABLED,
+      ),
+      inject: [DatabaseService],
+    },
     {
       provide: ContactResolutionTick,
       useFactory: (repository: ContactResolutionRepository) => new ContactResolutionTick(
@@ -44,6 +54,20 @@ import { ContactResolutionTick } from './contact-resolution.tick';
         },
       ),
       inject: [ContactResolutionRepository],
+    },
+    ContactProjectionRepository,
+    {
+      provide: ContactProjectionTick,
+      useFactory: (repository: ContactProjectionRepository) => new ContactProjectionTick(
+        repository,
+        {
+          enabled: runtimeConfig().CONTACT_PROJECTION_SHADOW_ENABLED,
+          batchSize: runtimeConfig().CONTACT_PROJECTION_BATCH_SIZE,
+          maxJobsPerTick: runtimeConfig().CONTACT_PROJECTION_MAX_JOBS_PER_TICK,
+          maxBatchesPerJob: runtimeConfig().CONTACT_PROJECTION_MAX_BATCHES_PER_JOB,
+        },
+      ),
+      inject: [ContactProjectionRepository],
     },
     {
       provide: ContactSyncService,
@@ -90,6 +114,7 @@ import { ContactResolutionTick } from './contact-resolution.tick';
     ContactMemberIdentityBackfillTick,
     ContactEvidenceWriter,
     ContactResolutionTick,
+    ContactProjectionTick,
   ],
 })
 export class ContactsModule {}

@@ -349,6 +349,16 @@ LID-to-phone edges, and writes clusters/assignments without touching legacy Cont
 Logs contain aggregate identity/cluster/conflict counts only. Disable the shadow flag to stop new runs;
 completed results remain available for comparison and rollback analysis.
 
+Migration 026 adds the durable shadow projection queue and additive `group_members` shadow columns.
+Enable `CONTACT_PROJECTION_SHADOW_ENABLED=true` only after snapshot staging, evidence dual-write and
+shadow resolution are enabled. Dirty work is coalesced by the latest resolved cluster (or exact
+identity before resolution), claimed with a fenced five-minute lease and applied in bounded keyset
+batches. A monotonic projection revision prevents delayed alias work from overwriting newer output.
+The scheduler runs every five seconds and processes at most
+`CONTACT_PROJECTION_MAX_JOBS_PER_TICK * CONTACT_PROJECTION_MAX_BATCHES_PER_JOB` batches; tune the batch
+size with `CONTACT_PROJECTION_BATCH_SIZE`. Disabling the flag stops producers and workers while the
+legacy member API remains authoritative. Logs expose only aggregate updated/completed counts.
+
 Identity evidence from an inbound message's bounded `contact.pushName` field is independently gated by
 `CONTACT_MESSAGE_ENRICHMENT_ENABLED`. Runtime extracts only sender identity and push name, then discards
 the upstream contact object; a contact write failure never retries or dead-letters the message webhook.

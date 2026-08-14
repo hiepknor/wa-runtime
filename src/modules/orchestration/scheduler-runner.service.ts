@@ -14,6 +14,7 @@ import { ContactPeriodicSyncTick } from '../contacts/contact-periodic-sync.tick'
 import { WebhookRegistrationReconciliationTick } from '../webhooks/webhook-registration-reconciliation.tick';
 import { ContactMemberIdentityBackfillTick } from '../contacts/contact-member-identity-backfill.tick';
 import { ContactResolutionTick } from '../contacts/contact-resolution.tick';
+import { ContactProjectionTick } from '../contacts/contact-projection.tick';
 
 @Injectable()
 export class SchedulerRunnerService {
@@ -32,6 +33,7 @@ export class SchedulerRunnerService {
     private readonly webhookRegistrations: WebhookRegistrationReconciliationTick,
     private readonly contactMemberIdentityBackfill: ContactMemberIdentityBackfillTick,
     private readonly contactResolution: ContactResolutionTick,
+    private readonly contactProjection: ContactProjectionTick,
   ) {}
 
   async run(): Promise<void> {
@@ -61,6 +63,12 @@ export class SchedulerRunnerService {
         60_000,
         5 * 60_000,
         () => this.contactResolution.run(),
+      ),
+      this.tick(
+        'contact-projection',
+        5_000,
+        60_000,
+        () => this.contactProjection.run(),
       ),
       this.tick(
         'webhook-registration',

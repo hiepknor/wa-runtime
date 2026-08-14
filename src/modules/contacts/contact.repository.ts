@@ -823,15 +823,21 @@ export class ContactRepository {
       `WITH input AS MATERIALIZED (SELECT * FROM ${inputRelation}),
        resolved AS MATERIALIZED (
          SELECT input.*, identifier.contact_id, contact.effective_display_name,
-           contact.display_name_source AS contact_name_source
+           contact.display_name_source AS contact_name_source,
+           evidence_identity.id AS evidence_identity_id
          FROM input
          JOIN contact_identifiers identifier
            ON identifier.session_id = $1 AND identifier.identity_type = input.identity_type
           AND identifier.identity_value = input.identity_value
          JOIN contacts contact ON contact.session_id = $1 AND contact.id = identifier.contact_id
+         LEFT JOIN observed_contact_identities evidence_identity
+           ON evidence_identity.session_id = $1
+          AND evidence_identity.identity_type = input.identity_type
+          AND evidence_identity.identity_value = input.identity_value
        )
        UPDATE group_members member
        SET contact_id = resolved.contact_id,
+           evidence_identity_id = resolved.evidence_identity_id,
            identity_type = resolved.identity_type,
            resolved_phone_number = CASE WHEN resolved.identity_type = 'PHONE_JID'
              THEN resolved.phone ELSE NULL END,
@@ -846,9 +852,10 @@ export class ContactRepository {
        FROM resolved
        WHERE member.session_id = $1 AND member.group_id = $2
          AND member.participant_id = resolved.participant_id
-         AND (member.contact_id, member.participant_display_name, member.display_name, member.display_name_source)
+         AND (member.contact_id, member.evidence_identity_id,
+              member.participant_display_name, member.display_name, member.display_name_source)
            IS DISTINCT FROM
-           (resolved.contact_id, resolved.participant_name,
+           (resolved.contact_id, resolved.evidence_identity_id, resolved.participant_name,
             ${resolvedMemberProjection.name}, ${resolvedMemberProjection.source})`,
       values,
     );

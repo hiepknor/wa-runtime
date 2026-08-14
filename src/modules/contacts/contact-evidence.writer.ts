@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { enqueueContactProjectionWork } from './contact-projection.enqueue';
 
 export interface ContactEvidenceIdentityInput {
   identity_type: 'LID' | 'PHONE_JID' | 'OTHER_JID';
@@ -14,7 +15,10 @@ const evidenceInputRelation = `jsonb_to_recordset($2::jsonb) AS evidence(
 )`;
 
 export class ContactEvidenceWriter {
-  constructor(readonly enabled: boolean) {}
+  constructor(
+    readonly enabled: boolean,
+    private readonly projectionEnabled = false,
+  ) {}
 
   async observeGroupMembers(
     client: PoolClient,
@@ -42,6 +46,10 @@ export class ContactEvidenceWriter {
       values,
     );
     await this.insertInputLinks(client, values, null);
+    if (this.projectionEnabled) {
+      const identities = await this.inputIdentityIds(client, values);
+      await enqueueContactProjectionWork(client, sessionId, identities);
+    }
   }
 
   async observeMessageSender(
@@ -55,7 +63,7 @@ export class ContactEvidenceWriter {
     if (!this.enabled) return;
     const values = [sessionId, JSON.stringify([input])];
     await this.upsertInputIdentities(client, values);
-    await client.query(
+    const observation = await client.query<{ identity_id: string }>(
       `WITH input AS MATERIALIZED (SELECT * FROM ${evidenceInputRelation})
        INSERT INTO contact_observations
          (session_id, identity_id, observation_source, observation_scope,
@@ -65,10 +73,14 @@ export class ContactEvidenceWriter {
        JOIN observed_contact_identities identity
          ON identity.session_id = $1 AND identity.identity_type = input.identity_type
         AND identity.identity_value = input.identity_value
-       ON CONFLICT (session_id, observation_source, source_observation_key) DO NOTHING`,
+       ON CONFLICT (session_id, observation_source, source_observation_key) DO NOTHING
+       RETURNING identity_id`,
       [sessionId, JSON.stringify([input]), pushName, observedAt, observationKey],
     );
     await this.insertInputLinks(client, values, null);
+    if (this.projectionEnabled && observation.rows[0]) {
+      await enqueueContactProjectionWork(client, sessionId, [observation.rows[0].identity_id]);
+    }
   }
 
   async publishSnapshot(client: PoolClient, sessionId: string, generation: number): Promise<void> {
@@ -202,5 +214,17 @@ export class ContactEvidenceWriter {
        ON CONFLICT (session_id, evidence_source, source_observation_key) DO NOTHING`,
       [values[0], values[1], generation],
     );
+  }
+
+  private async inputIdentityIds(client: PoolClient, values: unknown[]): Promise<string[]> {
+    const result = await client.query<{ id: string }>(
+      `WITH input AS MATERIALIZED (SELECT * FROM ${evidenceInputRelation})
+       SELECT DISTINCT identity.id
+       FROM input JOIN observed_contact_identities identity
+         ON identity.session_id = $1 AND identity.identity_type = input.identity_type
+        AND identity.identity_value = input.identity_value`,
+      values.slice(0, 2),
+    );
+    return result.rows.map(row => row.id);
   }
 }
