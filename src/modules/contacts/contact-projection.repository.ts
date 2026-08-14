@@ -237,8 +237,10 @@ export class ContactProjectionRepository {
          ) AS acquired`,
       );
       if (!lock.rows[0]?.acquired) return 0;
-      const result = await client.query<{ session_id: string; evidence_identity_id: string }>(
-        `SELECT DISTINCT member.session_id, member.evidence_identity_id
+      const result = await client.query<{ session_id: string; projection_identity_id: string }>(
+        `SELECT DISTINCT member.session_id,
+           CASE WHEN assignment.resolution_status = 'RESOLVED' THEN assignment.cluster_id
+             ELSE member.evidence_identity_id END AS projection_identity_id
          FROM group_members member
          LEFT JOIN LATERAL (
            SELECT run.id FROM contact_resolution_runs run
@@ -258,13 +260,13 @@ export class ContactProjectionRepository {
            AND member.shadow_projection_revision = 0
            AND ($2::text[] IS NULL OR member.session_id = ANY($2::text[]))
            AND (work.identity_id IS NULL OR work.status IN ('IDLE', 'FAILED'))
-         ORDER BY member.session_id, member.evidence_identity_id LIMIT $1`,
+         ORDER BY member.session_id, projection_identity_id LIMIT $1`,
         [limit, this.allowedSessionIds],
       );
       const bySession = new Map<string, string[]>();
       for (const row of result.rows) {
         const identities = bySession.get(row.session_id) ?? [];
-        identities.push(row.evidence_identity_id);
+        identities.push(row.projection_identity_id);
         bySession.set(row.session_id, identities);
       }
       let enqueued = 0;

@@ -687,11 +687,18 @@ describe('durable contact projection', () => {
   it('requeues the effective resolved cluster for a late membership', async () => {
     await publishAndResolve();
     await drain();
-    const identity = await pool.query<{ id: string }>(
-      `SELECT id FROM observed_contact_identities
-       WHERE session_id = $1 AND identity_type = 'LID' AND identity_value = 'lid-a@lid'`,
+    const identity = await pool.query<{ id: string; cluster_id: string }>(
+      `SELECT assignment.identity_id AS id, assignment.cluster_id
+       FROM contact_resolution_runs run
+       JOIN resolved_identity_assignments assignment
+         ON assignment.session_id = run.session_id AND assignment.run_id = run.id
+       WHERE run.session_id = $1 AND run.status = 'COMPLETED'
+         AND assignment.resolution_status = 'RESOLVED'
+         AND assignment.identity_id <> assignment.cluster_id
+       ORDER BY run.completed_at DESC, assignment.identity_id LIMIT 1`,
       [INTEGRATION_SESSION_ID],
     );
+    expect(identity.rows[0]).toBeDefined();
     await pool.query(
       `INSERT INTO gateway_groups (session_id, id, name, is_active, synced_at)
        VALUES ($1, 'late-cluster-group', 'Late cluster group', true, now())`,
@@ -707,7 +714,12 @@ describe('durable contact projection', () => {
 
     expect(await projections.catchUpUnprojected(10)).toBe(1);
     expect(await projections.catchUpUnprojected(10)).toBe(0);
-    expect(await drain()).toBe(1);
+    const claim = await projections.claim();
+    expect(claim?.identityId).toBe(identity.rows[0]!.cluster_id);
+    expect(await projections.projectBatch(claim!, 10)).toMatchObject({
+      updated: 1,
+      completed: true,
+    });
     expect(await projections.catchUpUnprojected(10)).toBe(0);
   });
 
