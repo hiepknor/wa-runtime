@@ -39,7 +39,8 @@ WA Studio commit: **PENDING**.
 
 ## Staging gates
 
-- projection bootstrap complete and zero unprojected linked member rows;
+- member evidence backfill and projection bootstrap complete, followed by a newer completed
+  resolution generation, with zero unprojected linked member rows;
 - zero LID user-parts in `shadow_resolved_phone_number`;
 - zero failed projection work and projection lag p95 below 30 seconds;
 - aggregate shadow-vs-legacy mismatch explained by v2 semantics;

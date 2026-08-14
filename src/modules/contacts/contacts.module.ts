@@ -74,6 +74,8 @@ import { ContactProjectionTick } from './contact-projection.tick';
           maxJobsPerTick: runtimeConfig().CONTACT_PROJECTION_MAX_JOBS_PER_TICK,
           maxBatchesPerJob: runtimeConfig().CONTACT_PROJECTION_MAX_BATCHES_PER_JOB,
           bootstrapBatchSize: runtimeConfig().CONTACT_PROJECTION_BOOTSTRAP_BATCH_SIZE,
+          evidenceBackfillEnabled: runtimeConfig().CONTACT_EVIDENCE_BACKFILL_ENABLED,
+          evidenceBackfillBatchSize: runtimeConfig().CONTACT_EVIDENCE_BACKFILL_BATCH_SIZE,
         },
       ),
       inject: [ContactProjectionRepository],

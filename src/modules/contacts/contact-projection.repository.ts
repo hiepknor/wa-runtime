@@ -26,6 +26,159 @@ export class ContactProjectionRepository {
     private readonly mirrorLegacyProjection = false,
   ) {}
 
+  async backfillEvidence(limit: number): Promise<number> {
+    return this.database.transaction(async client => {
+      const state = await client.query<{
+        last_session_id: string | null;
+        last_group_id: string | null;
+        last_participant_id: string | null;
+      }>(
+        `SELECT last_session_id, last_group_id, last_participant_id
+         FROM contact_evidence_backfill_state
+         WHERE job_name = 'MEMBER_EVIDENCE_V2' AND status = 'PENDING'
+         FOR UPDATE SKIP LOCKED`,
+      );
+      const cursor = state.rows[0];
+      if (!cursor) return 0;
+      await client.query(
+        `CREATE TEMP TABLE member_evidence_backfill_page ON COMMIT DROP AS
+         SELECT member.session_id, member.group_id, member.participant_id,
+           CASE
+             WHEN member.participant_id LIKE '%@lid' THEN 'LID'
+             WHEN member.participant_id LIKE '%@c.us'
+               OR member.participant_id LIKE '%@s.whatsapp.net' THEN 'PHONE_JID'
+             ELSE 'OTHER_JID'
+           END AS identity_type,
+           CASE WHEN member.participant_id LIKE '%@s.whatsapp.net'
+             THEN regexp_replace(member.participant_id, '@s\.whatsapp\.net$', '@c.us')
+             ELSE member.participant_id END AS identity_value,
+           CASE WHEN (member.participant_id LIKE '%@c.us'
+                  OR member.participant_id LIKE '%@s.whatsapp.net')
+                 AND COALESCE(member.resolved_phone_number,
+                   regexp_replace(member.participant_id, '@(c\.us|s\.whatsapp\.net)$', ''))
+                   ~ '^[0-9]+$'
+             THEN COALESCE(member.resolved_phone_number,
+               regexp_replace(member.participant_id, '@(c\.us|s\.whatsapp\.net)$', ''))
+             ELSE NULL END AS phone,
+           member.participant_display_name, member.synced_at
+         FROM group_members member
+         WHERE ($2::text IS NULL OR (member.session_id, member.group_id, member.participant_id)
+           > ($2, $3, $4))
+         ORDER BY member.session_id, member.group_id, member.participant_id LIMIT $1`,
+        [limit, cursor.last_session_id, cursor.last_group_id, cursor.last_participant_id],
+      );
+      const page = await client.query<{
+        count: string;
+        last_session_id: string | null;
+        last_group_id: string | null;
+        last_participant_id: string | null;
+      }>(
+        `SELECT count(*)::text AS count,
+           (array_agg(session_id ORDER BY session_id DESC, group_id DESC, participant_id DESC))[1]
+             AS last_session_id,
+           (array_agg(group_id ORDER BY session_id DESC, group_id DESC, participant_id DESC))[1]
+             AS last_group_id,
+           (array_agg(participant_id ORDER BY session_id DESC, group_id DESC, participant_id DESC))[1]
+             AS last_participant_id
+         FROM member_evidence_backfill_page`,
+      );
+      const count = Number(page.rows[0]?.count ?? 0);
+      if (count > 0) {
+        await client.query(
+          `INSERT INTO observed_contact_identities
+             (session_id, identity_type, identity_value, first_observed_at, last_observed_at)
+           SELECT session_id, identity_type, identity_value, min(synced_at), max(synced_at)
+           FROM member_evidence_backfill_page
+           GROUP BY session_id, identity_type, identity_value
+           ON CONFLICT (session_id, identity_type, identity_value) DO UPDATE SET
+             first_observed_at = LEAST(observed_contact_identities.first_observed_at,
+               EXCLUDED.first_observed_at),
+             last_observed_at = GREATEST(observed_contact_identities.last_observed_at,
+               EXCLUDED.last_observed_at), updated_at = now()`,
+        );
+        await client.query(
+          `INSERT INTO observed_contact_identities
+             (session_id, identity_type, identity_value, first_observed_at, last_observed_at)
+           SELECT session_id, 'PHONE', phone, min(synced_at), max(synced_at)
+           FROM member_evidence_backfill_page WHERE phone IS NOT NULL
+           GROUP BY session_id, phone
+           ON CONFLICT (session_id, identity_type, identity_value) DO UPDATE SET
+             first_observed_at = LEAST(observed_contact_identities.first_observed_at,
+               EXCLUDED.first_observed_at),
+             last_observed_at = GREATEST(observed_contact_identities.last_observed_at,
+               EXCLUDED.last_observed_at), updated_at = now()`,
+        );
+        await client.query(
+          `INSERT INTO contact_observations
+             (session_id, identity_id, observation_source, observation_scope,
+              group_id, participant_id, name_value, source_observed_at, source_observation_key)
+           SELECT page.session_id, identity.id, 'GROUP_PARTICIPANT_NAME', 'MEMBERSHIP',
+             page.group_id, page.participant_id, page.participant_display_name, page.synced_at,
+             'backfill:group:' || md5(page.group_id || ':' || page.participant_id || ':'
+               || page.participant_display_name)
+           FROM member_evidence_backfill_page page
+           JOIN observed_contact_identities identity
+             ON identity.session_id = page.session_id
+            AND identity.identity_type = page.identity_type
+            AND identity.identity_value = page.identity_value
+           WHERE page.participant_display_name IS NOT NULL
+           ON CONFLICT (session_id, observation_source, source_observation_key) DO NOTHING`,
+        );
+        await client.query(
+          `INSERT INTO contact_link_evidence
+             (session_id, left_identity_id, right_identity_id, evidence_source,
+              source_observed_at, source_observation_key)
+           SELECT page.session_id, exact.id, phone.id, 'PHONE_JID_DERIVATION', page.synced_at,
+             'backfill:derived:' || md5(page.identity_value || ':' || page.phone)
+           FROM member_evidence_backfill_page page
+           JOIN observed_contact_identities exact
+             ON exact.session_id = page.session_id AND exact.identity_type = page.identity_type
+            AND exact.identity_value = page.identity_value
+           JOIN observed_contact_identities phone
+             ON phone.session_id = page.session_id AND phone.identity_type = 'PHONE'
+            AND phone.identity_value = page.phone
+           WHERE page.identity_type = 'PHONE_JID' AND page.phone IS NOT NULL
+           ON CONFLICT (session_id, evidence_source, source_observation_key) DO NOTHING`,
+        );
+        const identities = await client.query<{ session_id: string; identity_id: string }>(
+          `UPDATE group_members member SET evidence_identity_id = identity.id, updated_at = now()
+           FROM member_evidence_backfill_page page
+           JOIN observed_contact_identities identity
+             ON identity.session_id = page.session_id
+            AND identity.identity_type = page.identity_type
+            AND identity.identity_value = page.identity_value
+           WHERE member.session_id = page.session_id AND member.group_id = page.group_id
+             AND member.participant_id = page.participant_id
+             AND member.evidence_identity_id IS DISTINCT FROM identity.id
+           RETURNING member.session_id, identity.id AS identity_id`,
+        );
+        const bySession = new Map<string, string[]>();
+        for (const row of identities.rows) {
+          const values = bySession.get(row.session_id) ?? [];
+          values.push(row.identity_id);
+          bySession.set(row.session_id, values);
+        }
+        for (const [sessionId, identityIds] of bySession) {
+          await enqueueContactProjectionWork(client, sessionId, identityIds);
+        }
+      }
+      const last = page.rows[0];
+      await client.query(
+        `UPDATE contact_evidence_backfill_state SET
+           status = CASE WHEN $1::integer < $2 THEN 'COMPLETED' ELSE 'PENDING' END,
+           last_session_id = COALESCE($3, last_session_id),
+           last_group_id = COALESCE($4, last_group_id),
+           last_participant_id = COALESCE($5, last_participant_id),
+           rows_processed = rows_processed + $1,
+           completed_at = CASE WHEN $1::integer < $2 THEN now() ELSE NULL END,
+           updated_at = now()
+         WHERE job_name = 'MEMBER_EVIDENCE_V2'`,
+        [count, limit, last?.last_session_id, last?.last_group_id, last?.last_participant_id],
+      );
+      return count;
+    });
+  }
+
   async enqueueBootstrap(limit: number): Promise<number> {
     return this.database.transaction(async client => {
       const state = await client.query<{

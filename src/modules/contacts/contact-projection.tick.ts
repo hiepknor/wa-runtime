@@ -7,6 +7,8 @@ export interface ContactProjectionOptions {
   maxJobsPerTick: number;
   maxBatchesPerJob: number;
   bootstrapBatchSize: number;
+  evidenceBackfillEnabled: boolean;
+  evidenceBackfillBatchSize: number;
 }
 
 @Injectable()
@@ -20,6 +22,9 @@ export class ContactProjectionTick {
 
   async run(): Promise<void> {
     if (!this.options.enabled) return;
+    if (this.options.evidenceBackfillEnabled) {
+      await this.repository.backfillEvidence(this.options.evidenceBackfillBatchSize);
+    }
     await this.repository.enqueueBootstrap(this.options.bootstrapBatchSize);
     let updated = 0;
     let completed = 0;

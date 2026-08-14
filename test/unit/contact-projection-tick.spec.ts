@@ -15,12 +15,17 @@ describe('ContactProjectionTick', () => {
     maxJobsPerTick: 1,
     maxBatchesPerJob: 2,
     bootstrapBatchSize: 1_000,
+    evidenceBackfillEnabled: true,
+    evidenceBackfillBatchSize: 2_000,
   };
 
   it('does not claim work while disabled', async () => {
-    const repository = { enqueueBootstrap: vi.fn(), claim: vi.fn() } as unknown as ContactProjectionRepository;
+    const repository = {
+      backfillEvidence: vi.fn(), enqueueBootstrap: vi.fn(), claim: vi.fn(),
+    } as unknown as ContactProjectionRepository;
     await new ContactProjectionTick(repository, { ...options, enabled: false }).run();
     expect(repository.enqueueBootstrap).not.toHaveBeenCalled();
+    expect(repository.backfillEvidence).not.toHaveBeenCalled();
     expect(repository.claim).not.toHaveBeenCalled();
   });
 
@@ -28,6 +33,7 @@ describe('ContactProjectionTick', () => {
     const claim = { sessionId: 'session', identityId: 'identity', leaseToken: 'lease' };
     const repository = {
       enqueueBootstrap: vi.fn().mockResolvedValue(1),
+      backfillEvidence: vi.fn().mockResolvedValue(2_000),
       claim: vi.fn().mockResolvedValue(claim),
       projectBatch: vi.fn().mockResolvedValue({ updated: 100, completed: false }),
       release: vi.fn().mockResolvedValue(undefined),
@@ -36,6 +42,7 @@ describe('ContactProjectionTick', () => {
     } as unknown as ContactProjectionRepository;
     await new ContactProjectionTick(repository, options).run();
     expect(repository.enqueueBootstrap).toHaveBeenCalledWith(1_000);
+    expect(repository.backfillEvidence).toHaveBeenCalledWith(2_000);
     expect(repository.projectBatch).toHaveBeenCalledTimes(2);
     expect(repository.release).toHaveBeenCalledWith(claim);
     expect(repository.getQueueMetrics).toHaveBeenCalledOnce();
@@ -53,6 +60,7 @@ describe('ContactProjectionTick', () => {
     const claim = { sessionId: 'private-session', identityId: 'private-id', leaseToken: 'private-lease' };
     const repository = {
       enqueueBootstrap: vi.fn().mockResolvedValue(1),
+      backfillEvidence: vi.fn().mockResolvedValue(2_000),
       claim: vi.fn().mockResolvedValue(claim),
       projectBatch: vi.fn().mockRejectedValue(new Error('projection failed')),
       release: vi.fn(),

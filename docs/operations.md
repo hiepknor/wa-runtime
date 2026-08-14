@@ -366,11 +366,20 @@ synchronous membership fan-out from contact and message producers. With fan-out 
 projection worker mirrors v2 output into legacy columns asynchronously so reverting the read flag does
 not expose a stale fallback.
 
+Migration 028 adds the prerequisite bounded evidence backfill for memberships created before evidence
+dual-write. Enable `CONTACT_EVIDENCE_BACKFILL_ENABLED=true` with dual-write and shadow projection. The
+scheduler processes at most `CONTACT_EVIDENCE_BACKFILL_BATCH_SIZE` member rows per tick, records a
+durable keyset cursor and enqueues affected exact identities. It derives phones only from phone JIDs;
+LID user-parts remain unresolved. Do not assume an unchanged full group sync will recreate evidence,
+because member fingerprints intentionally skip unchanged membership writes.
+
 Use this order for a staged cutover:
 
 1. Enable snapshot staging, evidence dual-write, shadow resolution and shadow projection; leave reads
    on legacy and legacy fan-out enabled.
-2. Wait for `contact_projection_bootstrap_state.status = 'COMPLETED'`, no projection work in
+2. Wait for `contact_evidence_backfill_state.status = 'COMPLETED'`, then complete a new contact
+   snapshot/resolution generation. Wait for `contact_projection_bootstrap_state.status = 'COMPLETED'`,
+   no projection work in
    `PENDING`, `RUNNING`, `RETRY` or `FAILED`, and zero member rows with a non-null
    `evidence_identity_id` but `shadow_projection_revision = 0`.
 3. Compare aggregate null/name/source/phone coverage and mismatch counts; do not emit values.

@@ -40,6 +40,12 @@ describe('durable contact projection', () => {
          completed_at = NULL, updated_at = now()
        WHERE job_name = 'MEMBER_PROJECTION_V2'`,
     );
+    await pool.query(
+      `UPDATE contact_evidence_backfill_state SET status = 'PENDING',
+         last_session_id = NULL, last_group_id = NULL, last_participant_id = NULL,
+         rows_processed = 0, completed_at = NULL, updated_at = now()
+       WHERE job_name = 'MEMBER_EVIDENCE_V2'`,
+    );
     await seedSendableGroup(pool);
   });
 
@@ -430,6 +436,51 @@ describe('durable contact projection', () => {
     );
     expect(state.rows[0]).toEqual({ status: 'COMPLETED', rows_enqueued: '1' });
     expect(await projections.enqueueBootstrap(1)).toBe(0);
+  });
+
+  it('backfills exact member evidence in bounded durable pages without treating a LID as a phone', async () => {
+    await pool.query(
+      `INSERT INTO group_members
+         (session_id, group_id, participant_id, phone_number, participant_display_name,
+          resolved_phone_number, is_admin, is_super_admin)
+       VALUES
+         ($1, $2, 'backfill@lid', 'backfill', 'LID member', NULL, false, false),
+         ($1, $2, '84970000000@c.us', '84970000000', 'Phone member',
+           '84970000000', false, false)`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+
+    expect(await projections.backfillEvidence(1)).toBe(1);
+    expect(await projections.backfillEvidence(1)).toBe(1);
+    expect(await projections.backfillEvidence(1)).toBe(0);
+    expect(await projections.backfillEvidence(1)).toBe(0);
+
+    const members = await pool.query<{
+      participant_id: string;
+      evidence_identity_id: string | null;
+    }>(
+      `SELECT participant_id, evidence_identity_id FROM group_members
+       WHERE session_id = $1 ORDER BY participant_id`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(members.rows.every(member => member.evidence_identity_id !== null)).toBe(true);
+    const phones = await pool.query<{ identity_value: string }>(
+      `SELECT identity_value FROM observed_contact_identities
+       WHERE session_id = $1 AND identity_type = 'PHONE' ORDER BY identity_value`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(phones.rows).toEqual([{ identity_value: '84970000000' }]);
+    const observations = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM contact_observations
+       WHERE session_id = $1 AND observation_source = 'GROUP_PARTICIPANT_NAME'`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(observations.rows[0]?.count).toBe('2');
+    const state = await pool.query<{ status: string; rows_processed: string }>(
+      `SELECT status, rows_processed::text FROM contact_evidence_backfill_state
+       WHERE job_name = 'MEMBER_EVIDENCE_V2'`,
+    );
+    expect(state.rows[0]).toEqual({ status: 'COMPLETED', rows_processed: '2' });
   });
 
   it('switches member search and ordering to completed shadow rows only when enabled', async () => {
