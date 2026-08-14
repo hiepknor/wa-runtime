@@ -853,6 +853,35 @@ describe('durable contact projection', () => {
     expect(await drain()).toBe(2);
   });
 
+  it('serializes late evidence catch-up with group member replacement', async () => {
+    await pool.query(
+      `INSERT INTO group_members
+         (session_id, group_id, participant_id, phone_number, is_admin, is_super_admin)
+       VALUES ($1, $2, 'serialized-evidence@lid', 'serialized-evidence', false, false)`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+    const owner = await pool.connect();
+    await owner.query('BEGIN');
+    await owner.query(
+      `SELECT pg_advisory_xact_lock(
+         hashtextextended('contact-member-projection' || ':' || $1, 0)
+       )`,
+      [INTEGRATION_SESSION_ID],
+    );
+    const catchUp = projections.catchUpMissingEvidence(10);
+    try {
+      const outcome = await Promise.race([
+        catchUp.then(() => 'completed'),
+        new Promise<'blocked'>(resolve => setTimeout(() => resolve('blocked'), 50)),
+      ]);
+      expect(outcome).toBe('blocked');
+    } finally {
+      await owner.query('ROLLBACK');
+      owner.release();
+    }
+    expect(await catchUp).toBe(1);
+  });
+
   it('switches member search and ordering to completed shadow rows only when enabled', async () => {
     await pool.query(
       `INSERT INTO group_members
