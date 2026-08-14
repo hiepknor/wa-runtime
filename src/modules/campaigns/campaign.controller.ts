@@ -3,16 +3,16 @@ import {
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse, ApiConflictResponse, ApiCreatedResponse, ApiHeader, ApiNotFoundResponse,
-  ApiOkResponse, ApiOperation, ApiResponse, ApiSecurity, ApiTags, ApiUnprocessableEntityResponse,
+  ApiOkResponse, ApiOperation, ApiQuery, ApiResponse, ApiSecurity, ApiTags, ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { PaginationQueryDto } from '../../contracts/common/pagination.dto';
 import { RuntimeErrorDto } from '../../contracts/common/runtime-error.dto';
-import { CampaignDto, CampaignListDto } from '../../contracts/campaigns/campaign.dto';
+import { CampaignDto, CampaignListDto, CampaignStatus } from '../../contracts/campaigns/campaign.dto';
 import { CampaignQueryDto } from '../../contracts/campaigns/campaign-query.dto';
 import { CampaignPreflightDto, CampaignPreflightRequestDto } from '../../contracts/campaigns/campaign-preflight.dto';
 import { CampaignTargetListDto, ReplaceCampaignTargetsDto } from '../../contracts/campaigns/campaign-target.dto';
-import { CreateCampaignDto } from '../../contracts/campaigns/create-campaign.dto';
+import { CampaignScheduleType, CreateCampaignDto } from '../../contracts/campaigns/create-campaign.dto';
 import { UpdateCampaignDto } from '../../contracts/campaigns/update-campaign.dto';
 import { CampaignRunDto, CampaignRunListDto, CreateCampaignRunDto } from '../../contracts/campaigns/campaign-run.dto';
 import { CampaignRunService } from './campaign-run.service';
@@ -49,7 +49,17 @@ export class CampaignController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'List campaigns for allowlisted sessions' })
+  @ApiQuery({
+    name: 'status', required: false, enum: CampaignStatus, isArray: true, style: 'form', explode: false,
+  })
+  @ApiQuery({
+    name: 'scheduleType', required: false, enum: CampaignScheduleType, isArray: true,
+    style: 'form', explode: false,
+  })
+  @ApiOperation({
+    summary: 'Search and filter campaigns for allowlisted sessions',
+    description: 'Search and filters are applied before pagination. Results use updatedAt DESC and campaign ID ASC ordering; meta.total counts the filtered dataset.',
+  })
   @ApiOkResponse({ type: CampaignListDto })
   list(@Query() query: CampaignQueryDto) { return this.campaigns.list(query); }
 

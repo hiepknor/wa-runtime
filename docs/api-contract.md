@@ -126,6 +126,13 @@ POST  /campaigns/{id}/runs
 GET   /campaigns/{id}/runs
 ```
 
+Campaign lists accept optional `query`, `status` and `scheduleType` filters. `query` is trimmed and
+performs a case-insensitive literal substring search on campaign name; a valid UUID also exact-
+matches campaign ID. Message text is deliberately excluded. `status` and `scheduleType` use comma-
+separated `form` arrays (`explode=false`): values within one filter are ORed and different filters
+are ANDed. Empty filters are ignored. Predicates run before pagination, `meta.total` counts the
+filtered dataset, and ordering is `updatedAt DESC, id ASC`.
+
 Campaign create defaults `scheduleType` to `IMMEDIATE`, whose canonical `scheduledAt` is null.
 `ONCE` requires a valid future ISO-8601 date-time; create or scheduling updates reject past times.
 A content-only PATCH preserves scheduling, while changing back to `IMMEDIATE` clears the timestamp.

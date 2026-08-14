@@ -17,6 +17,15 @@ export class CampaignHttpExceptionFilter implements ExceptionFilter {
       ? (value as { message: unknown }).message
       : exception.message;
     const messages = Array.isArray(rawMessages) ? rawMessages.map(String) : [String(rawMessages)];
+    const campaignValidation = this.campaignValidationError(messages);
+    if (status === HttpStatus.BAD_REQUEST && campaignValidation) {
+      response.status(status).json({
+        code: campaignValidation.code,
+        message: messages[0] ?? exception.message,
+        fieldErrors: { [campaignValidation.field]: messages },
+      } satisfies RuntimeErrorDto);
+      return;
+    }
     const fieldErrors: Record<string, string[]> = {};
     for (const message of messages) {
       const field = message.split(' ')[0] || 'request';
@@ -28,5 +37,18 @@ export class CampaignHttpExceptionFilter implements ExceptionFilter {
       ...(status === HttpStatus.BAD_REQUEST ? { fieldErrors } : {}),
     };
     response.status(status).json(body);
+  }
+
+  private campaignValidationError(messages: string[]): { code: string; field: string } | null {
+    if (messages.some(message => /\bstatus\b/u.test(message))) {
+      return { code: 'CAMPAIGN_FILTER_STATUS_INVALID', field: 'status' };
+    }
+    if (messages.some(message => /\bscheduleType\b/u.test(message))) {
+      return { code: 'CAMPAIGN_FILTER_SCHEDULE_TYPE_INVALID', field: 'scheduleType' };
+    }
+    if (messages.some(message => /\bquery\b/u.test(message))) {
+      return { code: 'CAMPAIGN_QUERY_INVALID', field: 'query' };
+    }
+    return null;
   }
 }

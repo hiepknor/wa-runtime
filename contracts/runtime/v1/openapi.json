@@ -547,6 +547,7 @@
         ]
       },
       "get": {
+        "description": "Search and filters are applied before pagination. Results use updatedAt DESC and campaign ID ASC ordering; meta.total counts the filtered dataset.",
         "operationId": "CampaignController_list",
         "parameters": [
           {
@@ -577,6 +578,54 @@
             "schema": {
               "format": "uuid",
               "type": "string"
+            }
+          },
+          {
+            "name": "query",
+            "required": false,
+            "in": "query",
+            "description": "Trimmed case-insensitive literal substring search on campaign name, or exact campaign UUID.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated campaign statuses. Values are ORed and combined with other filters using AND.",
+            "style": "form",
+            "explode": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "DRAFT",
+                  "ACTIVE",
+                  "PAUSED",
+                  "ARCHIVED"
+                ]
+              }
+            }
+          },
+          {
+            "name": "scheduleType",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated schedule types. Values are ORed and combined with other filters using AND.",
+            "style": "form",
+            "explode": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "IMMEDIATE",
+                  "ONCE"
+                ]
+              }
             }
           }
         ],
@@ -637,7 +686,7 @@
             "runtime-key": []
           }
         ],
-        "summary": "List campaigns for allowlisted sessions",
+        "summary": "Search and filter campaigns for allowlisted sessions",
         "tags": [
           "campaigns"
         ]
@@ -2366,11 +2415,12 @@
           "updatedAt"
         ]
       },
-      "PageMetaDto": {
+      "CampaignListPageMetaDto": {
         "type": "object",
         "properties": {
           "total": {
-            "type": "number"
+            "type": "number",
+            "description": "Total campaigns matching current session scope, search, and filter predicates."
           },
           "limit": {
             "type": "number"
@@ -2395,7 +2445,7 @@
             }
           },
           "meta": {
-            "$ref": "#/components/schemas/PageMetaDto"
+            "$ref": "#/components/schemas/CampaignListPageMetaDto"
           }
         },
         "required": [
@@ -2805,6 +2855,25 @@
           "startedAt",
           "completedAt",
           "createdAt"
+        ]
+      },
+      "PageMetaDto": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "limit": {
+            "type": "number"
+          },
+          "offset": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "total",
+          "limit",
+          "offset"
         ]
       },
       "CampaignRunListDto": {

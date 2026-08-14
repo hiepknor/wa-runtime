@@ -48,4 +48,14 @@ describe('campaign OpenAPI contract', () => {
     const parameters = contract.paths['/api/v1/campaigns']?.post?.parameters ?? [];
     expect(parameters).toContainEqual(expect.objectContaining({ name: 'Idempotency-Key', required: true }));
   });
+
+  it('publishes comma-separated campaign list filters and the bounded search query', () => {
+    const parameters = contract.paths['/api/v1/campaigns']?.get?.parameters ?? [];
+    const byName = new Map(parameters.map(parameter => [parameter.name, parameter as Record<string, any>]));
+    expect(byName.get('query')?.schema).toMatchObject({ type: 'string', maxLength: 200 });
+    expect(byName.get('status')).toMatchObject({ style: 'form', explode: false });
+    expect(byName.get('status')?.schema?.items?.enum).toEqual(['DRAFT', 'ACTIVE', 'PAUSED', 'ARCHIVED']);
+    expect(byName.get('scheduleType')).toMatchObject({ style: 'form', explode: false });
+    expect(byName.get('scheduleType')?.schema?.items?.enum).toEqual(['IMMEDIATE', 'ONCE']);
+  });
 });

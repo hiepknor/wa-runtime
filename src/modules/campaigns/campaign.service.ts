@@ -56,9 +56,14 @@ export class CampaignService {
 
   async list(query: CampaignQueryDto) {
     if (query.sessionId) this.assertAllowedSession(query.sessionId);
+    const normalizedQuery = query.query?.trim();
     const result = await this.repository.list({
       allowedSessionIds: this.config.OPENWA_ALLOWED_SESSION_IDS,
       sessionId: query.sessionId,
+      query: normalizedQuery || undefined,
+      exactCampaignId: normalizedQuery && isUUID(normalizedQuery) ? normalizedQuery : undefined,
+      statuses: query.status,
+      scheduleTypes: query.scheduleType,
       limit: query.limit,
       offset: query.offset,
     });

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
-import type { CampaignDto } from '../../contracts/campaigns/campaign.dto';
+import { CampaignStatus, type CampaignDto } from '../../contracts/campaigns/campaign.dto';
 import type { CampaignTargetDto } from '../../contracts/campaigns/campaign-target.dto';
 import type { CampaignScheduleType } from '../../contracts/campaigns/create-campaign.dto';
 import { DatabaseService } from '../../core/database/database.service';
@@ -13,7 +13,7 @@ interface CampaignRow {
   payload: { text: string };
   schedule_type: CampaignScheduleType;
   scheduled_at: Date | null;
-  status: string;
+  status: CampaignStatus;
   target_count: string | number;
   revision: string | number;
   targets_revision: string | number;
@@ -110,20 +110,41 @@ export class CampaignRepository {
     return result.rows[0] ? mapCampaign(result.rows[0]) : null;
   }
 
-  async list(input: { allowedSessionIds: string[]; sessionId?: string; limit: number; offset: number }) {
+  async list(input: {
+    allowedSessionIds: string[];
+    sessionId?: string;
+    query?: string;
+    exactCampaignId?: string;
+    statuses?: CampaignStatus[];
+    scheduleTypes?: CampaignScheduleType[];
+    limit: number;
+    offset: number;
+  }) {
     const sessionIds = input.sessionId ? [input.sessionId] : input.allowedSessionIds;
-    const [rows, count] = await Promise.all([
-      this.database.query<CampaignRow>(
-        `${campaignSelect} WHERE c.session_id = ANY($1::text[])
-         ORDER BY c.updated_at DESC, c.id LIMIT $2 OFFSET $3`,
-        [sessionIds, input.limit, input.offset],
-      ),
-      this.database.query<{ count: string }>(
-        'SELECT count(*)::text AS count FROM campaigns WHERE session_id = ANY($1::text[])',
-        [sessionIds],
-      ),
-    ]);
-    return { data: rows.rows.map(mapCampaign), total: Number(count.rows[0]?.count ?? 0) };
+    const normalizedQuery = input.query?.trim();
+    const searchPattern = normalizedQuery
+      ? `%${normalizedQuery.replace(/[\\%_]/g, '\\$&')}%`
+      : null;
+    const statuses = input.statuses?.length ? input.statuses : null;
+    const scheduleTypes = input.scheduleTypes?.length ? input.scheduleTypes : null;
+    return this.database.transaction(async client => {
+      await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const values = [sessionIds, searchPattern, input.exactCampaignId ?? null, statuses, scheduleTypes];
+      const predicate = `c.session_id = ANY($1::text[])
+        AND ($2::text IS NULL OR c.name ILIKE $2 ESCAPE '\\' OR c.id = $3::uuid)
+        AND ($4::campaign_status[] IS NULL OR c.status = ANY($4))
+        AND ($5::campaign_schedule_type[] IS NULL OR c.schedule_type = ANY($5))`;
+      const rows = await client.query<CampaignRow>(
+        `${campaignSelect} WHERE ${predicate}
+         ORDER BY c.updated_at DESC, c.id ASC LIMIT $6 OFFSET $7`,
+        [...values, input.limit, input.offset],
+      );
+      const count = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM campaigns c WHERE ${predicate}`,
+        values,
+      );
+      return { data: rows.rows.map(mapCampaign), total: Number(count.rows[0]?.count ?? 0) };
+    });
   }
 
   async update(id: string, input: {
