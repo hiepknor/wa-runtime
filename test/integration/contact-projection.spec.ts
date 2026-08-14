@@ -685,6 +685,14 @@ describe('durable contact projection', () => {
   });
 
   it('requeues the effective resolved cluster for a late membership', async () => {
+    // Keep the LID identity deterministically outside the canonical minimum-UUID
+    // position so this test always exercises alias-to-cluster requeueing.
+    await pool.query(
+      `INSERT INTO observed_contact_identities
+         (id, session_id, identity_type, identity_value)
+       VALUES ('ffffffff-ffff-4fff-bfff-ffffffffffff', $1, 'LID', 'lid-a@lid')`,
+      [INTEGRATION_SESSION_ID],
+    );
     await publishAndResolve();
     await drain();
     const identity = await pool.query<{ id: string; cluster_id: string }>(
