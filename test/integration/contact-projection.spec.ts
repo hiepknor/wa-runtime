@@ -185,6 +185,52 @@ describe('durable contact projection', () => {
     expect(mirrored.rows.every(row => row.resolved_phone_number === '84970000000')).toBe(true);
   });
 
+  it('enqueues only material changes after the first resolution generation', async () => {
+    await pool.query(
+      `INSERT INTO group_members
+         (session_id, group_id, participant_id, phone_number, is_admin, is_super_admin)
+       VALUES ($1, $2, 'lid-a@lid', 'lid-a', false, false)`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+    await database.transaction(client => contacts.seedGroupMembers(
+      client,
+      INTEGRATION_SESSION_ID,
+      INTEGRATION_GROUP_ID,
+      [{ id: 'lid-a@lid', number: 'lid-a', name: null, isAdmin: false, isSuperAdmin: false }],
+    ));
+    await publishAndResolve();
+    await drain();
+    const initial = await pool.query<{ requested_revision: string }>(
+      `SELECT requested_revision::text FROM contact_projection_work
+       WHERE session_id = $1`,
+      [INTEGRATION_SESSION_ID],
+    );
+
+    await publishAndResolve();
+    expect(await projections.claim()).toBeNull();
+    const unchanged = await pool.query<{ requested_revision: string }>(
+      `SELECT requested_revision::text FROM contact_projection_work
+       WHERE session_id = $1`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(unchanged.rows).toEqual(initial.rows);
+
+    await publishAndResolve('Renamed saved contact');
+    const changed = await projections.claim();
+    expect(changed).not.toBeNull();
+    expect(await projections.projectBatch(changed!, 10)).toMatchObject({
+      updated: 1,
+      completed: true,
+    });
+    expect(await projections.claim()).toBeNull();
+    const member = await pool.query<{ shadow_display_name: string }>(
+      `SELECT shadow_display_name FROM group_members
+       WHERE session_id = $1 AND group_id = $2 AND participant_id = 'lid-a@lid'`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+    expect(member.rows[0]?.shadow_display_name).toBe('Renamed saved contact');
+  });
+
   it('coalesces replayed observations and schedules a newer revision during an active claim', async () => {
     await pool.query(
       `INSERT INTO group_members

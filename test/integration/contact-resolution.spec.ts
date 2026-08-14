@@ -159,6 +159,47 @@ describe('versioned contact resolution', () => {
     expect(await assignments(first.claim.runId)).toEqual(firstAssignments);
   });
 
+  it('projects the first generation, skips an identical generation, and enqueues both sides of a split', async () => {
+    const projected = new ContactResolutionRepository(database, true);
+    const resolveProjected = async () => {
+      await projected.enqueuePublished(10);
+      const claim = await projected.claim();
+      expect(claim).not.toBeNull();
+      await projected.resolve(claim!);
+    };
+
+    await publish([
+      contact('84970000000@c.us', '84970000000', 'Saved contact'),
+      contact('lid-a@lid', '84970000000'),
+    ]);
+    await resolveProjected();
+    expect((await pool.query(
+      `SELECT 1 FROM contact_projection_work WHERE session_id = $1`,
+      [INTEGRATION_SESSION_ID],
+    )).rowCount).toBe(1);
+    await pool.query('DELETE FROM contact_projection_work WHERE session_id = $1', [INTEGRATION_SESSION_ID]);
+
+    await publish([
+      contact('lid-a@lid', '84970000000'),
+      contact('84970000000@c.us', '84970000000', 'Saved contact'),
+    ]);
+    await resolveProjected();
+    expect((await pool.query(
+      `SELECT 1 FROM contact_projection_work WHERE session_id = $1`,
+      [INTEGRATION_SESSION_ID],
+    )).rowCount).toBe(0);
+
+    await publish([
+      contact('84970000000@c.us', '84970000000', 'Saved contact'),
+      contact('lid-a@lid', '84971111111'),
+    ]);
+    await resolveProjected();
+    expect((await pool.query(
+      `SELECT 1 FROM contact_projection_work WHERE session_id = $1`,
+      [INTEGRATION_SESSION_ID],
+    )).rowCount).toBe(2);
+  });
+
   it('quarantines ambiguous LID mappings while keeping an exact phone JID resolvable', async () => {
     await publish([
       contact('84970000000@c.us', '84970000000'),

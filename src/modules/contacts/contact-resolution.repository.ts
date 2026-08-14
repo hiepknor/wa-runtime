@@ -265,15 +265,61 @@ export class ContactResolutionRepository {
       const row = result.rows[0];
       if (!row) throw new Error('Contact resolution lost completion ownership');
       if (this.projectionEnabled) {
-        const clusters = await client.query<{ cluster_id: string }>(
-          `SELECT cluster_id FROM resolved_contact_clusters
-           WHERE session_id = $1 AND run_id = $2 ORDER BY cluster_id`,
+        const affected = await client.query<{ identity_id: string }>(
+          `WITH previous_run AS MATERIALIZED (
+             SELECT id FROM contact_resolution_runs
+             WHERE session_id = $1 AND status = 'COMPLETED' AND id <> $2
+             ORDER BY completed_at DESC, id DESC LIMIT 1
+           ), changed_assignments AS MATERIALIZED (
+             SELECT current.identity_id
+             FROM resolved_identity_assignments current
+             LEFT JOIN previous_run ON true
+             LEFT JOIN resolved_identity_assignments previous
+               ON previous.session_id = current.session_id AND previous.run_id = previous_run.id
+              AND previous.identity_id = current.identity_id
+             WHERE current.session_id = $1 AND current.run_id = $2
+               AND (previous.identity_id IS NULL OR
+                 (previous.cluster_id, previous.resolution_status, previous.resolved_phone_number)
+                   IS DISTINCT FROM
+                 (current.cluster_id, current.resolution_status, current.resolved_phone_number))
+             UNION
+             SELECT previous.identity_id
+             FROM previous_run
+             JOIN resolved_identity_assignments previous
+               ON previous.session_id = $1 AND previous.run_id = previous_run.id
+             LEFT JOIN resolved_identity_assignments current
+               ON current.session_id = previous.session_id AND current.run_id = $2
+              AND current.identity_id = previous.identity_id
+             WHERE current.identity_id IS NULL
+           ), changed_clusters AS MATERIALIZED (
+             SELECT current.cluster_id
+             FROM resolved_contact_clusters current
+             LEFT JOIN previous_run ON true
+             LEFT JOIN resolved_contact_clusters previous
+               ON previous.session_id = current.session_id AND previous.run_id = previous_run.id
+              AND previous.cluster_id = current.cluster_id
+             WHERE current.session_id = $1 AND current.run_id = $2
+               AND (previous.cluster_id IS NULL OR
+                 (previous.resolved_phone_number, previous.identity_count,
+                  previous.contact_display_name)
+                   IS DISTINCT FROM
+                 (current.resolved_phone_number, current.identity_count,
+                  current.contact_display_name))
+           )
+           SELECT DISTINCT COALESCE(current.cluster_id, changed.identity_id) AS identity_id
+           FROM changed_assignments changed
+           LEFT JOIN resolved_identity_assignments current
+             ON current.session_id = $1 AND current.run_id = $2
+            AND current.identity_id = changed.identity_id
+           UNION
+           SELECT cluster_id AS identity_id FROM changed_clusters
+           ORDER BY identity_id`,
           [claim.sessionId, claim.runId],
         );
         await enqueueContactProjectionWork(
           client,
           claim.sessionId,
-          clusters.rows.map(cluster => cluster.cluster_id),
+          affected.rows.map(item => item.identity_id),
         );
       }
       return {
