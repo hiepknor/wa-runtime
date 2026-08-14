@@ -37,6 +37,58 @@ as a phone number. `displayName` remains nullable.
 
 WA Studio commit: **PENDING**.
 
+## Runtime staging evidence
+
+Runtime implementation commits: `c696e5d` through `c84de86` inclusive. Staging image:
+`wa-runtime:c84de86` (corrective commit after the initial `9685e46` shadow rollout). The committed
+OpenAPI artifact in `c84de86` is the Runtime contract artifact under test; the corrective commit did
+not change the public contract.
+
+Verified without enabling projection reads:
+
+- migrations 021–028 applied and readiness stayed healthy with live sends disabled;
+- evidence backfill completed after scanning 535,388 historical membership rows; all 535,387 rows
+  present at completion had an evidence identity (one row changed concurrently during the scan);
+- restarting the scheduler during the bounded backfill preserved the keyset cursor and did not
+  restart the job;
+- the first resolution attempt exposed an unbounded name-ranking plan: it exceeded eight minutes,
+  crossed the five-minute scheduler warning threshold and was cancelled before cutover;
+- `c84de86` materializes the eligible name observations before deterministic selection and scopes
+  resolution/projection claims to `OPENWA_ALLOWED_SESSION_IDS`;
+- the same staging dataset then resolved 25,530 identities into 24,271 clusters, with 2,518 linked
+  identities and zero conflicts, in approximately 72 seconds;
+- the next published generation resolved 25,594 identities into 24,320 clusters, with 2,548 linked
+  identities and zero conflicts;
+- projection queue metrics distinguish eligible work from 23,541 inactive historical-session jobs;
+  inactive work remained unchanged while eligible work progressed.
+- with `CONTACT_PROJECTION_MAX_JOBS_PER_TICK=100`, projection completed 100 jobs per tick without
+  failures; observed PostgreSQL CPU was approximately 28% and scheduler memory approximately 50 MiB
+  during an isolated sample;
+- a 20-request largest-group member-page benchmark under projection load returned 20/20 HTTP 200;
+  direct Runtime latency was p50 9.97 ms and p95 17.98 ms. The same calls through the staging HTTPS
+  edge were p50 77.78 ms and p95 126.00 ms, so edge/network latency is reported separately from the
+  sub-50-ms application gate;
+- the second FULL sync used to publish a projection-aware generation encountered upstream HTTP 429;
+  contact snapshot publication and resolution completed, but the group-sync run has terminal item
+  failures and is not accepted as a clean full-sync smoke result.
+- a mixed-mode read canary traversed all 1,933 records in the largest observed group in ten pages:
+  1,933 unique participant identities, zero duplicates/missing rows, byte-stable repeated page 0 and
+  a non-zero dataset revision; page 0 deliberately contained both projected and revision-zero
+  fallback rows;
+- default/custom pagination, display-name/phone/participant search, whitespace query, empty result,
+  out-of-range offset, invalid limit/offset, missing group and cross-session 404 behavior passed;
+- group detail remained free of embedded members and both deprecated compatibility fields and the
+  additive v2 identity fields remained present;
+- the staging read switch was returned to `false`; the rollback page remained healthy with the same
+  total and `datasetRevision=0`, while legacy fan-out stayed enabled.
+- synchronous legacy fan-out was then disabled temporarily with reads still on legacy; 5,414 member
+  rows fenced to projection jobs completed during that window had zero shadow-vs-legacy mismatches.
+  Readiness stayed healthy, after which legacy fan-out was restored to `true`.
+
+The coordinated gate remains pending while the eligible projection backlog drains, API/failure
+smoke tests run and the WA Studio commit is recorded. The staging read switch remains disabled and
+legacy fan-out remains enabled.
+
 ## Staging gates
 
 - member evidence backfill and projection bootstrap complete, followed by a newer completed
@@ -49,5 +101,5 @@ WA Studio commit: **PENDING**.
 - inbound webhook processing remains successful with synchronous member fan-out disabled;
 - rollback to legacy reads is exercised while the async worker mirrors legacy columns.
 
-Runtime staging evidence: **PENDING**.
+Runtime staging evidence: **IN PROGRESS**.
 Release status: **PENDING**.
