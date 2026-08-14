@@ -1,9 +1,8 @@
-# Contacts v2 coordinated release — PENDING
+# Contacts v2 coordinated release — STAGING PASS / PRODUCTION PENDING
 
-This record gates the additive WA Runtime member-identity contract and WA Studio adoption. It must
-remain `PENDING` until the shadow pipeline is enabled on staging, the checks below pass and the exact
-WA Studio commit is recorded. Do not enable projection reads or disable legacy fan-out in production
-from this document alone.
+This record gates the additive WA Runtime member-identity contract and WA Studio adoption. The
+coordinated staging cutover has passed, but production remains `PENDING`. Do not enable projection
+reads or disable legacy fan-out in production from this document alone.
 
 ## Runtime contract
 
@@ -35,20 +34,19 @@ as a phone number. `displayName` remains nullable.
    revision change between pages, search after enrichment, and compatibility with extra response
    fields.
 
-WA Studio commit: **PENDING**. The inspected WA Studio `main` at `653fb98` still has the pre-v2
-Runtime snapshot and generated types: the snapshot is not byte-identical to Runtime and does not
-contain the additive resolved identity, provenance or dataset-revision fields. This commit is not a
-compatible coordinated-release candidate.
+WA Studio commit: `fa339b24380760c98dc319ecaeff2d62e02ab9d7`, based on
+`653fb983748cf6297143345f869f1dfb1162f841`. The commit adopts the additive identity, provenance,
+projection-revision and dataset-revision fields without changing Runtime or deploying Studio.
 
 Artifact identity for the handoff:
 
 - authoritative Runtime artifact: `contracts/runtime/v1/openapi.json`, SHA-256
   `995e816c7f0e553dd2d2f5af2c96fd43051f8a98df7e4fbdf5d01e2d51683517`;
-- current incompatible WA Studio snapshot: `contracts/wa-runtime/v1/openapi.json`, SHA-256
-  `dd400ed73c79a2ee0317d3169e2c1ab5bcaecbd2cd758833d584cbfdfe6dbeb0`;
-- after copying the artifact, WA Studio must run `npm run contract:generate` followed by
-  `npm run check`. The copied snapshot must match the Runtime SHA-256 before its commit can be
-  recorded here.
+- WA Studio snapshot: `contracts/wa-runtime/v1/openapi.json`, SHA-256
+  `995e816c7f0e553dd2d2f5af2c96fd43051f8a98df7e4fbdf5d01e2d51683517`;
+- the artifacts are byte-identical. WA Studio regenerated its client with
+  `npm run contract:generate`; `npm run check` passed 22 test files/127 tests, TypeScript and Vite
+  builds, Rust formatting and Clippy.
 
 ## Runtime staging evidence
 
@@ -152,9 +150,71 @@ Verified without enabling projection reads:
   contract diff check and `git diff --check` also passed. The alias-to-cluster regression was run
   independently three times before the full suite.
 
-The Runtime staging gates are complete. The coordinated release remains pending only until WA Studio
-adopts the exact Runtime OpenAPI artifact, regenerates its client, passes its v2 tests and records the
-compatible commit here. The staging read switch remains disabled and legacy fan-out remains enabled.
+The Runtime shadow and rollback gates were complete before coordinated cutover. Production remains
+pending independently of the staging result.
+
+## Coordinated staging cutover
+
+Release inputs:
+
+- Runtime implementation range: `c696e5d..fb814a4`;
+- deployed image: `wa-runtime:fb814a4`, image digest
+  `sha256:d926d94b04d5aacf84602cf3a1e9c8a4f2ad313c82f640ad51aafcaec6e5e09b`;
+- WA Studio commit: `fa339b24380760c98dc319ecaeff2d62e02ab9d7`;
+- shared OpenAPI SHA-256:
+  `995e816c7f0e553dd2d2f5af2c96fd43051f8a98df7e4fbdf5d01e2d51683517`.
+
+At `2026-08-14T10:01:41Z`, the pre-cutover baseline was healthy with projection shadow enabled,
+projection reads disabled, legacy fan-out enabled and live sends disabled. Eligible pending work,
+failed work and oldest lag were zero. All 267,811 allowlisted member rows had evidence, a non-zero
+projection revision and an identity type; LID-as-phone violations were zero. API, worker and scheduler
+were healthy with no projection failure, deadlock, unhandled or fatal log matches.
+
+The first read canary began at `2026-08-14T10:02:26Z`. Its functional checks completed, but the
+30-sample direct benchmark reported p95 54.57 ms against the 50 ms gate. The read flag was rolled back
+at `2026-08-14T10:03:52Z`; readiness recovered with legacy fan-out still enabled and live sends still
+disabled. The rollback source is the protected staging environment snapshot
+`.env.pre-contacts-v2-cutover-20260814T100222Z`.
+
+The projected page query itself measured approximately 7 ms and its count approximately 4 ms, while
+the warmed legacy control measured p50 11.19 ms/p95 18.18 ms over 100 samples. With low service CPU
+and no error signal, a second canary used a fully healthy API, 20 warm-up requests and 100 measured
+direct requests. It began at `2026-08-14T10:05:44Z` and passed at `2026-08-14T10:06:29Z`:
+
+- direct p50 12.72 ms, p95 27.33 ms, p99 54.03 ms and max 60.40 ms over 100 requests;
+- staging HTTPS p50 55.95 ms and p95 123.00 ms over 30 requests; edge/network latency remains
+  reported separately from the direct application gate;
+- 1,948 members were traversed in ten pages with 1,948 unique identities, no duplicates or omissions,
+  one stable non-zero dataset revision and only non-zero row projection revisions;
+- the observed page contained 408 named and 1,540 unnamed members, 784 resolved PHONE_JID members and
+  1,164 unresolved LID members. No LID exposed a resolved phone;
+- observed provenance values were contact name, push name and null; every returned value belonged to
+  the contract enum. Studio tests cover membership-name and resolved-alias provenance that were not
+  present in this live group;
+- trimmed server search by display name, resolved phone and participant identity passed. Whitespace
+  query equivalence, empty search, out-of-range pagination, invalid pagination (400), missing and
+  cross-session groups (404), and missing authentication (401) passed;
+- no empty synchronized dataset was observed while checking up to 20 active groups whose metadata
+  advertised zero participants. The focused Studio suite proves distinct empty-dataset and
+  empty-search rendering without manufacturing staging data;
+- the focused Studio Contacts/capability suite passed 27 tests, including legacy revision zero,
+  projected revisions, stable pagination using `meta.total`, one bounded revision restart, rejection
+  of mixed revisions, late response invalidation, session/unmount cancellation, all provenance enum
+  values and null, LID-safe presentation, empty states, and capability refresh preserving the member
+  page.
+
+At `2026-08-14T10:07:19Z`, post-cutover readiness remained healthy. Effective staging flags were
+projection shadow enabled, projection reads enabled, legacy fan-out enabled and live sends disabled.
+Eligible pending/failed work, oldest lag, missing evidence, unprojected rows, missing identity types
+and LID-as-phone violations were all zero. API, worker and scheduler were healthy with zero relevant
+error-log matches. The staging cutover is retained; the environment snapshot and the single API-only
+restart procedure remain the immediate rollback path.
+
+The follow-up observation at `2026-08-14T10:09:42Z` retained those zero-count invariants across
+267,813 live member rows. All 1,486 OpenWA webhook requests observed since the successful cutover
+completed with HTTP 201, and all three services remained healthy with no relevant error-log matches.
+A further warmed 50-request direct benchmark returned p50 13.06 ms and p95 27.53 ms. This confirms
+the successful canary result while preserving the first-attempt outlier and rollback evidence above.
 
 ## Staging gates
 
@@ -168,5 +228,7 @@ compatible commit here. The staging read switch remains disabled and legacy fan-
 - inbound webhook processing remains successful with synchronous member fan-out disabled;
 - rollback to legacy reads is exercised while the async worker mirrors legacy columns.
 
-Runtime staging evidence: **PASS (backend only)**.
-Release status: **PENDING**.
+Runtime staging evidence: **PASS**.
+WA Studio coordinated staging evidence: **PASS**.
+Staging cutover status: **PASS**.
+Production release status: **PENDING — projection reads were not enabled in production**.
