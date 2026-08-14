@@ -289,9 +289,14 @@ export class ContactRepository {
          )
          INSERT INTO contact_identifiers
            (session_id, contact_id, identity_type, identity_value, mapping_source)
-         SELECT DISTINCT $1, matched.contact_id, 'PHONE', matched.phone, 'OPENWA_CONTACT_PHONE'
+         SELECT DISTINCT ON (matched.phone)
+           $1, COALESCE(matched.phone_contact_id, matched.contact_id),
+           'PHONE', matched.phone, 'OPENWA_CONTACT_PHONE'
          FROM matched WHERE matched.phone IS NOT NULL
-           AND (matched.phone_contact_id IS NULL OR matched.phone_contact_id = matched.contact_id)
+         ORDER BY matched.phone,
+           (matched.phone_contact_id IS NOT NULL) DESC,
+           (matched.identity_type = 'PHONE_JID') DESC,
+           matched.identity_value, matched.contact_id
          ON CONFLICT (session_id, identity_type, identity_value) DO UPDATE SET
            last_observed_at = now(), updated_at = now()`,
         [sessionId, pageJson],

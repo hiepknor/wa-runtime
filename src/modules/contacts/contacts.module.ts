@@ -10,6 +10,8 @@ import { ContactMemberIdentityBackfillRepository } from './contact-member-identi
 import { ContactMemberIdentityBackfillTick } from './contact-member-identity-backfill.tick';
 import { DatabaseService } from '../../core/database/database.service';
 import { ContactEvidenceWriter } from './contact-evidence.writer';
+import { ContactResolutionRepository } from './contact-resolution.repository';
+import { ContactResolutionTick } from './contact-resolution.tick';
 
 @Module({
   imports: [OpenWAModule],
@@ -31,6 +33,18 @@ import { ContactEvidenceWriter } from './contact-evidence.writer';
       inject: [DatabaseService, ContactEvidenceWriter],
     },
     ContactMemberIdentityBackfillRepository,
+    ContactResolutionRepository,
+    {
+      provide: ContactResolutionTick,
+      useFactory: (repository: ContactResolutionRepository) => new ContactResolutionTick(
+        repository,
+        {
+          enabled: runtimeConfig().CONTACT_RESOLUTION_SHADOW_ENABLED,
+          maxRunsPerTick: runtimeConfig().CONTACT_RESOLUTION_MAX_RUNS_PER_TICK,
+        },
+      ),
+      inject: [ContactResolutionRepository],
+    },
     {
       provide: ContactSyncService,
       useFactory: (repository: ContactRepository, openwa: OpenWAClient) =>
@@ -75,6 +89,7 @@ import { ContactEvidenceWriter } from './contact-evidence.writer';
     ContactPeriodicSyncTick,
     ContactMemberIdentityBackfillTick,
     ContactEvidenceWriter,
+    ContactResolutionTick,
   ],
 })
 export class ContactsModule {}

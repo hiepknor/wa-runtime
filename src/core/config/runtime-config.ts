@@ -53,6 +53,8 @@ const schema = z
     CONTACT_SNAPSHOT_STAGING_ENABLED: booleanFromEnv(false),
     CONTACT_SNAPSHOT_RETENTION_DAYS: z.coerce.number().int().min(7).max(365).default(30),
     CONTACT_EVIDENCE_DUAL_WRITE_ENABLED: booleanFromEnv(false),
+    CONTACT_RESOLUTION_SHADOW_ENABLED: booleanFromEnv(false),
+    CONTACT_RESOLUTION_MAX_RUNS_PER_TICK: z.coerce.number().int().min(1).max(20).default(2),
     CONTACT_MESSAGE_ENRICHMENT_ENABLED: booleanFromEnv(false),
     CONTACT_PERIODIC_SYNC_ENABLED: booleanFromEnv(false),
     CONTACT_PERIODIC_SYNC_INTERVAL_MS: z.coerce.number().int().min(300_000).default(86_400_000),
@@ -109,6 +111,13 @@ const schema = z
         code: 'custom',
         path: ['CONTACT_EVIDENCE_DUAL_WRITE_ENABLED'],
         message: 'CONTACT_EVIDENCE_DUAL_WRITE_ENABLED requires CONTACT_SNAPSHOT_STAGING_ENABLED',
+      });
+    }
+    if (value.CONTACT_RESOLUTION_SHADOW_ENABLED && !value.CONTACT_EVIDENCE_DUAL_WRITE_ENABLED) {
+      context.addIssue({
+        code: 'custom',
+        path: ['CONTACT_RESOLUTION_SHADOW_ENABLED'],
+        message: 'CONTACT_RESOLUTION_SHADOW_ENABLED requires CONTACT_EVIDENCE_DUAL_WRITE_ENABLED',
       });
     }
   });

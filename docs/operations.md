@@ -341,6 +341,14 @@ in their existing PostgreSQL transaction; legacy Contacts and `group_members` re
 Snapshot evidence is committed only with a `PUBLISHED` generation. Disable the flag to stop new
 evidence without changing current API reads or deleting collected evidence.
 
+Migration 025 adds immutable, versioned resolver outputs. Enable
+`CONTACT_RESOLUTION_SHADOW_ENABLED=true` only while evidence dual-write is enabled. The scheduler
+claims at most `CONTACT_RESOLUTION_MAX_RUNS_PER_TICK` published generations per minute with a fenced
+five-minute lease. A run uses the publication timestamp as an evidence cutoff, quarantines ambiguous
+LID-to-phone edges, and writes clusters/assignments without touching legacy Contacts or member rows.
+Logs contain aggregate identity/cluster/conflict counts only. Disable the shadow flag to stop new runs;
+completed results remain available for comparison and rollback analysis.
+
 Identity evidence from an inbound message's bounded `contact.pushName` field is independently gated by
 `CONTACT_MESSAGE_ENRICHMENT_ENABLED`. Runtime extracts only sender identity and push name, then discards
 the upstream contact object; a contact write failure never retries or dead-letters the message webhook.

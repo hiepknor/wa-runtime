@@ -13,6 +13,7 @@ import { GatewayWorkListenerService } from './gateway-work-listener.service';
 import { ContactPeriodicSyncTick } from '../contacts/contact-periodic-sync.tick';
 import { WebhookRegistrationReconciliationTick } from '../webhooks/webhook-registration-reconciliation.tick';
 import { ContactMemberIdentityBackfillTick } from '../contacts/contact-member-identity-backfill.tick';
+import { ContactResolutionTick } from '../contacts/contact-resolution.tick';
 
 @Injectable()
 export class SchedulerRunnerService {
@@ -30,6 +31,7 @@ export class SchedulerRunnerService {
     private readonly contacts: ContactPeriodicSyncTick,
     private readonly webhookRegistrations: WebhookRegistrationReconciliationTick,
     private readonly contactMemberIdentityBackfill: ContactMemberIdentityBackfillTick,
+    private readonly contactResolution: ContactResolutionTick,
   ) {}
 
   async run(): Promise<void> {
@@ -53,6 +55,12 @@ export class SchedulerRunnerService {
         30_000,
         2 * 60_000,
         () => this.contactMemberIdentityBackfill.run(),
+      ),
+      this.tick(
+        'contact-resolution',
+        60_000,
+        5 * 60_000,
+        () => this.contactResolution.run(),
       ),
       this.tick(
         'webhook-registration',
