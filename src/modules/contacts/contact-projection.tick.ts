@@ -26,6 +26,7 @@ export class ContactProjectionTick {
       await this.repository.backfillEvidence(this.options.evidenceBackfillBatchSize);
     }
     await this.repository.enqueueBootstrap(this.options.bootstrapBatchSize);
+    await this.repository.catchUpUnprojected(this.options.bootstrapBatchSize);
     let updated = 0;
     let completed = 0;
     for (let job = 0; job < this.options.maxJobsPerTick; job += 1) {

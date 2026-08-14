@@ -473,6 +473,78 @@ describe('durable contact projection', () => {
     expect(claim?.sessionId).toBe(INTEGRATION_SESSION_ID);
   });
 
+  it('catches up members observed while projection was disabled', async () => {
+    const identity = await pool.query<{ id: string }>(
+      `INSERT INTO observed_contact_identities (session_id, identity_type, identity_value)
+       VALUES ($1, 'LID', 'late-projection@lid') RETURNING id`,
+      [INTEGRATION_SESSION_ID],
+    );
+    await pool.query(
+      `INSERT INTO group_members
+         (session_id, group_id, participant_id, phone_number,
+          evidence_identity_id, is_admin, is_super_admin)
+       VALUES ($1, $2, 'late-projection@lid', 'late-projection', $3, false, false)`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, identity.rows[0]!.id],
+    );
+    const scoped = new ContactProjectionRepository(
+      database, false, [INTEGRATION_SESSION_ID],
+    );
+
+    expect(await scoped.catchUpUnprojected(10)).toBe(1);
+    expect(await scoped.catchUpUnprojected(10)).toBe(0);
+    const claim = await scoped.claim();
+    expect(claim).not.toBeNull();
+    expect(await scoped.projectBatch(claim!, 10)).toMatchObject({
+      updated: 1,
+      completed: true,
+    });
+    expect(await scoped.catchUpUnprojected(10)).toBe(0);
+  });
+
+  it('skips concurrent catch-up work while another scheduler owns the advisory lock', async () => {
+    const owner = await pool.connect();
+    try {
+      await owner.query('BEGIN');
+      await owner.query(
+        `SELECT pg_advisory_xact_lock(
+           hashtextextended('contacts:projection:catch-up', 0)
+         )`,
+      );
+
+      expect(await projections.catchUpUnprojected(10)).toBe(0);
+    } finally {
+      await owner.query('ROLLBACK');
+      owner.release();
+    }
+  });
+
+  it('requeues the effective resolved cluster for a late membership', async () => {
+    await publishAndResolve();
+    await drain();
+    const identity = await pool.query<{ id: string }>(
+      `SELECT id FROM observed_contact_identities
+       WHERE session_id = $1 AND identity_type = 'LID' AND identity_value = 'lid-a@lid'`,
+      [INTEGRATION_SESSION_ID],
+    );
+    await pool.query(
+      `INSERT INTO gateway_groups (session_id, id, name, is_active, synced_at)
+       VALUES ($1, 'late-cluster-group', 'Late cluster group', true, now())`,
+      [INTEGRATION_SESSION_ID],
+    );
+    await pool.query(
+      `INSERT INTO group_members
+         (session_id, group_id, participant_id, phone_number,
+          evidence_identity_id, is_admin, is_super_admin)
+       VALUES ($1, 'late-cluster-group', 'lid-a@lid', 'lid-a', $2, false, false)`,
+      [INTEGRATION_SESSION_ID, identity.rows[0]!.id],
+    );
+
+    expect(await projections.catchUpUnprojected(10)).toBe(1);
+    expect(await projections.catchUpUnprojected(10)).toBe(0);
+    expect(await drain()).toBe(1);
+    expect(await projections.catchUpUnprojected(10)).toBe(0);
+  });
+
   it('backfills exact member evidence in bounded durable pages without treating a LID as a phone', async () => {
     await pool.query(
       `INSERT INTO group_members

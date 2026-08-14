@@ -228,6 +228,52 @@ export class ContactProjectionRepository {
     });
   }
 
+  async catchUpUnprojected(limit: number): Promise<number> {
+    return this.database.transaction(async client => {
+      const lock = await client.query<{ acquired: boolean }>(
+        `SELECT pg_try_advisory_xact_lock(
+           hashtextextended('contacts:projection:catch-up', 0)
+         ) AS acquired`,
+      );
+      if (!lock.rows[0]?.acquired) return 0;
+      const result = await client.query<{ session_id: string; evidence_identity_id: string }>(
+        `SELECT DISTINCT member.session_id, member.evidence_identity_id
+         FROM group_members member
+         LEFT JOIN LATERAL (
+           SELECT run.id FROM contact_resolution_runs run
+           WHERE run.session_id = member.session_id AND run.status = 'COMPLETED'
+           ORDER BY run.completed_at DESC, run.id DESC LIMIT 1
+         ) latest_run ON true
+         LEFT JOIN resolved_identity_assignments assignment
+           ON assignment.session_id = member.session_id AND assignment.run_id = latest_run.id
+          AND assignment.identity_id = member.evidence_identity_id
+         LEFT JOIN contact_projection_work work
+           ON work.session_id = member.session_id
+          AND work.identity_id = CASE
+            WHEN assignment.resolution_status = 'RESOLVED' THEN assignment.cluster_id
+            ELSE member.evidence_identity_id
+          END
+         WHERE member.evidence_identity_id IS NOT NULL
+           AND member.shadow_projection_revision = 0
+           AND ($2::text[] IS NULL OR member.session_id = ANY($2::text[]))
+           AND (work.identity_id IS NULL OR work.status IN ('IDLE', 'FAILED'))
+         ORDER BY member.session_id, member.evidence_identity_id LIMIT $1`,
+        [limit, this.allowedSessionIds],
+      );
+      const bySession = new Map<string, string[]>();
+      for (const row of result.rows) {
+        const identities = bySession.get(row.session_id) ?? [];
+        identities.push(row.evidence_identity_id);
+        bySession.set(row.session_id, identities);
+      }
+      let enqueued = 0;
+      for (const [sessionId, identities] of bySession) {
+        enqueued += await enqueueContactProjectionWork(client, sessionId, identities);
+      }
+      return enqueued;
+    });
+  }
+
   async claim(): Promise<ContactProjectionClaim | null> {
     const result = await this.database.query<{
       session_id: string;
