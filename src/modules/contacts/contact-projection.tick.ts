@@ -45,7 +45,8 @@ export class ContactProjectionTick {
       }
     }
     if (updated > 0 || completed > 0) {
-      this.logger.log({ event: 'contacts.projection.completed', updated, completed });
+      const queue = await this.repository.getQueueMetrics();
+      this.logger.log({ event: 'contacts.projection.completed', updated, completed, ...queue });
     }
   }
 }

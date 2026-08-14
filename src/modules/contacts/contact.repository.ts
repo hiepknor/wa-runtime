@@ -84,7 +84,13 @@ export class ContactRepository {
            AND member.display_name IS NOT NULL)::text AS named_phone_jid_records,
          count(*) FILTER (WHERE member.display_name_source = 'OPENWA_CONTACT_NAME')::text AS contact_name_records,
          count(*) FILTER (WHERE member.display_name_source = 'GROUP_PARTICIPANT_NAME')::text AS participant_name_records,
-         count(*) FILTER (WHERE member.display_name_source = 'OPENWA_PUSH_NAME')::text AS push_name_records
+         count(*) FILTER (WHERE member.display_name_source = 'OPENWA_PUSH_NAME')::text AS push_name_records,
+         count(*) FILTER (WHERE member.shadow_projection_revision > 0)::text AS shadow_projected_records,
+         count(*) FILTER (WHERE member.shadow_display_name IS NOT NULL)::text AS shadow_named_records,
+         count(*) FILTER (WHERE member.shadow_resolved_phone_number IS NOT NULL)::text
+           AS shadow_resolved_phone_records,
+         count(*) FILTER (WHERE member.shadow_display_name_source = 'RESOLVED_ALIAS_PUSH_NAME')::text
+           AS shadow_alias_push_records
        FROM group_members member
        LEFT JOIN contact_identifiers identifier
          ON identifier.session_id = member.session_id AND identifier.contact_id = member.contact_id

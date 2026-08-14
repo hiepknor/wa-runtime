@@ -327,7 +327,7 @@
     },
     "/api/v1/groups/{id}/members": {
       "get": {
-        "description": "Results use deterministic super-admin, admin, normalized display name, and participant ID ordering.",
+        "description": "Results use deterministic super-admin, admin, normalized display name, and participant ID ordering. resolvedPhoneNumber is nullable and phoneNumber remains a deprecated upstream compatibility value. meta.datasetRevision changes when member enrichment is materialized.",
         "operationId": "GroupController_members",
         "parameters": [
           {
@@ -396,7 +396,7 @@
             "runtime-key": []
           }
         ],
-        "summary": "List synchronized group members without a contacts dependency",
+        "summary": "List materialized synchronized group members",
         "tags": [
           "groups"
         ]
@@ -1740,11 +1740,44 @@
             "type": "string"
           },
           "phoneNumber": {
-            "type": "string"
+            "type": "string",
+            "deprecated": true,
+            "description": "Legacy OpenWA participant number; may be a LID user-part. Use resolvedPhoneNumber."
           },
           "displayName": {
             "type": "string",
             "nullable": true
+          },
+          "identityType": {
+            "type": "string",
+            "enum": [
+              "LID",
+              "PHONE_JID",
+              "OTHER_JID"
+            ],
+            "nullable": true,
+            "description": "Normalized type of the exact upstream participant identity"
+          },
+          "resolvedPhoneNumber": {
+            "type": "string",
+            "nullable": true,
+            "description": "Verified phone resolution; null for unresolved or conflicted identities"
+          },
+          "displayNameSource": {
+            "type": "string",
+            "enum": [
+              "OPENWA_CONTACT_NAME",
+              "GROUP_PARTICIPANT_NAME",
+              "OPENWA_PUSH_NAME",
+              "RESOLVED_ALIAS_PUSH_NAME"
+            ],
+            "nullable": true,
+            "description": "Provenance of displayName"
+          },
+          "projectionRevision": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Monotonic materialized projection revision; 0 means legacy fallback"
           },
           "isAdmin": {
             "type": "boolean"
@@ -1757,6 +1790,10 @@
           "participantId",
           "phoneNumber",
           "displayName",
+          "identityType",
+          "resolvedPhoneNumber",
+          "displayNameSource",
+          "projectionRevision",
           "isAdmin",
           "isSuperAdmin"
         ]
@@ -1773,12 +1810,18 @@
           },
           "offset": {
             "type": "number"
+          },
+          "datasetRevision": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Highest member projection revision in the group; clients may detect enrichment between page reads"
           }
         },
         "required": [
           "total",
           "limit",
-          "offset"
+          "offset",
+          "datasetRevision"
         ]
       },
       "GroupMemberListDto": {

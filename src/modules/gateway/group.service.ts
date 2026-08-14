@@ -27,7 +27,10 @@ export class GroupService {
     this.sessions.assertVisible(sessionId);
     if (!await this.repository.findGroup(sessionId, groupId)) throw new NotFoundException('Group not found');
     const result = await this.repository.listMembers(sessionId, groupId, limit, offset, query);
-    return { data: result.data, meta: { total: result.total, limit, offset } };
+    return {
+      data: result.data,
+      meta: { total: result.total, limit, offset, datasetRevision: result.datasetRevision },
+    };
   }
 
   async refreshCapability(sessionId: string, groupId: string) {

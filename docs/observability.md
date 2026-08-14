@@ -24,6 +24,12 @@ Scheduler ticks emit `scheduler.tick.completed`, `scheduler.tick.failed`,
 `wa-runtime:scheduler-tick:<name>` with timestamps, duration and consecutive-failure count. The keys
 are diagnostic state, not work ownership or retry authority.
 
+Contact projection emits `contacts.projection.completed` with aggregate `updated`, `completed`,
+`pending`, `failed` and `oldestLagSeconds` values. Contact snapshot completion includes aggregate
+legacy and shadow coverage by identity/name/phone source. These events never contain an identity,
+name or phone value. Alert when projection failures are non-zero or oldest lag remains above the
+rollout threshold; inspect PostgreSQL-owned work rather than replaying OpenWA events manually.
+
 Useful commands:
 
 ```bash

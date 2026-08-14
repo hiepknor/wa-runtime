@@ -66,6 +66,15 @@ interface MemberRow {
   participant_id: string;
   phone_number: string;
   display_name: string | null;
+  identity_type: 'LID' | 'PHONE_JID' | 'OTHER_JID' | null;
+  resolved_phone_number: string | null;
+  display_name_source:
+    | 'OPENWA_CONTACT_NAME'
+    | 'GROUP_PARTICIPANT_NAME'
+    | 'OPENWA_PUSH_NAME'
+    | 'RESOLVED_ALIAS_PUSH_NAME'
+    | null;
+  projection_revision: string;
   is_admin: boolean;
   is_super_admin: boolean;
 }
@@ -160,6 +169,10 @@ const mapMember = (row: MemberRow): GroupMemberDto => ({
   participantId: row.participant_id,
   phoneNumber: row.phone_number,
   displayName: row.display_name,
+  identityType: row.identity_type,
+  resolvedPhoneNumber: row.resolved_phone_number,
+  displayNameSource: row.display_name_source,
+  projectionRevision: Number(row.projection_revision),
   isAdmin: row.is_admin,
   isSuperAdmin: row.is_super_admin,
 });
@@ -693,7 +706,7 @@ export class GatewayRepository {
     limit: number,
     offset: number,
     query?: string,
-  ): Promise<{ data: GroupMemberDto[]; total: number }> {
+  ): Promise<{ data: GroupMemberDto[]; total: number; datasetRevision: number }> {
     const normalizedQuery = query?.trim();
     const searchPattern = normalizedQuery
       ? `%${normalizedQuery.replace(/[\\%_]/g, '\\$&')}%`
@@ -704,35 +717,56 @@ export class GatewayRepository {
         `SELECT participant_id, phone_number,
            CASE WHEN $6::boolean AND shadow_projection_revision > 0
              THEN shadow_display_name ELSE display_name END AS display_name,
+           identity_type,
+           CASE WHEN $6::boolean AND shadow_projection_revision > 0
+             THEN shadow_resolved_phone_number ELSE resolved_phone_number
+           END AS resolved_phone_number,
+           CASE WHEN $6::boolean AND shadow_projection_revision > 0
+             THEN shadow_display_name_source ELSE display_name_source
+           END AS display_name_source,
+           CASE WHEN $6::boolean AND shadow_projection_revision > 0
+             THEN shadow_projection_revision ELSE 0 END::text AS projection_revision,
            is_admin, is_super_admin
          FROM group_members
          WHERE session_id = $1 AND group_id = $2
            AND ($5::text IS NULL
              OR (CASE WHEN $6::boolean AND shadow_projection_revision > 0
                    THEN shadow_display_name ELSE display_name END) ILIKE $5 ESCAPE '\\'
+             OR (CASE WHEN $6::boolean AND shadow_projection_revision > 0
+                   THEN shadow_resolved_phone_number ELSE resolved_phone_number END) ILIKE $5 ESCAPE '\\'
              OR phone_number ILIKE $5 ESCAPE '\\'
              OR participant_id ILIKE $5 ESCAPE '\\')
          ORDER BY is_super_admin DESC, is_admin DESC,
-           lower(coalesce(
-             CASE WHEN $6::boolean AND shadow_projection_revision > 0
-               THEN shadow_display_name ELSE display_name END,
-             phone_number
-           )) ASC, participant_id ASC
+           CASE WHEN $6::boolean AND shadow_projection_revision > 0
+             THEN shadow_sort_value
+             ELSE lower(coalesce(display_name, phone_number)) END ASC,
+           participant_id ASC
          LIMIT $3 OFFSET $4`,
         [sessionId, groupId, limit, offset, searchPattern, this.readContactProjection],
       );
-      const count = await client.query<{ count: string }>(
-        `SELECT count(*)::text AS count
+      const count = await client.query<{ count: string; dataset_revision: string }>(
+        `SELECT count(*)::text AS count,
+           CASE WHEN $4::boolean THEN COALESCE((
+             SELECT max(all_members.shadow_projection_revision)
+             FROM group_members all_members
+             WHERE all_members.session_id = $1 AND all_members.group_id = $2
+           ), 0) ELSE 0 END::text AS dataset_revision
          FROM group_members
          WHERE session_id = $1 AND group_id = $2
            AND ($3::text IS NULL
              OR (CASE WHEN $4::boolean AND shadow_projection_revision > 0
                    THEN shadow_display_name ELSE display_name END) ILIKE $3 ESCAPE '\\'
+             OR (CASE WHEN $4::boolean AND shadow_projection_revision > 0
+                   THEN shadow_resolved_phone_number ELSE resolved_phone_number END) ILIKE $3 ESCAPE '\\'
              OR phone_number ILIKE $3 ESCAPE '\\'
              OR participant_id ILIKE $3 ESCAPE '\\')`,
         [sessionId, groupId, searchPattern, this.readContactProjection],
       );
-      return { data: rows.rows.map(mapMember), total: Number(count.rows[0]?.count ?? 0) };
+      return {
+        data: rows.rows.map(mapMember),
+        total: Number(count.rows[0]?.count ?? 0),
+        datasetRevision: Number(count.rows[0]?.dataset_revision ?? 0),
+      };
     });
   }
 

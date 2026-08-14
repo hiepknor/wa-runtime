@@ -422,6 +422,7 @@ describe('durable contact projection', () => {
     );
 
     expect(await projections.enqueueBootstrap(1)).toBe(1);
+    expect(await projections.getQueueMetrics()).toMatchObject({ pending: 1, failed: 0 });
     expect(await projections.enqueueBootstrap(1)).toBe(0);
     const state = await pool.query<{ status: string; rows_enqueued: string }>(
       `SELECT status, rows_enqueued::text FROM contact_projection_bootstrap_state
@@ -453,6 +454,14 @@ describe('durable contact projection', () => {
     )).total).toBe(0);
     const page = await shadow.listMembers(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, 10, 0);
     expect(page.data.map(member => member.displayName)).toEqual(['Alpha', 'Zulu']);
+    expect(page.datasetRevision).toBe(11);
+    expect(page.data[0]).toMatchObject({
+      participantId: 'b@lid',
+      identityType: null,
+      resolvedPhoneNumber: null,
+      displayNameSource: 'OPENWA_PUSH_NAME',
+      projectionRevision: 11,
+    });
   });
 
   it('keeps inbound observation completion independent from membership fan-out', async () => {

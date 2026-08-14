@@ -22,11 +22,48 @@ export class GroupMemberDto {
   @ApiProperty()
   participantId!: string;
 
-  @ApiProperty()
+  @ApiProperty({
+    deprecated: true,
+    description: 'Legacy OpenWA participant number; may be a LID user-part. Use resolvedPhoneNumber.',
+  })
   phoneNumber!: string;
 
   @ApiProperty({ type: String, nullable: true })
   displayName!: string | null;
+
+  @ApiProperty({
+    enum: ['LID', 'PHONE_JID', 'OTHER_JID'],
+    nullable: true,
+    description: 'Normalized type of the exact upstream participant identity',
+  })
+  identityType!: 'LID' | 'PHONE_JID' | 'OTHER_JID' | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: 'Verified phone resolution; null for unresolved or conflicted identities',
+  })
+  resolvedPhoneNumber!: string | null;
+
+  @ApiProperty({
+    enum: [
+      'OPENWA_CONTACT_NAME',
+      'GROUP_PARTICIPANT_NAME',
+      'OPENWA_PUSH_NAME',
+      'RESOLVED_ALIAS_PUSH_NAME',
+    ],
+    nullable: true,
+    description: 'Provenance of displayName',
+  })
+  displayNameSource!:
+    | 'OPENWA_CONTACT_NAME'
+    | 'GROUP_PARTICIPANT_NAME'
+    | 'OPENWA_PUSH_NAME'
+    | 'RESOLVED_ALIAS_PUSH_NAME'
+    | null;
+
+  @ApiProperty({ minimum: 0, description: 'Monotonic materialized projection revision; 0 means legacy fallback' })
+  projectionRevision!: number;
 
   @ApiProperty()
   isAdmin!: boolean;
@@ -100,6 +137,12 @@ export class GroupListDto {
 export class GroupMemberPageMetaDto extends PageMetaDto {
   @ApiProperty({ description: 'Total synchronized member records matching the current search filter' })
   declare total: number;
+
+  @ApiProperty({
+    minimum: 0,
+    description: 'Highest member projection revision in the group; clients may detect enrichment between page reads',
+  })
+  datasetRevision!: number;
 }
 
 export class GroupMemberListDto {

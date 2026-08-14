@@ -45,8 +45,8 @@ export class GroupController {
 
   @Get(':id/members')
   @ApiOperation({
-    summary: 'List synchronized group members without a contacts dependency',
-    description: 'Results use deterministic super-admin, admin, normalized display name, and participant ID ordering.',
+    summary: 'List materialized synchronized group members',
+    description: 'Results use deterministic super-admin, admin, normalized display name, and participant ID ordering. resolvedPhoneNumber is nullable and phoneNumber remains a deprecated upstream compatibility value. meta.datasetRevision changes when member enrichment is materialized.',
   })
   @ApiOkResponse({ type: GroupMemberListDto })
   members(

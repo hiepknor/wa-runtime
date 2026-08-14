@@ -91,6 +91,15 @@ synchronized member rows rather than the group's upstream participant count. Nei
 search nor capability filtering joins or loads members. Full sync and capability refresh endpoints
 are asynchronous.
 
+Member rows add exact `identityType`, nullable `resolvedPhoneNumber`, `displayNameSource` provenance
+and a monotonic `projectionRevision`. The legacy `phoneNumber` remains present but may contain a LID
+user-part and must not be presented as a verified phone. `meta.datasetRevision` is the highest
+materialized member revision in the whole group (not only the filtered page); a change between page
+requests tells clients to restart pagination if they require one stable enrichment snapshot. A value
+of zero denotes the legacy fallback before projection cutover. Search/count/order continue to use the
+same materialized row and repeatable-read database snapshot; member reads never resolve Contacts or
+call OpenWA.
+
 #### Group-member coordinated release gate
 
 The Runtime release that removes `GroupDetailDto.members` must not be deployed until every WA
@@ -145,6 +154,8 @@ List responses use:
   "meta": { "total": 0, "limit": 50, "offset": 0 }
 }
 ```
+
+Group-member pages additionally include `meta.datasetRevision`.
 
 Use the limits declared in OpenAPI. Clients may poll sync runs and campaign runs, but should back off
 when inactive or backgrounded and stop polling terminal states. Poll the run aggregate for progress;

@@ -13,6 +13,12 @@ export interface ContactProjectionBatchResult {
   completed: boolean;
 }
 
+export interface ContactProjectionQueueMetrics {
+  pending: number;
+  failed: number;
+  oldestLagSeconds: number;
+}
+
 @Injectable()
 export class ContactProjectionRepository {
   constructor(
@@ -108,6 +114,27 @@ export class ContactProjectionRepository {
       identityId: row.identity_id,
       leaseToken: row.lease_token,
     } : null;
+  }
+
+  async getQueueMetrics(): Promise<ContactProjectionQueueMetrics> {
+    const result = await this.database.query<{
+      pending: string;
+      failed: string;
+      oldest_lag_seconds: string;
+    }>(
+      `SELECT
+         count(*) FILTER (WHERE status IN ('PENDING', 'RUNNING', 'RETRY'))::text AS pending,
+         count(*) FILTER (WHERE status = 'FAILED')::text AS failed,
+         COALESCE(max(extract(epoch FROM now() - first_requested_at))
+           FILTER (WHERE status IN ('PENDING', 'RUNNING', 'RETRY')), 0)::text AS oldest_lag_seconds
+       FROM contact_projection_work`,
+    );
+    const row = result.rows[0];
+    return {
+      pending: Number(row?.pending ?? 0),
+      failed: Number(row?.failed ?? 0),
+      oldestLagSeconds: Number(row?.oldest_lag_seconds ?? 0),
+    };
   }
 
   async projectBatch(

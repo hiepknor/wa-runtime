@@ -19,10 +19,14 @@ interface MemberResponse {
     participantId: string;
     phoneNumber: string;
     displayName: string | null;
+    identityType: 'LID' | 'PHONE_JID' | 'OTHER_JID' | null;
+    resolvedPhoneNumber: string | null;
+    displayNameSource: string | null;
+    projectionRevision: number;
     isAdmin: boolean;
     isSuperAdmin: boolean;
   }>;
-  meta: { total: number; limit: number; offset: number };
+  meta: { total: number; limit: number; offset: number; datasetRevision: number };
 }
 
 const OTHER_GROUP_ID = '120363000000000001@g.us';
@@ -127,23 +131,25 @@ describe('group member HTTP API', () => {
     const { response, body } = await members();
     expect(response.status).toBe(200);
     expect(body.data).toHaveLength(50);
-    expect(body.meta).toEqual({ total: 60, limit: 50, offset: 0 });
+    expect(body.meta).toEqual({ total: 60, limit: 50, offset: 0, datasetRevision: 0 });
   });
 
   it('supports custom pagination, empty pages, and a stable walk across three pages', async () => {
     const pages = await Promise.all([0, 20, 40].map(offset => members(`&limit=20&offset=${offset}`)));
     const ids = pages.flatMap(page => page.body.data.map(member => member.participantId));
     expect(pages.map(page => page.body.meta)).toEqual([
-      { total: 60, limit: 20, offset: 0 },
-      { total: 60, limit: 20, offset: 20 },
-      { total: 60, limit: 20, offset: 40 },
+      { total: 60, limit: 20, offset: 0, datasetRevision: 0 },
+      { total: 60, limit: 20, offset: 20, datasetRevision: 0 },
+      { total: 60, limit: 20, offset: 40, datasetRevision: 0 },
     ]);
     expect(ids).toHaveLength(60);
     expect(new Set(ids).size).toBe(60);
 
     const beyond = await members('&limit=25&offset=100');
     expect(beyond.response.status).toBe(200);
-    expect(beyond.body).toEqual({ data: [], meta: { total: 60, limit: 25, offset: 100 } });
+    expect(beyond.body).toEqual({
+      data: [], meta: { total: 60, limit: 25, offset: 100, datasetRevision: 0 },
+    });
   });
 
   it('orders super-admins, admins, and duplicate member names deterministically', async () => {
@@ -171,7 +177,7 @@ describe('group member HTTP API', () => {
     const result = await members(`&limit=1&query=${encodeURIComponent(query)}`);
     expect(result.response.status).toBe(200);
     expect(result.body.data).toHaveLength(1);
-    expect(result.body.meta).toEqual({ total, limit: 1, offset: 0 });
+    expect(result.body.meta).toEqual({ total, limit: 1, offset: 0, datasetRevision: 0 });
   });
 
   it('trims search, treats whitespace as no filter, and escapes SQL wildcards', async () => {

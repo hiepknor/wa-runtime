@@ -32,11 +32,21 @@ describe('ContactProjectionTick', () => {
       projectBatch: vi.fn().mockResolvedValue({ updated: 100, completed: false }),
       release: vi.fn().mockResolvedValue(undefined),
       fail: vi.fn(),
+      getQueueMetrics: vi.fn().mockResolvedValue({ pending: 1, failed: 0, oldestLagSeconds: 2 }),
     } as unknown as ContactProjectionRepository;
     await new ContactProjectionTick(repository, options).run();
     expect(repository.enqueueBootstrap).toHaveBeenCalledWith(1_000);
     expect(repository.projectBatch).toHaveBeenCalledTimes(2);
     expect(repository.release).toHaveBeenCalledWith(claim);
+    expect(repository.getQueueMetrics).toHaveBeenCalledOnce();
+    expect(Logger.prototype.log).toHaveBeenCalledWith({
+      event: 'contacts.projection.completed',
+      updated: 200,
+      completed: 0,
+      pending: 1,
+      failed: 0,
+      oldestLagSeconds: 2,
+    });
   });
 
   it('records a generic failure without logging identity data', async () => {
@@ -47,6 +57,7 @@ describe('ContactProjectionTick', () => {
       projectBatch: vi.fn().mockRejectedValue(new Error('projection failed')),
       release: vi.fn(),
       fail: vi.fn().mockResolvedValue(undefined),
+      getQueueMetrics: vi.fn(),
     } as unknown as ContactProjectionRepository;
     const warning = vi.spyOn(Logger.prototype, 'warn');
     await expect(new ContactProjectionTick(repository, options).run()).rejects.toThrow('projection failed');
