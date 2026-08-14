@@ -692,9 +692,12 @@ describe('durable contact projection', () => {
        FROM contact_resolution_runs run
        JOIN resolved_identity_assignments assignment
          ON assignment.session_id = run.session_id AND assignment.run_id = run.id
+       JOIN observed_contact_identities observed
+         ON observed.session_id = assignment.session_id AND observed.id = assignment.identity_id
        WHERE run.session_id = $1 AND run.status = 'COMPLETED'
          AND assignment.resolution_status = 'RESOLVED'
          AND assignment.identity_id <> assignment.cluster_id
+         AND observed.identity_type = 'LID'
        ORDER BY run.completed_at DESC, assignment.identity_id LIMIT 1`,
       [INTEGRATION_SESSION_ID],
     );
@@ -720,6 +723,37 @@ describe('durable contact projection', () => {
       updated: 1,
       completed: true,
     });
+    expect(await projections.catchUpUnprojected(10)).toBe(0);
+  });
+
+  it('repairs a projected membership whose materialized identity type is missing', async () => {
+    const identity = await pool.query<{ id: string }>(
+      `INSERT INTO observed_contact_identities
+         (session_id, identity_type, identity_value)
+       VALUES ($1, 'LID', 'missing-type@lid') RETURNING id`,
+      [INTEGRATION_SESSION_ID],
+    );
+    await pool.query(
+      `INSERT INTO group_members
+         (session_id, group_id, participant_id, phone_number, evidence_identity_id,
+          identity_type, shadow_projection_revision, is_admin, is_super_admin)
+       VALUES ($1, $2, 'missing-type@lid', 'missing-type', $3, NULL, 1, false, false)`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, identity.rows[0]!.id],
+    );
+
+    expect(await projections.catchUpUnprojected(10)).toBe(1);
+    const claim = await projections.claim();
+    expect(claim?.identityId).toBe(identity.rows[0]!.id);
+    expect(await projections.projectBatch(claim!, 10)).toMatchObject({
+      updated: 1,
+      completed: true,
+    });
+    const member = await pool.query<{ identity_type: string | null }>(
+      `SELECT identity_type FROM group_members
+       WHERE session_id = $1 AND group_id = $2 AND participant_id = 'missing-type@lid'`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+    expect(member.rows[0]?.identity_type).toBe('LID');
     expect(await projections.catchUpUnprojected(10)).toBe(0);
   });
 

@@ -349,7 +349,7 @@ export class ContactProjectionRepository {
             ELSE member.evidence_identity_id
           END
          WHERE member.evidence_identity_id IS NOT NULL
-           AND member.shadow_projection_revision = 0
+           AND (member.shadow_projection_revision = 0 OR member.identity_type IS NULL)
            AND ($2::text[] IS NULL OR member.session_id = ANY($2::text[]))
            AND (work.identity_id IS NULL OR work.status IN ('IDLE', 'FAILED'))
          ORDER BY member.session_id, projection_identity_id LIMIT $1`,
@@ -494,6 +494,7 @@ export class ContactProjectionRepository {
            ORDER BY member.group_id, member.participant_id LIMIT $8
          ), projected AS MATERIALIZED (
            SELECT member_page.*,
+             identity.identity_type AS projected_identity_type,
              CASE
                WHEN assignment.resolution_status = 'RESOLVED'
                  THEN assignment.resolved_phone_number
@@ -561,6 +562,7 @@ export class ContactProjectionRepository {
            ) alias_push ON true
          ), writes AS (
            UPDATE group_members member SET
+             identity_type = projected.projected_identity_type,
              shadow_resolved_phone_number = projected.resolved_phone,
              shadow_display_name = projected.effective_name,
              shadow_display_name_source = projected.effective_source,
@@ -581,11 +583,13 @@ export class ContactProjectionRepository {
              display_name_updated_at = CASE WHEN NOT $9::boolean THEN member.display_name_updated_at
                WHEN projected.effective_name IS NULL THEN NULL ELSE now() END,
              updated_at = CASE WHEN (
+               member.identity_type,
                member.shadow_resolved_phone_number, member.shadow_display_name,
                member.shadow_display_name_source, member.shadow_sort_value,
                member.shadow_projection_revision, member.shadow_resolution_run_id
                , member.resolved_phone_number, member.display_name, member.display_name_source
              ) IS DISTINCT FROM (
+               projected.projected_identity_type,
                projected.resolved_phone, projected.effective_name,
                projected.effective_source,
                lower(coalesce(projected.effective_name, projected.resolved_phone,
