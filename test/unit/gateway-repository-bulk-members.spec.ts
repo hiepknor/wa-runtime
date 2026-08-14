@@ -34,7 +34,10 @@ describe('GatewayRepository bulk member replacement', () => {
       .mockResolvedValueOnce({ rows: [], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [{ details_fingerprint: null }] })
       .mockResolvedValueOnce({ rows: [], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 1000 })
+      .mockResolvedValueOnce({
+        rows: Array.from({ length: 1000 }, (_, index) => ({ participant_id: `participant-${index}` })),
+        rowCount: 1000,
+      })
       .mockResolvedValueOnce({ rows: [], rowCount: 0 });
     const database = {
       transaction: <T>(operation: (client: { query: typeof query }) => Promise<T>) => operation({ query }),
@@ -67,5 +70,35 @@ describe('GatewayRepository bulk member replacement', () => {
     expect(query.mock.calls[0]?.[0]).toContain('pg_advisory_xact_lock');
     expect(query.mock.calls[0]?.[1]).toEqual(['contact-member-projection', 'session-1']);
     expect(query).toHaveBeenCalledTimes(9);
+  });
+
+  it('seeds contact projection only for inserted or changed members', async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ members_fingerprint: 'before' }] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ participant_id: 'participant-2' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const database = {
+      transaction: <T>(operation: (client: { query: typeof query }) => Promise<T>) => operation({ query }),
+    } as unknown as DatabaseService;
+    const contacts = {
+      seedGroupMembers: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ContactRepository;
+    const participants = [
+      { id: 'participant-1', number: 'phone-1', isAdmin: false, isSuperAdmin: false },
+      { id: 'participant-2', number: 'phone-2', name: 'Changed', isAdmin: false, isSuperAdmin: false },
+    ];
+
+    await new GatewayRepository(database, contacts).upsertGroupDetails('session-1', {
+      id: 'group-1', name: 'Group', isAdmin: true, participants,
+    });
+
+    expect(contacts.seedGroupMembers).toHaveBeenCalledWith(
+      expect.anything(),
+      'session-1',
+      'group-1',
+      [participants[1]],
+    );
   });
 });

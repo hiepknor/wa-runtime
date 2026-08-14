@@ -431,7 +431,7 @@ export class GatewayRepository {
           fingerprint, memberFingerprint, capability.status, capability.reason],
       );
       if (membersChanged && group.participants.length > 0) {
-        await client.query(
+        const changedMembers = await client.query<{ participant_id: string }>(
           `INSERT INTO group_members AS existing
              (session_id, group_id, participant_id, phone_number, display_name,
               participant_display_name, display_name_source, display_name_updated_at,
@@ -453,7 +453,8 @@ export class GatewayRepository {
                   existing.is_admin, existing.is_super_admin)
              IS DISTINCT FROM
              (EXCLUDED.phone_number, EXCLUDED.participant_display_name,
-              EXCLUDED.is_admin, EXCLUDED.is_super_admin)`,
+              EXCLUDED.is_admin, EXCLUDED.is_super_admin)
+           RETURNING existing.participant_id`,
           [
             sessionId,
             group.id,
@@ -464,7 +465,13 @@ export class GatewayRepository {
             group.participants.map(participant => participant.isSuperAdmin),
           ],
         );
-        await this.contacts.seedGroupMembers(client, sessionId, group.id, group.participants);
+        const changedParticipantIds = new Set(changedMembers.rows.map(row => row.participant_id));
+        await this.contacts.seedGroupMembers(
+          client,
+          sessionId,
+          group.id,
+          group.participants.filter(participant => changedParticipantIds.has(participant.id)),
+        );
       }
       if (membersChanged) {
         await client.query(
