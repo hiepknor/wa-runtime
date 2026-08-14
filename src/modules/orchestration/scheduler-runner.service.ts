@@ -11,6 +11,7 @@ import { MessageDispatchTick } from './message-dispatch.tick';
 import { WebhookDispatchTick } from './webhook-dispatch.tick';
 import { GatewayWorkListenerService } from './gateway-work-listener.service';
 import { ContactPeriodicSyncTick } from '../contacts/contact-periodic-sync.tick';
+import { WebhookRegistrationReconciliationTick } from '../webhooks/webhook-registration-reconciliation.tick';
 
 @Injectable()
 export class SchedulerRunnerService {
@@ -26,6 +27,7 @@ export class SchedulerRunnerService {
     private readonly queues: QueueService,
     private readonly gatewayListener: GatewayWorkListenerService,
     private readonly contacts: ContactPeriodicSyncTick,
+    private readonly webhookRegistrations: WebhookRegistrationReconciliationTick,
   ) {}
 
   async run(): Promise<void> {
@@ -44,6 +46,12 @@ export class SchedulerRunnerService {
         () => this.retention.run(),
       ),
       this.tick('contacts', 300_000, 15 * 60_000, () => this.contacts.run()),
+      this.tick(
+        'webhook-registration',
+        this.config.OPENWA_WEBHOOK_RECONCILIATION_INTERVAL_MS,
+        2 * 60_000,
+        () => this.webhookRegistrations.run(),
+      ),
     ];
     let resolveStop: (() => void) | undefined;
     const stopped = new Promise<void>(resolve => { resolveStop = resolve; });

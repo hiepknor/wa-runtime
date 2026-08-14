@@ -181,17 +181,29 @@ shortcut. Restart the single process and let PostgreSQL-backed discovery republi
 
 ## OpenWA webhook registration gate
 
-Runtime validates and processes OpenWA webhooks but does not currently create or reconcile the
-upstream registration automatically. After creating, restoring, re-pairing or replacing an OpenWA
-session, verify that exactly one active callback targets the Runtime HTTPS webhook endpoint and
-subscribes to the reviewed message, session and group event set. An empty registration list means
-inbound activity cannot reach Runtime even when both services are healthy.
+Runtime validates and processes OpenWA webhooks. When
+`OPENWA_WEBHOOK_RECONCILIATION_ENABLED=true`, the single scheduler also owns one registration at the
+exact `OPENWA_WEBHOOK_CALLBACK_URL` for every allowlisted session. It refreshes the signing secret
+and reviewed event set, repairs missing state and removes only duplicate registrations for that same
+URL. Callbacks at other URLs remain outside Runtime ownership. Keep reconciliation disabled until
+the externally reachable HTTPS callback is reviewed.
+
+After creating, restoring, re-pairing or replacing an OpenWA session, verify that exactly one active
+callback targets the Runtime HTTPS webhook endpoint and subscribes to the reviewed message, session
+and group event set. An empty registration list means inbound activity cannot reach Runtime even
+when both services are healthy. Repeated `webhook-registration` scheduler failures indicate a bad
+URL, missing OpenWA permission or upstream control-plane failure; they do not make API readiness
+fail.
 
 Use the same `OPENWA_WEBHOOK_SECRET` on both sides. Do not print the callback secret, callback URL,
 session identifier or webhook payload while checking registration. OpenWA's destination policy may
 reject Docker-internal callback names; staging and production use the TLS Runtime endpoint. After
 registration, send a controlled inbound message and require a processed webhook with no retry/dead
 transition before enabling event-driven contact enrichment.
+
+Do not enable a second scheduler replica as a reconciliation workaround. The initial implementation
+uses the deployment's single-scheduler invariant; multi-scheduler ownership requires a separately
+reviewed distributed lease.
 
 Pause a run before planned intervention when possible. Cancel stops only pending/queued work; it
 cannot recall a message already processing or accepted by OpenWA.

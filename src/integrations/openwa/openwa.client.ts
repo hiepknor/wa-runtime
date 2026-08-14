@@ -96,6 +96,7 @@ const webhookSchema = z.object({
   url: z.url(),
   events: z.array(nonEmptyString),
   active: z.boolean(),
+  retryCount: z.number().int().min(0).max(5),
 });
 const healthSchema = z.object({ status: nonEmptyString, timestamp: dateTimeString, version: nonEmptyString });
 const sendTextResultSchema = z.object({ messageId: nonEmptyString, timestamp: z.number().int().nonnegative() });
@@ -118,6 +119,7 @@ export class OpenWAHttpError extends Error {
     readonly retryAfterMs?: number,
   ) {
     super(`OpenWA returned HTTP ${status}`);
+    this.name = 'OpenWAHttpError';
   }
 }
 
@@ -170,7 +172,7 @@ export class OpenWAClient {
             parseRetryAfterMs(response.headers),
           );
         }
-        const parsed = schema.safeParse(await response.json());
+        const parsed = schema.safeParse(response.status === 204 ? undefined : await response.json());
         if (!parsed.success) throw new OpenWAResponseValidationError(operation, parsed.error.issues.length);
         this.logger.debug({
           event: 'openwa.request.completed', operation, method, statusCode: response.status,
@@ -185,7 +187,7 @@ export class OpenWAClient {
         event: 'openwa.request.failed', operation, method,
         statusCode: error instanceof OpenWAHttpError ? error.status : undefined,
         durationMs: Math.round((performance.now() - started) * 100) / 100,
-        error,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
       });
       throw error;
     }
@@ -272,12 +274,54 @@ export class OpenWAClient {
     url: string;
     events: string[];
     secret: string;
+    retryCount: number;
   }): Promise<OpenWAWebhook> {
     return this.request('register_webhook', `/api/sessions/${encodeURIComponent(input.sessionId)}/webhooks`, webhookSchema, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ url: input.url, events: input.events, secret: input.secret }),
+      body: JSON.stringify({
+        url: input.url,
+        events: input.events,
+        secret: input.secret,
+        retryCount: input.retryCount,
+      }),
     });
+  }
+
+  updateWebhook(input: {
+    sessionId: string;
+    webhookId: string;
+    url: string;
+    events: string[];
+    secret: string;
+    active: boolean;
+    retryCount: number;
+  }): Promise<OpenWAWebhook> {
+    return this.request(
+      'update_webhook',
+      `/api/sessions/${encodeURIComponent(input.sessionId)}/webhooks/${encodeURIComponent(input.webhookId)}`,
+      webhookSchema,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          url: input.url,
+          events: input.events,
+          secret: input.secret,
+          active: input.active,
+          retryCount: input.retryCount,
+        }),
+      },
+    );
+  }
+
+  deleteWebhook(sessionId: string, webhookId: string): Promise<void> {
+    return this.request(
+      'delete_webhook',
+      `/api/sessions/${encodeURIComponent(sessionId)}/webhooks/${encodeURIComponent(webhookId)}`,
+      z.undefined(),
+      { method: 'DELETE' },
+    );
   }
 
   async sendText(sessionId: string, chatId: string, text: string): Promise<OpenWASendTextResult> {

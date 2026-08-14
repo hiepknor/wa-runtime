@@ -20,6 +20,10 @@ const schema = z
     OPENWA_API_KEY: z.string().min(1),
     OPENWA_RELEASE_TAG: z.string().min(1).default('0.16.0'),
     OPENWA_WEBHOOK_SECRET: z.string().min(32),
+    OPENWA_WEBHOOK_RECONCILIATION_ENABLED: booleanFromEnv(false),
+    OPENWA_WEBHOOK_CALLBACK_URL: z.url().optional(),
+    OPENWA_WEBHOOK_RECONCILIATION_INTERVAL_MS: z.coerce.number().int()
+      .min(60_000).max(86_400_000).default(300_000),
     OPENWA_ALLOWED_SESSION_IDS: z
       .string()
       .min(1)
@@ -69,6 +73,30 @@ const schema = z
         code: 'custom', path: ['GATEWAY_SYNC_MIN_GROUPS_PER_MINUTE'],
         message: 'GATEWAY_SYNC_MIN_GROUPS_PER_MINUTE cannot exceed GATEWAY_SYNC_GROUPS_PER_MINUTE',
       });
+    }
+    if (value.OPENWA_WEBHOOK_RECONCILIATION_ENABLED && !value.OPENWA_WEBHOOK_CALLBACK_URL) {
+      context.addIssue({
+        code: 'custom', path: ['OPENWA_WEBHOOK_CALLBACK_URL'],
+        message: 'OPENWA_WEBHOOK_CALLBACK_URL is required when webhook reconciliation is enabled',
+      });
+    }
+    if (value.OPENWA_WEBHOOK_CALLBACK_URL
+      && new URL(value.OPENWA_WEBHOOK_CALLBACK_URL).protocol !== 'https:') {
+      context.addIssue({
+        code: 'custom', path: ['OPENWA_WEBHOOK_CALLBACK_URL'],
+        message: 'OPENWA_WEBHOOK_CALLBACK_URL must use HTTPS',
+      });
+    }
+    if (value.OPENWA_WEBHOOK_CALLBACK_URL) {
+      const callback = new URL(value.OPENWA_WEBHOOK_CALLBACK_URL);
+      const path = callback.pathname.replace(/\/+$/u, '');
+      if (path !== '/api/v1/webhooks/openwa' || callback.search || callback.hash
+        || callback.username || callback.password) {
+        context.addIssue({
+          code: 'custom', path: ['OPENWA_WEBHOOK_CALLBACK_URL'],
+          message: 'OPENWA_WEBHOOK_CALLBACK_URL must target /api/v1/webhooks/openwa without credentials, query or fragment',
+        });
+      }
     }
   });
 

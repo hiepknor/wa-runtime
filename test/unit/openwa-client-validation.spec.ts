@@ -167,4 +167,31 @@ describe('OpenWAClient response validation', () => {
     expect(failure).toMatchObject({ status: 429, retryAfterMs: 7_000 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('validates and mutates webhook registrations through the pinned OpenWA contract', async () => {
+    const webhook = {
+      id: 'webhook-1', sessionId: 'session-1', url: 'https://runtime.test/api/v1/webhooks/openwa',
+      events: ['message.received'], active: true, retryCount: 3,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse([webhook]))
+      .mockResolvedValueOnce(jsonResponse(webhook))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const openwa = new OpenWAClient();
+
+    await expect(openwa.listWebhooks('session-1')).resolves.toEqual([webhook]);
+    await expect(openwa.updateWebhook({
+      sessionId: 'session-1', webhookId: 'webhook-1', url: webhook.url,
+      events: webhook.events, secret: 'secret', active: true, retryCount: 3,
+    })).resolves.toEqual(webhook);
+    await expect(openwa.deleteWebhook('session-1', 'webhook-1')).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(2, new URL(
+      '/api/sessions/session-1/webhooks/webhook-1', 'http://openwa.test',
+    ), expect.objectContaining({ method: 'PUT' }));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, new URL(
+      '/api/sessions/session-1/webhooks/webhook-1', 'http://openwa.test',
+    ), expect.objectContaining({ method: 'DELETE' }));
+  });
 });
