@@ -324,6 +324,16 @@ model. Group reconciliation always seeds member identities. OpenWA contact snaps
 by default and can be enabled with `CONTACT_SNAPSHOT_SYNC_ENABLED=true` after migrations 018–020 are
 applied.
 
+Migration 023 adds a feature-gated, generation-scoped staging area. Enable
+`CONTACT_SNAPSHOT_STAGING_ENABLED=true` only after migration 023 is applied. Pages remain in
+`RECEIVING` state while OpenWA streams them; only a lease-owning completion can atomically mark the
+generation `PUBLISHED`. Failed or contradictory generations remain non-authoritative and retain only
+normalized observations for diagnosis. Enable staging before any v2 resolver or projection shadow
+flag; disabling it rolls back this producer without changing the legacy contact read model. Terminal
+generations older than `CONTACT_SNAPSHOT_RETENTION_DAYS` are removed when the next generation starts,
+while the newest published generation is always retained. A superseded `RECEIVING` generation is
+marked `FAILED` with the bounded `LEASE_EXPIRED` code.
+
 Identity evidence from an inbound message's bounded `contact.pushName` field is independently gated by
 `CONTACT_MESSAGE_ENRICHMENT_ENABLED`. Runtime extracts only sender identity and push name, then discards
 the upstream contact object; a contact write failure never retries or dead-letters the message webhook.
@@ -346,7 +356,7 @@ disable it after an observation window. A LID user-part is never written to `res
 
 Snapshot completion logs only aggregate counters: observed/enriched/merged/conflicts and member coverage
 by identity type and name source. Do not add session IDs, raw names, phone numbers or WhatsApp identifiers
-to these events. Before enabling either producer, apply migrations 018–020. Disable its flag to roll back
+to these events. Before enabling either legacy producer, apply migrations 018–020. Disable its flag to roll back
 new writes while retaining already observed data.
 
 A full sync then streams OpenWA contacts in pages of at most 1,000 and materializes observed names

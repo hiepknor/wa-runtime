@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OpenWAClient } from '../../src/integrations/openwa/openwa.client';
 import type { ContactRepository } from '../../src/modules/contacts/contact.repository';
 import { ContactSyncService } from '../../src/modules/contacts/contact-sync.service';
+import { ContactSnapshotConflictError } from '../../src/modules/contacts/contact-snapshot.errors';
 
 describe('ContactSyncService', () => {
   beforeEach(() => {
@@ -58,5 +59,22 @@ describe('ContactSyncService', () => {
     await expect(new ContactSyncService(repository, openwa).reconcileObservedContacts('session-1', false))
       .resolves.toBe(false);
     expect(openwa.listContactPages).not.toHaveBeenCalled();
+  });
+
+  it('classifies contradictory staged identities as an invalid response', async () => {
+    const openwa = {
+      async *listContactPages() { yield [{ id: 'conflict@lid' }]; },
+    } as unknown as OpenWAClient;
+    const repository = {
+      beginObservedSnapshot: vi.fn().mockResolvedValue({ generation: 5, leaseToken: 'lease-5' }),
+      ingestObservedPage: vi.fn().mockRejectedValue(new ContactSnapshotConflictError()),
+      failObservedSnapshot: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ContactRepository;
+
+    await expect(new ContactSyncService(repository, openwa).reconcileObservedContacts('session-1'))
+      .rejects.toThrow(ContactSnapshotConflictError);
+    expect(repository.failObservedSnapshot).toHaveBeenCalledWith(
+      'session-1', 5, 'lease-5', 'INVALID_RESPONSE',
+    );
   });
 });

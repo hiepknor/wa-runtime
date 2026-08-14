@@ -6,6 +6,7 @@ import type { OpenWAContact } from '../../integrations/openwa/openwa.client';
 import { normalizeContactIdentity, normalizeContactName } from './contact-normalization';
 import { DatabaseService } from '../../core/database/database.service';
 import { contactNameProjectionSql, memberNameProjectionSql } from './contact-name-resolution.sql';
+import { ContactSnapshotConflictError } from './contact-snapshot.errors';
 
 interface GroupMemberContactInput {
   participant_id: string;
@@ -47,7 +48,11 @@ const resolvedMemberProjection = memberNameProjectionSql({
 
 @Injectable()
 export class ContactRepository {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly snapshotStagingEnabled = false,
+    private readonly snapshotRetentionDays = 30,
+  ) {}
 
   async listPeriodicSessionIds(allowedSessionIds: string[], limit: number): Promise<string[]> {
     const result = await this.database.query<{ id: string }>(
@@ -103,8 +108,7 @@ export class ContactRepository {
     generation: number;
     leaseToken: string;
   } | null> {
-    const result = await this.database.query<{ sync_generation: string; lease_token: string }>(
-      `INSERT INTO contact_sync_state
+    const claimSql = `INSERT INTO contact_sync_state
          (session_id, sync_generation, last_started_at, last_error_code, lease_token, lease_expires_at)
        VALUES ($1, 1, now(), NULL, gen_random_uuid(), now() + interval '10 minutes')
        ON CONFLICT (session_id) DO UPDATE SET
@@ -114,11 +118,47 @@ export class ContactRepository {
          lease_token = gen_random_uuid(), lease_expires_at = now() + interval '10 minutes', updated_at = now()
        WHERE (contact_sync_state.lease_token IS NULL OR contact_sync_state.lease_expires_at < now())
          AND ($2 OR contact_sync_state.next_attempt_at <= now())
-       RETURNING sync_generation, lease_token`,
-      [sessionId, force],
-    );
-    const row = result.rows[0];
-    return row ? { generation: Number(row.sync_generation), leaseToken: row.lease_token } : null;
+       RETURNING sync_generation, lease_token`;
+    if (!this.snapshotStagingEnabled) {
+      const result = await this.database.query<{ sync_generation: string; lease_token: string }>(
+        claimSql,
+        [sessionId, force],
+      );
+      const row = result.rows[0];
+      return row ? { generation: Number(row.sync_generation), leaseToken: row.lease_token } : null;
+    }
+    return this.database.transaction(async client => {
+      const result = await client.query<{ sync_generation: string; lease_token: string }>(
+        claimSql,
+        [sessionId, force],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      await client.query(
+        `UPDATE contact_snapshot_generations
+         SET state = 'FAILED', failed_at = now(), error_code = 'LEASE_EXPIRED', updated_at = now()
+         WHERE session_id = $1 AND state = 'RECEIVING' AND generation < $2`,
+        [sessionId, row.sync_generation],
+      );
+      await client.query(
+        `DELETE FROM contact_snapshot_generations generation_state
+         WHERE generation_state.session_id = $1
+           AND generation_state.state IN ('PUBLISHED', 'FAILED')
+           AND generation_state.created_at < now() - $2 * interval '1 day'
+           AND generation_state.generation <> COALESCE((
+             SELECT max(published.generation) FROM contact_snapshot_generations published
+             WHERE published.session_id = $1 AND published.state = 'PUBLISHED'
+           ), -1)`,
+        [sessionId, this.snapshotRetentionDays],
+      );
+      await client.query(
+        `INSERT INTO contact_snapshot_generations
+           (session_id, generation, state, lease_token)
+         VALUES ($1, $2, 'RECEIVING', $3)`,
+        [sessionId, row.sync_generation, row.lease_token],
+      );
+      return { generation: Number(row.sync_generation), leaseToken: row.lease_token };
+    });
   }
 
   async ingestObservedPage(
@@ -163,6 +203,37 @@ export class ContactRepository {
         identity_type text, identity_value text, phone text, contact_name text,
         push_name text, candidate_contact_id uuid
       )`;
+      if (this.snapshotStagingEnabled) {
+        await client.query(
+          `WITH input AS MATERIALIZED (SELECT * FROM ${pageRelation})
+           INSERT INTO contact_snapshot_observations
+             (session_id, generation, identity_type, identity_value, phone,
+              contact_name, push_name, source_observation_key)
+           SELECT $1, $3::bigint, input.identity_type, input.identity_value, input.phone,
+             input.contact_name, input.push_name,
+             'snapshot:' || $3::bigint::text || ':'
+               || md5(input.identity_type || ':' || input.identity_value)
+           FROM input
+           ON CONFLICT (session_id, generation, identity_type, identity_value) DO NOTHING`,
+          [sessionId, pageJson, generation],
+        );
+        const validation = await client.query<{ conflicts: string }>(
+          `WITH input AS MATERIALIZED (SELECT * FROM ${pageRelation})
+           SELECT count(*)::text AS conflicts
+           FROM input
+           LEFT JOIN contact_snapshot_observations staged
+             ON staged.session_id = $1 AND staged.generation = $3::bigint
+            AND staged.identity_type = input.identity_type
+            AND staged.identity_value = input.identity_value
+           WHERE staged.identity_value IS NULL
+              OR (staged.phone, staged.contact_name, staged.push_name)
+                IS DISTINCT FROM (input.phone, input.contact_name, input.push_name)`,
+          [sessionId, pageJson, generation],
+        );
+        if (validation.rows[0]?.conflicts !== '0') {
+          throw new ContactSnapshotConflictError();
+        }
+      }
       await client.query(
         `WITH input AS MATERIALIZED (SELECT * FROM ${pageRelation}),
          missing AS MATERIALIZED (
@@ -508,28 +579,61 @@ export class ContactRepository {
     records: number,
     intervalMs: number,
   ): Promise<void> {
-    const result = await this.database.query(
-      `UPDATE contact_sync_state SET last_completed_at = now(), last_successful_record_count = $3,
+    const completionSql = `UPDATE contact_sync_state SET last_completed_at = now(), last_successful_record_count = $3,
          last_error_code = NULL, attempt_count = 0,
          next_attempt_at = now() + $5 * interval '1 millisecond',
          lease_token = NULL, lease_expires_at = NULL, updated_at = now()
-       WHERE session_id = $1 AND sync_generation = $2 AND lease_token = $4`,
-      [sessionId, generation, records, leaseToken, intervalMs],
-    );
-    if (result.rowCount !== 1) throw new Error('Contact snapshot lost write ownership');
+       WHERE session_id = $1 AND sync_generation = $2 AND lease_token = $4
+         AND lease_expires_at > now()`;
+    const values = [sessionId, generation, records, leaseToken, intervalMs];
+    if (!this.snapshotStagingEnabled) {
+      const result = await this.database.query(completionSql, values);
+      if (result.rowCount !== 1) throw new Error('Contact snapshot lost write ownership');
+      return;
+    }
+    await this.database.transaction(async client => {
+      const generationResult = await client.query(
+        `UPDATE contact_snapshot_generations generation_state
+         SET state = 'PUBLISHED',
+           upstream_record_count = $3,
+           staged_identity_count = (
+             SELECT count(*) FROM contact_snapshot_observations observation
+             WHERE observation.session_id = $1 AND observation.generation = $2
+           ),
+           published_at = now(), updated_at = now()
+         WHERE generation_state.session_id = $1 AND generation_state.generation = $2
+           AND generation_state.state = 'RECEIVING' AND generation_state.lease_token = $4`,
+        values.slice(0, 4),
+      );
+      if (generationResult.rowCount !== 1) throw new Error('Contact snapshot lost publication ownership');
+      const completion = await client.query(completionSql, values);
+      if (completion.rowCount !== 1) throw new Error('Contact snapshot lost write ownership');
+    });
   }
 
   async failObservedSnapshot(sessionId: string, generation: number, leaseToken: string, code: string): Promise<void> {
-    await this.database.query(
-      `WITH evidence_cleanup AS (
+    const failureSql = `WITH evidence_cleanup AS (
          DELETE FROM contact_identity_evidence WHERE session_id = $1 AND sync_generation = $2
        )
        UPDATE contact_sync_state SET last_error_code = $4,
          next_attempt_at = now() + LEAST(3600, 60 * power(2, LEAST(attempt_count, 6))) * interval '1 second',
          lease_token = NULL, lease_expires_at = NULL, updated_at = now()
-       WHERE session_id = $1 AND sync_generation = $2 AND lease_token = $3`,
-      [sessionId, generation, leaseToken, code],
-    );
+       WHERE session_id = $1 AND sync_generation = $2 AND lease_token = $3`;
+    const values = [sessionId, generation, leaseToken, code];
+    if (!this.snapshotStagingEnabled) {
+      await this.database.query(failureSql, values);
+      return;
+    }
+    await this.database.transaction(async client => {
+      await client.query(
+        `UPDATE contact_snapshot_generations
+         SET state = 'FAILED', failed_at = now(), error_code = $4, updated_at = now()
+         WHERE session_id = $1 AND generation = $2 AND lease_token = $3
+           AND state = 'RECEIVING'`,
+        values,
+      );
+      await client.query(failureSql, values);
+    });
   }
 
   async observeMessageSender(

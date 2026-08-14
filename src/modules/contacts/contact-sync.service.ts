@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OpenWAClient, OpenWAResponseValidationError } from '../../integrations/openwa/openwa.client';
 import { ContactRepository } from './contact.repository';
+import { ContactSnapshotConflictError } from './contact-snapshot.errors';
 
 @Injectable()
 export class ContactSyncService {
@@ -47,7 +48,9 @@ export class ContactSyncService {
       });
       return true;
     } catch (error) {
-      const code = error instanceof OpenWAResponseValidationError ? 'INVALID_RESPONSE' : 'UPSTREAM_ERROR';
+      const code = error instanceof OpenWAResponseValidationError || error instanceof ContactSnapshotConflictError
+        ? 'INVALID_RESPONSE'
+        : 'UPSTREAM_ERROR';
       await this.repository.failObservedSnapshot(sessionId, generation, leaseToken, code).catch(() => undefined);
       this.logger.warn({ event: 'contacts.snapshot.failed', code, durationMs: Date.now() - startedAt });
       throw error;

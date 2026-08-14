@@ -8,11 +8,20 @@ import { ContactPeriodicSyncTick } from './contact-periodic-sync.tick';
 import { OpenWAClient } from '../../integrations/openwa/openwa.client';
 import { ContactMemberIdentityBackfillRepository } from './contact-member-identity-backfill.repository';
 import { ContactMemberIdentityBackfillTick } from './contact-member-identity-backfill.tick';
+import { DatabaseService } from '../../core/database/database.service';
 
 @Module({
   imports: [OpenWAModule],
   providers: [
-    ContactRepository,
+    {
+      provide: ContactRepository,
+      useFactory: (database: DatabaseService) => new ContactRepository(
+        database,
+        runtimeConfig().CONTACT_SNAPSHOT_STAGING_ENABLED,
+        runtimeConfig().CONTACT_SNAPSHOT_RETENTION_DAYS,
+      ),
+      inject: [DatabaseService],
+    },
     ContactMemberIdentityBackfillRepository,
     {
       provide: ContactSyncService,
