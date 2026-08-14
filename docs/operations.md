@@ -373,6 +373,13 @@ durable keyset cursor and enqueues affected exact identities. It derives phones 
 LID user-parts remain unresolved. Do not assume an unchanged full group sync will recreate evidence,
 because member fingerprints intentionally skip unchanged membership writes.
 
+Migration 030 indexes the remaining missing-evidence set. While shadow projection is enabled, an
+allowlist-scoped late-evidence catch-up processes at most
+`CONTACT_PROJECTION_BOOTSTRAP_BATCH_SIZE` rows for one session per tick. It uses the same per-session
+member-write lock as group replacement and projection, then enqueues the repaired exact identities.
+This closes rows created or retained after the one-shot migration-028 cursor passed them without
+re-enabling the historical backfill flag.
+
 Use this order for a staged cutover:
 
 1. Enable snapshot staging, evidence dual-write, shadow resolution and shadow projection; leave reads
@@ -381,7 +388,8 @@ Use this order for a staged cutover:
    snapshot/resolution generation. Wait for `contact_projection_bootstrap_state.status = 'COMPLETED'`,
    no projection work in
    `PENDING`, `RUNNING`, `RETRY` or `FAILED`, and zero member rows with a non-null
-   `evidence_identity_id` but `shadow_projection_revision = 0`.
+   `evidence_identity_id` but `shadow_projection_revision = 0`. Also require zero eligible member
+   rows with a null `evidence_identity_id`; the late-evidence catch-up must finish before read cutover.
 3. Compare aggregate null/name/source/phone coverage and mismatch counts; do not emit values.
 4. Enable `CONTACT_PROJECTION_READ_ENABLED=true` while retaining legacy fan-out for the canary window.
 5. After API/search/order checks pass, set `CONTACT_LEGACY_MEMBER_FANOUT_ENABLED=false`. Confirm queue
