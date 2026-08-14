@@ -67,10 +67,14 @@ read projection consumed by WA Studio.
     phone, effective name, provenance, normalized sort data and a projection revision. Member reads do
     not call OpenWA or join the contact graph.
 13. Contact-wide projection changes are delivered through PostgreSQL-owned, revisioned dirty work.
-    Workers claim with `SKIP LOCKED`, use lease fencing and coalesce repeated observations before
-    batch-updating memberships. Webhook completion never depends on projection completion.
+    The resolved cluster is the canonical work key; stale exact-identity aliases are coalesced in
+    bounded `SKIP LOCKED` batches without cancelling a running lease. Workers use lease fencing and
+    coalesce repeated observations before batch-updating memberships. Webhook completion never
+    depends on projection completion.
 14. Group synchronization may update the membership-local participant name in its fenced group
-    transaction, but it does not synchronously resolve or fan out contact-global state.
+    transaction, but it does not synchronously resolve or fan out contact-global state. Only member
+    rows actually inserted or changed request new projection work; one changed membership must not
+    requeue every otherwise unchanged participant in the group.
 15. Page and count queries retain one repeatable-read snapshot, database-side filtering and a final
     participant-ID tie-breaker. A dataset revision lets clients detect enrichment between page reads.
 
