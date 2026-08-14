@@ -40,6 +40,16 @@ Runtime snapshot and generated types: the snapshot is not byte-identical to Runt
 contain the additive resolved identity, provenance or dataset-revision fields. This commit is not a
 compatible coordinated-release candidate.
 
+Artifact identity for the handoff:
+
+- authoritative Runtime artifact: `contracts/runtime/v1/openapi.json`, SHA-256
+  `995e816c7f0e553dd2d2f5af2c96fd43051f8a98df7e4fbdf5d01e2d51683517`;
+- current incompatible WA Studio snapshot: `contracts/wa-runtime/v1/openapi.json`, SHA-256
+  `dd400ed73c79a2ee0317d3169e2c1ab5bcaecbd2cd758833d584cbfdfe6dbeb0`;
+- after copying the artifact, WA Studio must run `npm run contract:generate` followed by
+  `npm run check`. The copied snapshot must match the Runtime SHA-256 before its commit can be
+  recorded here.
+
 ## Runtime staging evidence
 
 Runtime implementation commits: `c696e5d` through `fb814a4` inclusive. Current staging code image:
