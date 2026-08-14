@@ -7,6 +7,7 @@ import type { SessionDto } from '../../contracts/sessions/session.dto';
 import type { SyncRunDto, SyncRunPhase, SyncRunStatus } from '../../contracts/sessions/sync-run.dto';
 import { GatewaySyncMode } from '../../contracts/sessions/sync-request.dto';
 import { DatabaseService } from '../../core/database/database.service';
+import { acquireSessionTransactionLock } from '../../core/database/session-transaction-lock';
 import {
   pendingGroupName,
   type OpenWAGroup,
@@ -360,6 +361,7 @@ export class GatewayRepository {
     } = {},
   ): Promise<{ members: number; applied: boolean }> {
     return this.database.transaction(async client => {
+      await acquireSessionTransactionLock(client, 'contact-member-projection', sessionId);
       if (options.syncFence) await this.assertSyncWriteOwnership(client, sessionId, options.syncFence);
       if (options.syncItemFence) await this.assertSyncItemWriteOwnership(client, options.syncItemFence);
       if (options.groupIntentFence) await this.assertGroupIntentWriteOwnership(client, options.groupIntentFence);

@@ -31,6 +31,7 @@ describe('GatewayRepository bulk member replacement', () => {
 
   it('replaces a large member collection with one database insert', async () => {
     const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [{ details_fingerprint: null }] })
       .mockResolvedValueOnce({ rows: [], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [], rowCount: 1000 })
@@ -63,6 +64,8 @@ describe('GatewayRepository bulk member replacement', () => {
     const contactBatches = query.mock.calls.filter(([sql]) => String(sql).includes('jsonb_to_recordset'));
     expect(contactBatches).toHaveLength(3);
     expect(contactBatches.every(call => JSON.parse(String(call[1][2])).length === 1000)).toBe(true);
-    expect(query).toHaveBeenCalledTimes(8);
+    expect(query.mock.calls[0]?.[0]).toContain('pg_advisory_xact_lock');
+    expect(query.mock.calls[0]?.[1]).toEqual(['contact-member-projection', 'session-1']);
+    expect(query).toHaveBeenCalledTimes(9);
   });
 });

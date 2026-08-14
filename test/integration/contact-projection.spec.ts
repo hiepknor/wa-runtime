@@ -555,6 +555,89 @@ describe('durable contact projection', () => {
     }
   });
 
+  it('serializes projection writes behind the session member-write lock', async () => {
+    const identity = await pool.query<{ id: string }>(
+      `INSERT INTO observed_contact_identities (session_id, identity_type, identity_value)
+       VALUES ($1, 'LID', 'serialized-projection@lid') RETURNING id`,
+      [INTEGRATION_SESSION_ID],
+    );
+    await pool.query(
+      `INSERT INTO group_members
+         (session_id, group_id, participant_id, phone_number,
+          evidence_identity_id, is_admin, is_super_admin)
+       VALUES ($1, $2, 'serialized-projection@lid', 'serialized-projection', $3, false, false)`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, identity.rows[0]!.id],
+    );
+    await database.transaction(client => evidence.observeMessageSender(
+      client,
+      INTEGRATION_SESSION_ID,
+      { identity_type: 'LID', identity_value: 'serialized-projection@lid', phone: null },
+      'Serialized projection',
+      new Date('2026-08-14T06:04:00.000Z'),
+      'message:serialized-projection',
+    ));
+    const claim = await projections.claim();
+    expect(claim).not.toBeNull();
+
+    const owner = await pool.connect();
+    await owner.query('BEGIN');
+    await owner.query(
+      `SELECT pg_advisory_xact_lock(
+         hashtextextended('contact-member-projection' || ':' || $1, 0)
+       )`,
+      [INTEGRATION_SESSION_ID],
+    );
+    const projection = projections.projectBatch(claim!, 10);
+    try {
+      const outcome = await Promise.race([
+        projection.then(() => 'completed'),
+        new Promise<'blocked'>(resolve => setTimeout(() => resolve('blocked'), 50)),
+      ]);
+      expect(outcome).toBe('blocked');
+    } finally {
+      await owner.query('ROLLBACK');
+      owner.release();
+    }
+    expect(await projection).toMatchObject({ updated: 1, completed: true });
+  });
+
+  it('acquires the session member-write lock before replacing group members', async () => {
+    const owner = await pool.connect();
+    await owner.query('BEGIN');
+    await owner.query(
+      `SELECT pg_advisory_xact_lock(
+         hashtextextended('contact-member-projection' || ':' || $1, 0)
+       )`,
+      [INTEGRATION_SESSION_ID],
+    );
+    const write = new GatewayRepository(database, contacts).upsertGroupDetails(
+      INTEGRATION_SESSION_ID,
+      {
+        id: INTEGRATION_GROUP_ID,
+        name: 'Serialized group write',
+        isAdmin: true,
+        participants: [{
+          id: 'serialized-member@lid',
+          number: 'serialized-member',
+          name: 'Serialized member',
+          isAdmin: false,
+          isSuperAdmin: false,
+        }],
+      },
+    );
+    try {
+      const outcome = await Promise.race([
+        write.then(() => 'completed'),
+        new Promise<'blocked'>(resolve => setTimeout(() => resolve('blocked'), 50)),
+      ]);
+      expect(outcome).toBe('blocked');
+    } finally {
+      await owner.query('ROLLBACK');
+      owner.release();
+    }
+    expect(await write).toEqual({ members: 1, applied: true });
+  });
+
   it('requeues the effective resolved cluster for a late membership', async () => {
     await publishAndResolve();
     await drain();

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../../core/database/database.service';
+import { acquireSessionTransactionLock } from '../../core/database/session-transaction-lock';
 import { enqueueContactProjectionWork } from './contact-projection.enqueue';
 
 export interface ContactProjectionClaim {
@@ -355,6 +356,7 @@ export class ContactProjectionRepository {
     batchSize: number,
   ): Promise<ContactProjectionBatchResult> {
     return this.database.transaction(async client => {
+      await acquireSessionTransactionLock(client, 'contact-member-projection', claim.sessionId);
       const owned = await client.query<{
         active_revision: string;
         active_cutoff_at: string;
