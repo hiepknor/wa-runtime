@@ -438,6 +438,41 @@ describe('durable contact projection', () => {
     expect(await projections.enqueueBootstrap(1)).toBe(0);
   });
 
+  it('claims only allowlisted work and reports inactive backlog separately', async () => {
+    await seedSendableGroup(pool, DISALLOWED_SESSION_ID);
+    const identities = await pool.query<{ session_id: string; id: string }>(
+      `INSERT INTO observed_contact_identities (session_id, identity_type, identity_value)
+       VALUES ($1, 'LID', 'allowed-queue@lid'), ($2, 'LID', 'inactive-queue@lid')
+       RETURNING session_id, id`,
+      [INTEGRATION_SESSION_ID, DISALLOWED_SESSION_ID],
+    );
+    for (const identity of identities.rows) {
+      await pool.query(
+        `INSERT INTO contact_projection_work (session_id, identity_id)
+         VALUES ($1, $2)`,
+        [identity.session_id, identity.id],
+      );
+    }
+    await pool.query(
+      `UPDATE contact_projection_work SET status = 'RUNNING',
+         active_revision = requested_revision, active_cutoff_at = requested_cutoff_at,
+         lease_token = gen_random_uuid(), lease_expires_at = now() - interval '1 second'
+       WHERE session_id = $1`,
+      [DISALLOWED_SESSION_ID],
+    );
+    const scoped = new ContactProjectionRepository(
+      database, false, [INTEGRATION_SESSION_ID],
+    );
+
+    expect(await scoped.getQueueMetrics()).toMatchObject({
+      pending: 1,
+      inactivePending: 1,
+      failed: 0,
+    });
+    const claim = await scoped.claim();
+    expect(claim?.sessionId).toBe(INTEGRATION_SESSION_ID);
+  });
+
   it('backfills exact member evidence in bounded durable pages without treating a LID as a phone', async () => {
     await pool.query(
       `INSERT INTO group_members

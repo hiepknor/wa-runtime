@@ -20,6 +20,7 @@ export class ContactResolutionRepository {
   constructor(
     private readonly database: DatabaseService,
     private readonly projectionEnabled = false,
+    private readonly allowedSessionIds: string[] | null = null,
   ) {}
 
   async enqueuePublished(limit: number): Promise<number> {
@@ -30,6 +31,7 @@ export class ContactResolutionRepository {
          generation_state.published_at, 1
        FROM contact_snapshot_generations generation_state
        WHERE generation_state.state = 'PUBLISHED'
+         AND ($2::text[] IS NULL OR generation_state.session_id = ANY($2::text[]))
          AND NOT EXISTS (
            SELECT 1 FROM contact_resolution_runs existing
            WHERE existing.session_id = generation_state.session_id
@@ -39,7 +41,7 @@ export class ContactResolutionRepository {
        ORDER BY generation_state.published_at, generation_state.session_id
        LIMIT $1
        ON CONFLICT (session_id, source_generation, algorithm_version) DO NOTHING`,
-      [limit],
+      [limit, this.allowedSessionIds],
     );
     return result.rowCount ?? 0;
   }
@@ -52,10 +54,9 @@ export class ContactResolutionRepository {
     }>(
       `WITH candidate AS (
          SELECT session_id, id FROM contact_resolution_runs
-         WHERE (
-           status IN ('PENDING', 'RETRY') AND next_attempt_at <= now()
-         ) OR (
-           status = 'RUNNING' AND lease_expires_at < now()
+         WHERE ($1::text[] IS NULL OR session_id = ANY($1::text[])) AND (
+           (status IN ('PENDING', 'RETRY') AND next_attempt_at <= now())
+           OR (status = 'RUNNING' AND lease_expires_at < now())
          )
          ORDER BY next_attempt_at, created_at, session_id
          FOR UPDATE SKIP LOCKED LIMIT 1
@@ -66,6 +67,7 @@ export class ContactResolutionRepository {
          started_at = COALESCE(run.started_at, now()), error_code = NULL, updated_at = now()
        FROM candidate WHERE run.session_id = candidate.session_id AND run.id = candidate.id
        RETURNING run.session_id, run.id, run.lease_token`,
+      [this.allowedSessionIds],
     );
     const row = result.rows[0];
     return row ? { sessionId: row.session_id, runId: row.id, leaseToken: row.lease_token } : null;
@@ -197,30 +199,28 @@ export class ContactResolutionRepository {
         [claim.sessionId, claim.runId],
       );
       await client.query(
-        `WITH ranked AS (
-           SELECT assignment.cluster_id, observation.id, observation.name_value,
-             row_number() OVER (
-               PARTITION BY assignment.cluster_id
-               ORDER BY observation.source_observed_at DESC,
-                 observation.source_observation_key DESC, observation.id
-             ) AS rank
-           FROM resolved_identity_assignments assignment
-           JOIN contact_observations observation
-             ON observation.session_id = assignment.session_id
-            AND observation.identity_id = assignment.identity_id
-           WHERE assignment.session_id = $1 AND assignment.run_id = $2
-             AND observation.observation_source = 'OPENWA_CONTACT_NAME'
-             AND (
-               observation.source_generation = $3
-               OR (observation.source_generation IS NULL AND observation.created_at <= $4)
-             )
+        `WITH eligible_observations AS MATERIALIZED (
+           SELECT identity_id, id, name_value, source_observed_at, source_observation_key
+           FROM contact_observations
+           WHERE session_id = $1 AND observation_source = 'OPENWA_CONTACT_NAME'
+             AND (source_generation = $3
+               OR (source_generation IS NULL AND created_at <= $4))
+         ), ranked AS (
+           SELECT DISTINCT ON (assignment.cluster_id)
+             assignment.cluster_id, observation.id, observation.name_value
+           FROM eligible_observations observation
+           JOIN resolved_identity_assignments assignment
+             ON assignment.session_id = $1 AND assignment.run_id = $2
+            AND assignment.identity_id = observation.identity_id
+           ORDER BY assignment.cluster_id, observation.source_observed_at DESC,
+             observation.source_observation_key DESC, observation.id
          )
          UPDATE resolved_contact_clusters cluster
          SET contact_display_name = ranked.name_value,
            contact_name_observation_id = ranked.id
          FROM ranked
          WHERE cluster.session_id = $1 AND cluster.run_id = $2
-           AND cluster.cluster_id = ranked.cluster_id AND ranked.rank = 1`,
+           AND cluster.cluster_id = ranked.cluster_id`,
         [claim.sessionId, claim.runId, generation, evidenceCutoffAt],
       );
       const result = await client.query<{

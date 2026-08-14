@@ -42,6 +42,7 @@ import { ContactProjectionTick } from './contact-projection.tick';
       useFactory: (database: DatabaseService) => new ContactResolutionRepository(
         database,
         runtimeConfig().CONTACT_PROJECTION_SHADOW_ENABLED,
+        runtimeConfig().OPENWA_ALLOWED_SESSION_IDS,
       ),
       inject: [DatabaseService],
     },
@@ -61,6 +62,7 @@ import { ContactProjectionTick } from './contact-projection.tick';
       useFactory: (database: DatabaseService) => new ContactProjectionRepository(
         database,
         !runtimeConfig().CONTACT_LEGACY_MEMBER_FANOUT_ENABLED,
+        runtimeConfig().OPENWA_ALLOWED_SESSION_IDS,
       ),
       inject: [DatabaseService],
     },

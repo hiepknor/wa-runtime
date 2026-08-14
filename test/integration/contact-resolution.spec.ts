@@ -7,6 +7,7 @@ import { ContactResolutionRepository } from '../../src/modules/contacts/contact-
 import { ContactRepository } from '../../src/modules/contacts/contact.repository';
 import {
   INTEGRATION_SESSION_ID,
+  DISALLOWED_SESSION_ID,
   integrationPool,
   resetIntegrationDatabase,
   seedSendableGroup,
@@ -62,6 +63,30 @@ describe('versioned contact resolution', () => {
     );
     return claim!;
   };
+
+  it('only enqueues and claims published generations for allowlisted sessions', async () => {
+    const scoped = new ContactResolutionRepository(database, false, [INTEGRATION_SESSION_ID]);
+    await seedSendableGroup(pool, DISALLOWED_SESSION_ID);
+    const allowed = await contacts.beginObservedSnapshot(INTEGRATION_SESSION_ID);
+    await contacts.completeObservedSnapshot(
+      INTEGRATION_SESSION_ID, allowed!.generation, allowed!.leaseToken, 0, 86_400_000,
+    );
+    const disallowed = await contacts.beginObservedSnapshot(DISALLOWED_SESSION_ID);
+    await contacts.completeObservedSnapshot(
+      DISALLOWED_SESSION_ID, disallowed!.generation, disallowed!.leaseToken, 0, 86_400_000,
+    );
+
+    expect(await scoped.enqueuePublished(10)).toBe(1);
+    await resolutions.enqueuePublished(10);
+    await pool.query(
+      `UPDATE contact_resolution_runs SET status = 'RUNNING',
+         lease_token = gen_random_uuid(), lease_expires_at = now() - interval '1 second'
+       WHERE session_id = $1`,
+      [DISALLOWED_SESSION_ID],
+    );
+    const claim = await scoped.claim();
+    expect(claim?.sessionId).toBe(INTEGRATION_SESSION_ID);
+  });
 
   const resolveNext = async () => {
     await resolutions.enqueuePublished(10);

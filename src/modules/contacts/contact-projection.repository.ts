@@ -15,6 +15,7 @@ export interface ContactProjectionBatchResult {
 
 export interface ContactProjectionQueueMetrics {
   pending: number;
+  inactivePending: number;
   failed: number;
   oldestLagSeconds: number;
 }
@@ -24,6 +25,7 @@ export class ContactProjectionRepository {
   constructor(
     private readonly database: DatabaseService,
     private readonly mirrorLegacyProjection = false,
+    private readonly allowedSessionIds: string[] | null = null,
   ) {}
 
   async backfillEvidence(limit: number): Promise<number> {
@@ -234,9 +236,10 @@ export class ContactProjectionRepository {
     }>(
       `WITH candidate AS (
          SELECT session_id, identity_id FROM contact_projection_work
-         WHERE (
-           status IN ('PENDING', 'RETRY') AND next_attempt_at <= now()
-         ) OR (status = 'RUNNING' AND lease_expires_at < now())
+         WHERE ($1::text[] IS NULL OR session_id = ANY($1::text[])) AND (
+           (status IN ('PENDING', 'RETRY') AND next_attempt_at <= now())
+           OR (status = 'RUNNING' AND lease_expires_at < now())
+         )
          ORDER BY next_attempt_at, first_requested_at, session_id, identity_id
          FOR UPDATE SKIP LOCKED LIMIT 1
        ), claimed AS (
@@ -260,6 +263,7 @@ export class ContactProjectionRepository {
        FROM claimed
        WHERE work.session_id = claimed.session_id AND work.identity_id = claimed.identity_id
        RETURNING work.session_id, work.identity_id, work.lease_token`,
+      [this.allowedSessionIds],
     );
     const row = result.rows[0];
     return row ? {
@@ -272,19 +276,29 @@ export class ContactProjectionRepository {
   async getQueueMetrics(): Promise<ContactProjectionQueueMetrics> {
     const result = await this.database.query<{
       pending: string;
+      inactive_pending: string;
       failed: string;
       oldest_lag_seconds: string;
     }>(
       `SELECT
          count(*) FILTER (WHERE status IN ('PENDING', 'RUNNING', 'RETRY'))::text AS pending,
-         count(*) FILTER (WHERE status = 'FAILED')::text AS failed,
+         count(*) FILTER (
+           WHERE status IN ('PENDING', 'RUNNING', 'RETRY')
+             AND $1::text[] IS NOT NULL AND NOT (session_id = ANY($1::text[]))
+         )::text AS inactive_pending,
+         count(*) FILTER (WHERE status = 'FAILED'
+           AND ($1::text[] IS NULL OR session_id = ANY($1::text[])))::text AS failed,
          COALESCE(max(extract(epoch FROM now() - first_requested_at))
-           FILTER (WHERE status IN ('PENDING', 'RUNNING', 'RETRY')), 0)::text AS oldest_lag_seconds
+           FILTER (WHERE status IN ('PENDING', 'RUNNING', 'RETRY')
+             AND ($1::text[] IS NULL OR session_id = ANY($1::text[]))), 0)::text
+           AS oldest_lag_seconds
        FROM contact_projection_work`,
+      [this.allowedSessionIds],
     );
     const row = result.rows[0];
     return {
-      pending: Number(row?.pending ?? 0),
+      pending: Number(row?.pending ?? 0) - Number(row?.inactive_pending ?? 0),
+      inactivePending: Number(row?.inactive_pending ?? 0),
       failed: Number(row?.failed ?? 0),
       oldestLagSeconds: Number(row?.oldest_lag_seconds ?? 0),
     };

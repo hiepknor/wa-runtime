@@ -38,7 +38,9 @@ describe('ContactProjectionTick', () => {
       projectBatch: vi.fn().mockResolvedValue({ updated: 100, completed: false }),
       release: vi.fn().mockResolvedValue(undefined),
       fail: vi.fn(),
-      getQueueMetrics: vi.fn().mockResolvedValue({ pending: 1, failed: 0, oldestLagSeconds: 2 }),
+      getQueueMetrics: vi.fn().mockResolvedValue({
+        pending: 1, inactivePending: 0, failed: 0, oldestLagSeconds: 2,
+      }),
     } as unknown as ContactProjectionRepository;
     await new ContactProjectionTick(repository, options).run();
     expect(repository.enqueueBootstrap).toHaveBeenCalledWith(1_000);
@@ -51,6 +53,7 @@ describe('ContactProjectionTick', () => {
       updated: 200,
       completed: 0,
       pending: 1,
+      inactivePending: 0,
       failed: 0,
       oldestLagSeconds: 2,
     });
