@@ -32,6 +32,7 @@ import { ContactProjectionTick } from './contact-projection.tick';
         runtimeConfig().CONTACT_SNAPSHOT_STAGING_ENABLED,
         runtimeConfig().CONTACT_SNAPSHOT_RETENTION_DAYS,
         evidenceWriter,
+        runtimeConfig().CONTACT_LEGACY_MEMBER_FANOUT_ENABLED,
       ),
       inject: [DatabaseService, ContactEvidenceWriter],
     },
@@ -55,7 +56,14 @@ import { ContactProjectionTick } from './contact-projection.tick';
       ),
       inject: [ContactResolutionRepository],
     },
-    ContactProjectionRepository,
+    {
+      provide: ContactProjectionRepository,
+      useFactory: (database: DatabaseService) => new ContactProjectionRepository(
+        database,
+        !runtimeConfig().CONTACT_LEGACY_MEMBER_FANOUT_ENABLED,
+      ),
+      inject: [DatabaseService],
+    },
     {
       provide: ContactProjectionTick,
       useFactory: (repository: ContactProjectionRepository) => new ContactProjectionTick(
@@ -65,6 +73,7 @@ import { ContactProjectionTick } from './contact-projection.tick';
           batchSize: runtimeConfig().CONTACT_PROJECTION_BATCH_SIZE,
           maxJobsPerTick: runtimeConfig().CONTACT_PROJECTION_MAX_JOBS_PER_TICK,
           maxBatchesPerJob: runtimeConfig().CONTACT_PROJECTION_MAX_BATCHES_PER_JOB,
+          bootstrapBatchSize: runtimeConfig().CONTACT_PROJECTION_BOOTSTRAP_BATCH_SIZE,
         },
       ),
       inject: [ContactProjectionRepository],

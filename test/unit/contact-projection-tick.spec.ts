@@ -14,23 +14,27 @@ describe('ContactProjectionTick', () => {
     batchSize: 100,
     maxJobsPerTick: 1,
     maxBatchesPerJob: 2,
+    bootstrapBatchSize: 1_000,
   };
 
   it('does not claim work while disabled', async () => {
-    const repository = { claim: vi.fn() } as unknown as ContactProjectionRepository;
+    const repository = { enqueueBootstrap: vi.fn(), claim: vi.fn() } as unknown as ContactProjectionRepository;
     await new ContactProjectionTick(repository, { ...options, enabled: false }).run();
+    expect(repository.enqueueBootstrap).not.toHaveBeenCalled();
     expect(repository.claim).not.toHaveBeenCalled();
   });
 
   it('bounds batches and releases unfinished work', async () => {
     const claim = { sessionId: 'session', identityId: 'identity', leaseToken: 'lease' };
     const repository = {
+      enqueueBootstrap: vi.fn().mockResolvedValue(1),
       claim: vi.fn().mockResolvedValue(claim),
       projectBatch: vi.fn().mockResolvedValue({ updated: 100, completed: false }),
       release: vi.fn().mockResolvedValue(undefined),
       fail: vi.fn(),
     } as unknown as ContactProjectionRepository;
     await new ContactProjectionTick(repository, options).run();
+    expect(repository.enqueueBootstrap).toHaveBeenCalledWith(1_000);
     expect(repository.projectBatch).toHaveBeenCalledTimes(2);
     expect(repository.release).toHaveBeenCalledWith(claim);
   });
@@ -38,6 +42,7 @@ describe('ContactProjectionTick', () => {
   it('records a generic failure without logging identity data', async () => {
     const claim = { sessionId: 'private-session', identityId: 'private-id', leaseToken: 'private-lease' };
     const repository = {
+      enqueueBootstrap: vi.fn().mockResolvedValue(1),
       claim: vi.fn().mockResolvedValue(claim),
       projectBatch: vi.fn().mockRejectedValue(new Error('projection failed')),
       release: vi.fn(),

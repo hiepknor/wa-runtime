@@ -359,6 +359,31 @@ The scheduler runs every five seconds and processes at most
 size with `CONTACT_PROJECTION_BATCH_SIZE`. Disabling the flag stops producers and workers while the
 legacy member API remains authoritative. Logs expose only aggregate updated/completed counts.
 
+Migration 027 adds a durable keyset bootstrap for member identities that existed before the projection
+queue. Cutover uses two independent flags: `CONTACT_PROJECTION_READ_ENABLED` selects completed shadow
+rows in member data/search/order/count, while `CONTACT_LEGACY_MEMBER_FANOUT_ENABLED=false` removes
+synchronous membership fan-out from contact and message producers. With fan-out disabled, the
+projection worker mirrors v2 output into legacy columns asynchronously so reverting the read flag does
+not expose a stale fallback.
+
+Use this order for a staged cutover:
+
+1. Enable snapshot staging, evidence dual-write, shadow resolution and shadow projection; leave reads
+   on legacy and legacy fan-out enabled.
+2. Wait for `contact_projection_bootstrap_state.status = 'COMPLETED'`, no projection work in
+   `PENDING`, `RUNNING`, `RETRY` or `FAILED`, and zero member rows with a non-null
+   `evidence_identity_id` but `shadow_projection_revision = 0`.
+3. Compare aggregate null/name/source/phone coverage and mismatch counts; do not emit values.
+4. Enable `CONTACT_PROJECTION_READ_ENABLED=true` while retaining legacy fan-out for the canary window.
+5. After API/search/order checks pass, set `CONTACT_LEGACY_MEMBER_FANOUT_ENABLED=false`. Confirm queue
+   lag stays within the acceptance threshold and inbound webhook completion does not depend on member
+   updates.
+
+Rollback the reader by setting `CONTACT_PROJECTION_READ_ENABLED=false` while leaving shadow projection
+enabled and legacy fan-out disabled; the worker continues mirroring current v2 results into the legacy
+columns. Drain projection work before optionally re-enabling synchronous legacy fan-out. Never disable
+the shadow worker while legacy fan-out is disabled.
+
 Identity evidence from an inbound message's bounded `contact.pushName` field is independently gated by
 `CONTACT_MESSAGE_ENRICHMENT_ENABLED`. Runtime extracts only sender identity and push name, then discards
 the upstream contact object; a contact write failure never retries or dead-letters the message webhook.

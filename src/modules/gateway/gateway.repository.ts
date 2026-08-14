@@ -227,6 +227,7 @@ export class GatewayRepository {
   constructor(
     private readonly database: DatabaseService,
     private readonly contacts: ContactRepository,
+    private readonly readContactProjection = false,
   ) {}
 
   async upsertSession(session: OpenWASession, syncFence?: SyncWriteFence): Promise<SessionDto> {
@@ -700,27 +701,36 @@ export class GatewayRepository {
     return this.database.transaction(async client => {
       await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
       const rows = await client.query<MemberRow>(
-        `SELECT participant_id, phone_number, display_name, is_admin, is_super_admin
+        `SELECT participant_id, phone_number,
+           CASE WHEN $6::boolean AND shadow_projection_revision > 0
+             THEN shadow_display_name ELSE display_name END AS display_name,
+           is_admin, is_super_admin
          FROM group_members
          WHERE session_id = $1 AND group_id = $2
            AND ($5::text IS NULL
-             OR display_name ILIKE $5 ESCAPE '\\'
+             OR (CASE WHEN $6::boolean AND shadow_projection_revision > 0
+                   THEN shadow_display_name ELSE display_name END) ILIKE $5 ESCAPE '\\'
              OR phone_number ILIKE $5 ESCAPE '\\'
              OR participant_id ILIKE $5 ESCAPE '\\')
          ORDER BY is_super_admin DESC, is_admin DESC,
-           lower(coalesce(display_name, phone_number)) ASC, participant_id ASC
+           lower(coalesce(
+             CASE WHEN $6::boolean AND shadow_projection_revision > 0
+               THEN shadow_display_name ELSE display_name END,
+             phone_number
+           )) ASC, participant_id ASC
          LIMIT $3 OFFSET $4`,
-        [sessionId, groupId, limit, offset, searchPattern],
+        [sessionId, groupId, limit, offset, searchPattern, this.readContactProjection],
       );
       const count = await client.query<{ count: string }>(
         `SELECT count(*)::text AS count
          FROM group_members
          WHERE session_id = $1 AND group_id = $2
            AND ($3::text IS NULL
-             OR display_name ILIKE $3 ESCAPE '\\'
+             OR (CASE WHEN $4::boolean AND shadow_projection_revision > 0
+                   THEN shadow_display_name ELSE display_name END) ILIKE $3 ESCAPE '\\'
              OR phone_number ILIKE $3 ESCAPE '\\'
              OR participant_id ILIKE $3 ESCAPE '\\')`,
-        [sessionId, groupId, searchPattern],
+        [sessionId, groupId, searchPattern, this.readContactProjection],
       );
       return { data: rows.rows.map(mapMember), total: Number(count.rows[0]?.count ?? 0) };
     });

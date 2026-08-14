@@ -5,6 +5,7 @@ import { ContactEvidenceWriter } from '../../src/modules/contacts/contact-eviden
 import { ContactProjectionRepository } from '../../src/modules/contacts/contact-projection.repository';
 import { ContactResolutionRepository } from '../../src/modules/contacts/contact-resolution.repository';
 import { ContactRepository } from '../../src/modules/contacts/contact.repository';
+import { GatewayRepository } from '../../src/modules/gateway/gateway.repository';
 import {
   INTEGRATION_GROUP_ID,
   INTEGRATION_SESSION_ID,
@@ -33,6 +34,12 @@ describe('durable contact projection', () => {
 
   beforeEach(async () => {
     await resetIntegrationDatabase(pool);
+    await pool.query(
+      `UPDATE contact_projection_bootstrap_state SET status = 'PENDING',
+         last_session_id = NULL, last_identity_id = NULL, rows_enqueued = 0,
+         completed_at = NULL, updated_at = now()
+       WHERE job_name = 'MEMBER_PROJECTION_V2'`,
+    );
     await seedSendableGroup(pool);
   });
 
@@ -137,6 +144,39 @@ describe('durable contact projection', () => {
     expect(members.rows.every(row => row.shadow_display_name_source === 'OPENWA_CONTACT_NAME')).toBe(true);
     expect(members.rows.every(row => row.shadow_resolution_run_id === resolution.runId)).toBe(true);
     expect(members.rows.every(row => Number(row.shadow_projection_revision) > 0)).toBe(true);
+
+    await pool.query(
+      `UPDATE group_members SET display_name = 'Stale legacy', display_name_source = 'OPENWA_PUSH_NAME'
+       WHERE session_id = $1 AND participant_id = 'lid-a@lid'`,
+      [INTEGRATION_SESSION_ID],
+    );
+    await database.transaction(client => evidence.observeMessageSender(
+      client,
+      INTEGRATION_SESSION_ID,
+      { identity_type: 'LID', identity_value: 'lid-a@lid', phone: null },
+      'Ignored lower-precedence push',
+      new Date('2026-08-14T06:02:00.000Z'),
+      'message:mirror-legacy',
+    ));
+    const mirror = new ContactProjectionRepository(database, true);
+    for (;;) {
+      const claim = await mirror.claim();
+      if (!claim) break;
+      for (;;) {
+        const result = await mirror.projectBatch(claim, 10);
+        if (result.completed) break;
+      }
+    }
+    const mirrored = await pool.query<{
+      display_name: string;
+      resolved_phone_number: string;
+    }>(
+      `SELECT display_name, resolved_phone_number FROM group_members
+       WHERE session_id = $1 AND participant_id = 'lid-a@lid'`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(mirrored.rows.every(row => row.display_name === 'Saved contact')).toBe(true);
+    expect(mirrored.rows.every(row => row.resolved_phone_number === '84970000000')).toBe(true);
   });
 
   it('coalesces replayed observations and schedules a newer revision during an active claim', async () => {
@@ -365,5 +405,104 @@ describe('durable contact projection', () => {
        WHERE session_id = $1 AND group_id = $2`,
       [DISALLOWED_SESSION_ID, INTEGRATION_GROUP_ID, run.runId],
     )).rejects.toMatchObject({ code: '23503' });
+  });
+
+  it('bootstraps pre-existing identities once with a durable keyset cursor', async () => {
+    const identity = await pool.query<{ id: string }>(
+      `INSERT INTO observed_contact_identities (session_id, identity_type, identity_value)
+       VALUES ($1, 'LID', 'bootstrap@lid') RETURNING id`,
+      [INTEGRATION_SESSION_ID],
+    );
+    await pool.query(
+      `INSERT INTO group_members
+         (session_id, group_id, participant_id, phone_number,
+          evidence_identity_id, is_admin, is_super_admin)
+       VALUES ($1, $2, 'bootstrap@lid', 'bootstrap', $3, false, false)`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, identity.rows[0]!.id],
+    );
+
+    expect(await projections.enqueueBootstrap(1)).toBe(1);
+    expect(await projections.enqueueBootstrap(1)).toBe(0);
+    const state = await pool.query<{ status: string; rows_enqueued: string }>(
+      `SELECT status, rows_enqueued::text FROM contact_projection_bootstrap_state
+       WHERE job_name = 'MEMBER_PROJECTION_V2'`,
+    );
+    expect(state.rows[0]).toEqual({ status: 'COMPLETED', rows_enqueued: '1' });
+    expect(await projections.enqueueBootstrap(1)).toBe(0);
+  });
+
+  it('switches member search and ordering to completed shadow rows only when enabled', async () => {
+    await pool.query(
+      `INSERT INTO group_members
+         (session_id, group_id, participant_id, phone_number, display_name,
+          shadow_display_name, shadow_display_name_source, shadow_sort_value,
+          shadow_projection_revision, is_admin, is_super_admin)
+       VALUES
+         ($1, $2, 'a@lid', 'a', 'Legacy Alpha', 'Zulu', 'OPENWA_PUSH_NAME', 'zulu', 10, false, false),
+         ($1, $2, 'b@lid', 'b', 'Legacy Beta', 'Alpha', 'OPENWA_PUSH_NAME', 'alpha', 11, false, false)`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+    const legacy = new GatewayRepository(database, contacts, false);
+    const shadow = new GatewayRepository(database, contacts, true);
+
+    expect((await legacy.listMembers(
+      INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, 10, 0, 'Legacy Alpha',
+    )).total).toBe(1);
+    expect((await shadow.listMembers(
+      INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, 10, 0, 'Legacy Alpha',
+    )).total).toBe(0);
+    const page = await shadow.listMembers(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, 10, 0);
+    expect(page.data.map(member => member.displayName)).toEqual(['Alpha', 'Zulu']);
+  });
+
+  it('keeps inbound observation completion independent from membership fan-out', async () => {
+    await pool.query(
+      `INSERT INTO group_members
+         (session_id, group_id, participant_id, phone_number, display_name,
+          display_name_source, is_admin, is_super_admin)
+       VALUES ($1, $2, 'async@lid', 'async', 'Legacy marker',
+         'GROUP_PARTICIPANT_NAME', false, false)`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+    const asyncContacts = new ContactRepository(database, true, 30, evidence, false);
+    await database.transaction(client => asyncContacts.seedGroupMembers(
+      client,
+      INTEGRATION_SESSION_ID,
+      INTEGRATION_GROUP_ID,
+      [{ id: 'async@lid', number: 'async', name: null, isAdmin: false, isSuperAdmin: false }],
+    ));
+    expect(await asyncContacts.observeMessageSender(
+      INTEGRATION_SESSION_ID,
+      'async@lid',
+      'Async push',
+      new Date('2026-08-14T06:03:00.000Z'),
+      'message:async-fanout',
+    )).toBe(true);
+    const beforeWorker = await pool.query<{ display_name: string }>(
+      `SELECT display_name FROM group_members
+       WHERE session_id = $1 AND group_id = $2 AND participant_id = 'async@lid'`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+    expect(beforeWorker.rows[0]?.display_name).toBe('Legacy marker');
+
+    const mirror = new ContactProjectionRepository(database, true);
+    for (;;) {
+      const claim = await mirror.claim();
+      if (!claim) break;
+      const result = await mirror.projectBatch(claim, 10);
+      if (!result.completed) await mirror.release(claim);
+    }
+    const afterWorker = await pool.query<{
+      display_name: string;
+      shadow_display_name: string;
+    }>(
+      `SELECT display_name, shadow_display_name FROM group_members
+       WHERE session_id = $1 AND group_id = $2 AND participant_id = 'async@lid'`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+    expect(afterWorker.rows[0]).toEqual({
+      display_name: 'Async push',
+      shadow_display_name: 'Async push',
+    });
   });
 });

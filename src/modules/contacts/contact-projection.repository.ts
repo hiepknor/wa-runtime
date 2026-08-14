@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../../core/database/database.service';
+import { enqueueContactProjectionWork } from './contact-projection.enqueue';
 
 export interface ContactProjectionClaim {
   sessionId: string;
@@ -14,7 +15,57 @@ export interface ContactProjectionBatchResult {
 
 @Injectable()
 export class ContactProjectionRepository {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly mirrorLegacyProjection = false,
+  ) {}
+
+  async enqueueBootstrap(limit: number): Promise<number> {
+    return this.database.transaction(async client => {
+      const state = await client.query<{
+        last_session_id: string | null;
+        last_identity_id: string | null;
+      }>(
+        `SELECT last_session_id, last_identity_id
+         FROM contact_projection_bootstrap_state
+         WHERE job_name = 'MEMBER_PROJECTION_V2' AND status = 'PENDING'
+         FOR UPDATE SKIP LOCKED`,
+      );
+      const cursor = state.rows[0];
+      if (!cursor) return 0;
+      const result = await client.query<{ session_id: string; evidence_identity_id: string }>(
+        `SELECT DISTINCT member.session_id, member.evidence_identity_id
+         FROM group_members member
+         WHERE member.evidence_identity_id IS NOT NULL
+           AND ($2::text IS NULL OR (member.session_id, member.evidence_identity_id) > ($2, $3::uuid))
+         ORDER BY member.session_id, member.evidence_identity_id LIMIT $1`,
+        [limit, cursor.last_session_id, cursor.last_identity_id],
+      );
+      let enqueued = 0;
+      const bySession = new Map<string, string[]>();
+      for (const row of result.rows) {
+        const identities = bySession.get(row.session_id) ?? [];
+        identities.push(row.evidence_identity_id);
+        bySession.set(row.session_id, identities);
+      }
+      for (const [sessionId, identities] of bySession) {
+        enqueued += await enqueueContactProjectionWork(client, sessionId, identities);
+      }
+      const last = result.rows.at(-1);
+      await client.query(
+        `UPDATE contact_projection_bootstrap_state SET
+           status = CASE WHEN $1::integer < $2 THEN 'COMPLETED' ELSE 'PENDING' END,
+           last_session_id = COALESCE($3, last_session_id),
+           last_identity_id = COALESCE($4::uuid, last_identity_id),
+           rows_enqueued = rows_enqueued + $1,
+           completed_at = CASE WHEN $1::integer < $2 THEN now() ELSE NULL END,
+           updated_at = now()
+         WHERE job_name = 'MEMBER_PROJECTION_V2'`,
+        [result.rows.length, limit, last?.session_id ?? null, last?.evidence_identity_id ?? null],
+      );
+      return enqueued;
+    });
+  }
 
   async claim(): Promise<ContactProjectionClaim | null> {
     const result = await this.database.query<{
@@ -183,16 +234,33 @@ export class ContactProjectionRepository {
              )),
              shadow_projection_revision = $3,
              shadow_resolution_run_id = $5::uuid,
+             resolved_phone_number = CASE WHEN $9::boolean
+               THEN projected.resolved_phone ELSE member.resolved_phone_number END,
+             display_name = CASE WHEN $9::boolean
+               THEN projected.effective_name ELSE member.display_name END,
+             display_name_source = CASE WHEN $9::boolean THEN
+               CASE WHEN projected.effective_source = 'RESOLVED_ALIAS_PUSH_NAME'
+                 THEN 'OPENWA_PUSH_NAME' ELSE projected.effective_source END
+               ELSE member.display_name_source END,
+             display_name_updated_at = CASE WHEN NOT $9::boolean THEN member.display_name_updated_at
+               WHEN projected.effective_name IS NULL THEN NULL ELSE now() END,
              updated_at = CASE WHEN (
                member.shadow_resolved_phone_number, member.shadow_display_name,
                member.shadow_display_name_source, member.shadow_sort_value,
                member.shadow_projection_revision, member.shadow_resolution_run_id
+               , member.resolved_phone_number, member.display_name, member.display_name_source
              ) IS DISTINCT FROM (
                projected.resolved_phone, projected.effective_name,
                projected.effective_source,
                lower(coalesce(projected.effective_name, projected.resolved_phone,
                  projected.phone_number, projected.participant_id)),
                $3::bigint, $5::uuid
+               , CASE WHEN $9::boolean THEN projected.resolved_phone ELSE member.resolved_phone_number END
+               , CASE WHEN $9::boolean THEN projected.effective_name ELSE member.display_name END
+               , CASE WHEN $9::boolean THEN
+                   CASE WHEN projected.effective_source = 'RESOLVED_ALIAS_PUSH_NAME'
+                     THEN 'OPENWA_PUSH_NAME' ELSE projected.effective_source END
+                 ELSE member.display_name_source END
              ) THEN now() ELSE member.updated_at END
            FROM projected
            WHERE member.session_id = projected.session_id
@@ -211,6 +279,7 @@ export class ContactProjectionRepository {
           work.cursor_group_id,
           work.cursor_participant_id,
           batchSize,
+          this.mirrorLegacyProjection,
         ],
       );
       const last = page.rows.at(-1);

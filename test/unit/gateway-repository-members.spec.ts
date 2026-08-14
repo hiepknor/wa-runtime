@@ -30,8 +30,13 @@ describe('GatewayRepository.listMembers', () => {
     expect(clientQuery.mock.calls[0]?.[0]).toBe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
     expect(clientQuery.mock.calls[1]?.[0]).toContain('LIMIT $3 OFFSET $4');
     expect(clientQuery.mock.calls[1]?.[0]).toContain('participant_id ASC');
-    expect(clientQuery.mock.calls[1]?.[1]).toEqual(['session-id', 'group-id', 25, 50, '%100\\%\\_match%']);
+    expect(clientQuery.mock.calls[1]?.[0]).toContain('shadow_projection_revision > 0');
+    expect(clientQuery.mock.calls[1]?.[1]).toEqual([
+      'session-id', 'group-id', 25, 50, '%100\\%\\_match%', false,
+    ]);
     expect(clientQuery.mock.calls[2]?.[0]).toContain('count(*)');
-    expect(clientQuery.mock.calls[2]?.[1]).toEqual(['session-id', 'group-id', '%100\\%\\_match%']);
+    expect(clientQuery.mock.calls[2]?.[1]).toEqual([
+      'session-id', 'group-id', '%100\\%\\_match%', false,
+    ]);
   });
 });

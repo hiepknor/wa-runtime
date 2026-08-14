@@ -54,6 +54,7 @@ export class ContactRepository {
     private readonly snapshotStagingEnabled = false,
     private readonly snapshotRetentionDays = 30,
     private readonly evidenceWriter = new ContactEvidenceWriter(false),
+    private readonly legacyMemberFanoutEnabled = true,
   ) {}
 
   async listPeriodicSessionIds(allowedSessionIds: string[], limit: number): Promise<string[]> {
@@ -385,12 +386,13 @@ export class ContactRepository {
            FROM contacts contact, affected
            WHERE contact.session_id = $1 AND contact.id = affected.contact_id
              AND member.session_id = $1 AND member.contact_id = contact.id
+             AND $3::boolean
              AND (member.display_name, member.display_name_source)
                IS DISTINCT FROM (${memberProjection.name}, ${memberProjection.source})
            RETURNING member.contact_id
          )
          SELECT (SELECT count(*) FROM member_writes)::text AS enriched`,
-        [sessionId, pageJson],
+        [sessionId, pageJson, this.legacyMemberFanoutEnabled],
       );
       return {
         observed: rows.length,
@@ -551,6 +553,7 @@ export class ContactRepository {
            FROM contacts contact, affected
            WHERE contact.session_id = $1 AND contact.id = affected.contact_id
              AND member.session_id = $1 AND member.contact_id = contact.id
+             AND $3::boolean
              AND (member.display_name, member.display_name_source)
                IS DISTINCT FROM (${memberProjection.name}, ${memberProjection.source})
            RETURNING member.contact_id
@@ -565,7 +568,7 @@ export class ContactRepository {
            (SELECT count(*) FROM contact_identity_evidence evidence JOIN ambiguous USING (phone)
              WHERE evidence.session_id = $1 AND evidence.sync_generation = $2)::text AS conflicts,
            (SELECT count(*) FROM member_writes)::text AS enriched`,
-        [sessionId, generation],
+        [sessionId, generation, this.legacyMemberFanoutEnabled],
       );
       await client.query(
         `DELETE FROM contact_identity_evidence WHERE session_id = $1 AND sync_generation <= $2`,
@@ -734,12 +737,14 @@ export class ContactRepository {
                THEN NULL ELSE now() END,
              updated_at = now()
            FROM contact_write WHERE member.session_id = $1 AND member.contact_id = contact_write.id
+             AND $7::boolean
              AND (member.display_name, member.display_name_source)
                IS DISTINCT FROM (${observedMemberProjection.name}, ${observedMemberProjection.source})
            RETURNING member.contact_id
          )
          SELECT EXISTS (SELECT 1 FROM name_write) AS accepted`,
-        [sessionId, identity.type, identity.value, pushName, observedAt, observationKey],
+        [sessionId, identity.type, identity.value, pushName, observedAt, observationKey,
+          this.legacyMemberFanoutEnabled],
       );
       return result.rows[0]?.accepted ?? false;
     });
@@ -842,22 +847,27 @@ export class ContactRepository {
            resolved_phone_number = CASE WHEN resolved.identity_type = 'PHONE_JID'
              THEN resolved.phone ELSE NULL END,
            participant_display_name = resolved.participant_name,
-           display_name = ${resolvedMemberProjection.name},
-           display_name_source = ${resolvedMemberProjection.source},
-           display_name_updated_at = CASE
-             WHEN ${resolvedMemberProjection.name} IS NULL THEN NULL
-             ELSE now()
-           END,
+           display_name = CASE WHEN $4::boolean
+             THEN ${resolvedMemberProjection.name} ELSE member.display_name END,
+           display_name_source = CASE WHEN $4::boolean
+             THEN ${resolvedMemberProjection.source} ELSE member.display_name_source END,
+           display_name_updated_at = CASE WHEN NOT $4::boolean THEN member.display_name_updated_at
+             WHEN ${resolvedMemberProjection.name} IS NULL THEN NULL ELSE now() END,
            updated_at = now()
        FROM resolved
        WHERE member.session_id = $1 AND member.group_id = $2
          AND member.participant_id = resolved.participant_id
-         AND (member.contact_id, member.evidence_identity_id,
-              member.participant_display_name, member.display_name, member.display_name_source)
+         AND (member.contact_id, member.evidence_identity_id, member.identity_type,
+              member.resolved_phone_number, member.participant_display_name,
+              member.display_name, member.display_name_source)
            IS DISTINCT FROM
-           (resolved.contact_id, resolved.evidence_identity_id, resolved.participant_name,
-            ${resolvedMemberProjection.name}, ${resolvedMemberProjection.source})`,
-      values,
+           (resolved.contact_id, resolved.evidence_identity_id, resolved.identity_type,
+            CASE WHEN resolved.identity_type = 'PHONE_JID' THEN resolved.phone ELSE NULL END,
+            resolved.participant_name,
+            CASE WHEN $4::boolean THEN ${resolvedMemberProjection.name} ELSE member.display_name END,
+            CASE WHEN $4::boolean THEN ${resolvedMemberProjection.source}
+              ELSE member.display_name_source END)`,
+      [...values, this.legacyMemberFanoutEnabled],
     );
   }
 }

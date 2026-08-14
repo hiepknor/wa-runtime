@@ -59,6 +59,9 @@ const schema = z
     CONTACT_PROJECTION_BATCH_SIZE: z.coerce.number().int().min(1).max(5_000).default(500),
     CONTACT_PROJECTION_MAX_JOBS_PER_TICK: z.coerce.number().int().min(1).max(100).default(10),
     CONTACT_PROJECTION_MAX_BATCHES_PER_JOB: z.coerce.number().int().min(1).max(100).default(4),
+    CONTACT_PROJECTION_BOOTSTRAP_BATCH_SIZE: z.coerce.number().int().min(1).max(10_000).default(1_000),
+    CONTACT_PROJECTION_READ_ENABLED: booleanFromEnv(false),
+    CONTACT_LEGACY_MEMBER_FANOUT_ENABLED: booleanFromEnv(true),
     CONTACT_MESSAGE_ENRICHMENT_ENABLED: booleanFromEnv(false),
     CONTACT_PERIODIC_SYNC_ENABLED: booleanFromEnv(false),
     CONTACT_PERIODIC_SYNC_INTERVAL_MS: z.coerce.number().int().min(300_000).default(86_400_000),
@@ -129,6 +132,20 @@ const schema = z
         code: 'custom',
         path: ['CONTACT_PROJECTION_SHADOW_ENABLED'],
         message: 'CONTACT_PROJECTION_SHADOW_ENABLED requires CONTACT_RESOLUTION_SHADOW_ENABLED',
+      });
+    }
+    if (value.CONTACT_PROJECTION_READ_ENABLED && !value.CONTACT_PROJECTION_SHADOW_ENABLED) {
+      context.addIssue({
+        code: 'custom',
+        path: ['CONTACT_PROJECTION_READ_ENABLED'],
+        message: 'CONTACT_PROJECTION_READ_ENABLED requires CONTACT_PROJECTION_SHADOW_ENABLED',
+      });
+    }
+    if (!value.CONTACT_LEGACY_MEMBER_FANOUT_ENABLED && !value.CONTACT_PROJECTION_SHADOW_ENABLED) {
+      context.addIssue({
+        code: 'custom',
+        path: ['CONTACT_LEGACY_MEMBER_FANOUT_ENABLED'],
+        message: 'Disabling CONTACT_LEGACY_MEMBER_FANOUT_ENABLED requires CONTACT_PROJECTION_SHADOW_ENABLED',
       });
     }
   });
