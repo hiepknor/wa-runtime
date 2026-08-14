@@ -64,17 +64,33 @@ export class ContactEvidenceWriter {
     const values = [sessionId, JSON.stringify([input])];
     await this.upsertInputIdentities(client, values);
     const observation = await client.query<{ identity_id: string }>(
-      `WITH input AS MATERIALIZED (SELECT * FROM ${evidenceInputRelation})
-       INSERT INTO contact_observations
-         (session_id, identity_id, observation_source, observation_scope,
-          name_value, source_observed_at, source_observation_key)
-       SELECT $1, identity.id, 'OPENWA_PUSH_NAME', 'IDENTITY', $3, $4, $5
-       FROM input
-       JOIN observed_contact_identities identity
-         ON identity.session_id = $1 AND identity.identity_type = input.identity_type
-        AND identity.identity_value = input.identity_value
-       ON CONFLICT (session_id, observation_source, source_observation_key) DO NOTHING
-       RETURNING identity_id`,
+      `WITH input AS MATERIALIZED (SELECT * FROM ${evidenceInputRelation}),
+       identity AS MATERIALIZED (
+         SELECT observed.id FROM input
+         JOIN observed_contact_identities observed
+           ON observed.session_id = $1 AND observed.identity_type = input.identity_type
+          AND observed.identity_value = input.identity_value
+       ), previous AS MATERIALIZED (
+         SELECT existing.id, existing.name_value, existing.source_observed_at,
+           existing.source_observation_key
+         FROM contact_observations existing JOIN identity ON identity.id = existing.identity_id
+         WHERE existing.session_id = $1 AND existing.observation_source = 'OPENWA_PUSH_NAME'
+         ORDER BY existing.source_observed_at DESC,
+           existing.source_observation_key DESC, existing.id DESC LIMIT 1
+       ), inserted AS (
+         INSERT INTO contact_observations
+           (session_id, identity_id, observation_source, observation_scope,
+            name_value, source_observed_at, source_observation_key)
+         SELECT $1, identity.id, 'OPENWA_PUSH_NAME', 'IDENTITY', $3, $4, $5 FROM identity
+         ON CONFLICT (session_id, observation_source, source_observation_key) DO NOTHING
+         RETURNING id, identity_id, name_value, source_observed_at, source_observation_key
+       )
+       SELECT inserted.identity_id FROM inserted LEFT JOIN previous ON true
+       WHERE previous.id IS NULL OR (
+         (inserted.source_observed_at, inserted.source_observation_key, inserted.id)
+           > (previous.source_observed_at, previous.source_observation_key, previous.id)
+         AND inserted.name_value IS DISTINCT FROM previous.name_value
+       )`,
       [sessionId, JSON.stringify([input]), pushName, observedAt, observationKey],
     );
     await this.insertInputLinks(client, values, null);

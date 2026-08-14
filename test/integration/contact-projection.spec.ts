@@ -223,6 +223,38 @@ describe('durable contact projection', () => {
     );
     expect(afterReplay.rows[0]?.requested_revision).toBe(beforeReplay.rows[0]?.requested_revision);
 
+    await database.transaction(client => evidence.observeMessageSender(
+      client,
+      INTEGRATION_SESSION_ID,
+      { identity_type: 'LID', identity_value: 'lid-a@lid', phone: null },
+      'Push name',
+      new Date('2026-08-14T06:00:30.000Z'),
+      'message:same-name-newer',
+    ));
+    await database.transaction(client => evidence.observeMessageSender(
+      client,
+      INTEGRATION_SESSION_ID,
+      { identity_type: 'LID', identity_value: 'lid-a@lid', phone: null },
+      'Out-of-order name',
+      new Date('2026-08-14T05:59:00.000Z'),
+      'message:older-different-name',
+    ));
+    const afterNoOpObservations = await pool.query<{ requested_revision: string }>(
+      `SELECT requested_revision::text FROM contact_projection_work
+       WHERE session_id = $1 AND status = 'PENDING'`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(afterNoOpObservations.rows[0]?.requested_revision).toBe(
+      beforeReplay.rows[0]?.requested_revision,
+    );
+    const retainedObservations = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM contact_observations
+       WHERE session_id = $1 AND observation_source = 'OPENWA_PUSH_NAME'
+         AND source_observation_key IN ('message:same-name-newer', 'message:older-different-name')`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(retainedObservations.rows[0]?.count).toBe('2');
+
     const active = await projections.claim();
     expect(active).not.toBeNull();
     await database.transaction(client => evidence.observeMessageSender(
@@ -327,7 +359,12 @@ describe('durable contact projection', () => {
        ORDER BY source_observed_at`,
       [INTEGRATION_SESSION_ID],
     );
-    expect(pushNames.rows.map(row => row.name_value)).toEqual(['Push name', 'Newer push name']);
+    expect(pushNames.rows.map(row => row.name_value)).toEqual([
+      'Out-of-order name',
+      'Push name',
+      'Push name',
+      'Newer push name',
+    ]);
     const latestExactPush = await pool.query<{ name_value: string }>(
       `SELECT observation.name_value FROM group_members member
        JOIN contact_observations observation
