@@ -6,11 +6,14 @@ import { ContactMessageObserverService } from './contact-message-observer.servic
 import { runtimeConfig } from '../../core/config/runtime-config';
 import { ContactPeriodicSyncTick } from './contact-periodic-sync.tick';
 import { OpenWAClient } from '../../integrations/openwa/openwa.client';
+import { ContactMemberIdentityBackfillRepository } from './contact-member-identity-backfill.repository';
+import { ContactMemberIdentityBackfillTick } from './contact-member-identity-backfill.tick';
 
 @Module({
   imports: [OpenWAModule],
   providers: [
     ContactRepository,
+    ContactMemberIdentityBackfillRepository,
     {
       provide: ContactSyncService,
       useFactory: (repository: ContactRepository, openwa: OpenWAClient) =>
@@ -37,7 +40,23 @@ import { OpenWAClient } from '../../integrations/openwa/openwa.client';
       ),
       inject: [ContactRepository],
     },
+    {
+      provide: ContactMemberIdentityBackfillTick,
+      useFactory: (repository: ContactMemberIdentityBackfillRepository) =>
+        new ContactMemberIdentityBackfillTick(repository, {
+          enabled: runtimeConfig().CONTACT_MEMBER_IDENTITY_BACKFILL_ENABLED,
+          batchSize: runtimeConfig().CONTACT_MEMBER_IDENTITY_BACKFILL_BATCH_SIZE,
+          maxBatchesPerTick: runtimeConfig().CONTACT_MEMBER_IDENTITY_BACKFILL_MAX_BATCHES,
+        }),
+      inject: [ContactMemberIdentityBackfillRepository],
+    },
   ],
-  exports: [ContactRepository, ContactSyncService, ContactMessageObserverService, ContactPeriodicSyncTick],
+  exports: [
+    ContactRepository,
+    ContactSyncService,
+    ContactMessageObserverService,
+    ContactPeriodicSyncTick,
+    ContactMemberIdentityBackfillTick,
+  ],
 })
 export class ContactsModule {}

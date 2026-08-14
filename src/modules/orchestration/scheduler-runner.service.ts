@@ -12,6 +12,7 @@ import { WebhookDispatchTick } from './webhook-dispatch.tick';
 import { GatewayWorkListenerService } from './gateway-work-listener.service';
 import { ContactPeriodicSyncTick } from '../contacts/contact-periodic-sync.tick';
 import { WebhookRegistrationReconciliationTick } from '../webhooks/webhook-registration-reconciliation.tick';
+import { ContactMemberIdentityBackfillTick } from '../contacts/contact-member-identity-backfill.tick';
 
 @Injectable()
 export class SchedulerRunnerService {
@@ -28,6 +29,7 @@ export class SchedulerRunnerService {
     private readonly gatewayListener: GatewayWorkListenerService,
     private readonly contacts: ContactPeriodicSyncTick,
     private readonly webhookRegistrations: WebhookRegistrationReconciliationTick,
+    private readonly contactMemberIdentityBackfill: ContactMemberIdentityBackfillTick,
   ) {}
 
   async run(): Promise<void> {
@@ -46,6 +48,12 @@ export class SchedulerRunnerService {
         () => this.retention.run(),
       ),
       this.tick('contacts', 300_000, 15 * 60_000, () => this.contacts.run()),
+      this.tick(
+        'contact-member-identity-backfill',
+        30_000,
+        2 * 60_000,
+        () => this.contactMemberIdentityBackfill.run(),
+      ),
       this.tick(
         'webhook-registration',
         this.config.OPENWA_WEBHOOK_RECONCILIATION_INTERVAL_MS,

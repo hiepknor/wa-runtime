@@ -53,6 +53,9 @@ const schema = z
     CONTACT_MESSAGE_ENRICHMENT_ENABLED: booleanFromEnv(false),
     CONTACT_PERIODIC_SYNC_ENABLED: booleanFromEnv(false),
     CONTACT_PERIODIC_SYNC_INTERVAL_MS: z.coerce.number().int().min(300_000).default(86_400_000),
+    CONTACT_MEMBER_IDENTITY_BACKFILL_ENABLED: booleanFromEnv(false),
+    CONTACT_MEMBER_IDENTITY_BACKFILL_BATCH_SIZE: z.coerce.number().int().min(100).max(10_000).default(1000),
+    CONTACT_MEMBER_IDENTITY_BACKFILL_MAX_BATCHES: z.coerce.number().int().min(1).max(100).default(20),
   })
   .superRefine((value, context) => {
     if (value.OUTBOUND_MAX_DELAY_MS < value.OUTBOUND_MIN_DELAY_MS) {

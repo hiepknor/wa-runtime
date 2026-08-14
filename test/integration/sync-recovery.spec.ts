@@ -581,13 +581,22 @@ describe('gateway sync recovery', () => {
     };
     await gateway.upsertGroupDetails(INTEGRATION_SESSION_ID, group);
 
-    const linked = await pool.query<{ participant_id: string; contact_id: string | null }>(
-      `SELECT participant_id, contact_id FROM group_members
+    const linked = await pool.query<{
+      participant_id: string;
+      contact_id: string | null;
+      identity_type: string;
+      resolved_phone_number: string | null;
+    }>(
+      `SELECT participant_id, contact_id, identity_type, resolved_phone_number FROM group_members
        WHERE session_id = $1 AND group_id = $2 ORDER BY participant_id`,
       [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
     );
     expect(linked.rows).toHaveLength(2);
     expect(linked.rows.every(row => row.contact_id !== null)).toBe(true);
+    expect(linked.rows).toMatchObject([
+      { participant_id: '628111@s.whatsapp.net', identity_type: 'PHONE_JID', resolved_phone_number: '628111' },
+      { participant_id: 'opaque-lid@lid', identity_type: 'LID', resolved_phone_number: null },
+    ]);
     const identifiers = await pool.query<{ identity_type: string; identity_value: string }>(
       `SELECT identity_type, identity_value FROM contact_identifiers
        WHERE session_id = $1 ORDER BY identity_type, identity_value`,

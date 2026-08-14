@@ -671,6 +671,9 @@ export class ContactRepository {
        )
        UPDATE group_members member
        SET contact_id = resolved.contact_id,
+           identity_type = resolved.identity_type,
+           resolved_phone_number = CASE WHEN resolved.identity_type = 'PHONE_JID'
+             THEN resolved.phone ELSE NULL END,
            participant_display_name = resolved.participant_name,
            display_name = CASE
              WHEN resolved.contact_name_source = 'OPENWA_CONTACT_NAME' THEN resolved.effective_display_name

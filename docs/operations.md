@@ -336,6 +336,14 @@ use bounded exponential backoff. PostgreSQL generation/lease fencing prevents a 
 full-sync-triggered refresh from owning the same session concurrently. This job never lists groups or
 members from OpenWA.
 
+Migration 021 adds the internal member identity projection without changing the member API contract.
+New group writes populate `identity_type` and nullable `resolved_phone_number` transactionally. Existing
+rows are processed by the fenced, resumable backfill only when
+`CONTACT_MEMBER_IDENTITY_BACKFILL_ENABLED=true`. Each scheduler pass handles at most
+`CONTACT_MEMBER_IDENTITY_BACKFILL_BATCH_SIZE * CONTACT_MEMBER_IDENTITY_BACKFILL_MAX_BATCHES` rows and
+records only aggregate progress. Enable it after migration 021, require zero null identity types, then
+disable it after an observation window. A LID user-part is never written to `resolved_phone_number`.
+
 Snapshot completion logs only aggregate counters: observed/enriched/merged/conflicts and member coverage
 by identity type and name source. Do not add session IDs, raw names, phone numbers or WhatsApp identifiers
 to these events. Before enabling either producer, apply migrations 018–020. Disable its flag to roll back
