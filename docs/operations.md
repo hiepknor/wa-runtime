@@ -380,6 +380,11 @@ member-write lock as group replacement and projection, then enqueues the repaire
 This closes rows created or retained after the one-shot migration-028 cursor passed them without
 re-enabling the historical backfill flag.
 
+Migration 031 indexes projected memberships whose additive identity type was not materialized by an
+older backfill. The normal unprojected catch-up requeues those exact identities and the projection
+worker repairs the type from the session-scoped evidence identity. Read cutover requires this set to
+be empty as well as the revision-zero set.
+
 Use this order for a staged cutover:
 
 1. Enable snapshot staging, evidence dual-write, shadow resolution and shadow projection; leave reads
@@ -390,6 +395,7 @@ Use this order for a staged cutover:
    `PENDING`, `RUNNING`, `RETRY` or `FAILED`, and zero member rows with a non-null
    `evidence_identity_id` but `shadow_projection_revision = 0`. Also require zero eligible member
    rows with a null `evidence_identity_id`; the late-evidence catch-up must finish before read cutover.
+   Every evidence-linked row must also have a non-null materialized `identity_type`.
 3. Compare aggregate null/name/source/phone coverage and mismatch counts; do not emit values.
 4. Enable `CONTACT_PROJECTION_READ_ENABLED=true` while retaining legacy fan-out for the canary window.
 5. After API/search/order checks pass, set `CONTACT_LEGACY_MEMBER_FANOUT_ENABLED=false`. Confirm queue
