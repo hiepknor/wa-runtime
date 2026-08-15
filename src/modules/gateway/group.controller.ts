@@ -1,8 +1,10 @@
-import { Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
-import { ApiAcceptedResponse, ApiOkResponse, ApiOperation, ApiQuery, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { Controller, Get, HttpCode, Param, Post, Query, UseFilters } from '@nestjs/common';
+import { ApiAcceptedResponse, ApiBadRequestResponse, ApiOkResponse, ApiOperation, ApiQuery, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { RuntimeErrorDto } from '../../contracts/common/runtime-error.dto';
 import { GroupDetailDto, GroupListDto, GroupMemberListDto } from '../../contracts/groups/group.dto';
 import { GroupIdentityQueryDto, GroupMemberQueryDto, GroupQueryDto } from '../../contracts/groups/group-query.dto';
 import { GroupService } from './group.service';
+import { GroupHttpExceptionFilter } from './group-http-exception.filter';
 
 @ApiTags('groups')
 @ApiSecurity('runtime-key')
@@ -29,9 +31,11 @@ export class GroupController {
   })
   @ApiOperation({
     summary: 'Search and filter synchronized groups from the Runtime read model',
-    description: 'Results are ordered deterministically by group name and group ID. Search and filters are applied before pagination and meta.total counts the filtered dataset.',
+    description: 'Results are ordered deterministically by group name and group ID. Search, capability, freshness, active-state, and inclusive participant-count filters are applied before pagination; meta.total counts the filtered dataset. Omitting isActive preserves active-only behavior.',
   })
+  @ApiBadRequestResponse({ type: RuntimeErrorDto })
   @ApiOkResponse({ type: GroupListDto })
+  @UseFilters(GroupHttpExceptionFilter)
   list(@Query() query: GroupQueryDto) {
     return this.groups.list(query);
   }

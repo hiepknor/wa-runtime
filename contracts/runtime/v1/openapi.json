@@ -166,7 +166,7 @@
     },
     "/api/v1/groups": {
       "get": {
-        "description": "Results are ordered deterministically by group name and group ID. Search and filters are applied before pagination and meta.total counts the filtered dataset.",
+        "description": "Results are ordered deterministically by group name and group ID. Search, capability, freshness, active-state, and inclusive participant-count filters are applied before pagination; meta.total counts the filtered dataset. Omitting isActive preserves active-only behavior.",
         "operationId": "GroupController_list",
         "parameters": [
           {
@@ -254,6 +254,30 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "name": "minParticipants",
+            "required": false,
+            "in": "query",
+            "description": "Inclusive minimum synchronized participant count. Groups with an unknown count do not match.",
+            "schema": {
+              "minimum": 0,
+              "maximum": 2147483647,
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          {
+            "name": "maxParticipants",
+            "required": false,
+            "in": "query",
+            "description": "Inclusive maximum synchronized participant count. Groups with an unknown count do not match.",
+            "schema": {
+              "minimum": 0,
+              "maximum": 2147483647,
+              "format": "int32",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -263,6 +287,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GroupListDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
                 }
               }
             }
@@ -2082,6 +2116,35 @@
           "meta"
         ]
       },
+      "RuntimeErrorDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "CAMPAIGN_NOT_FOUND"
+          },
+          "message": {
+            "type": "string"
+          },
+          "fieldErrors": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
       "GroupDetailDto": {
         "type": "object",
         "properties": {
@@ -2274,35 +2337,6 @@
         "required": [
           "data",
           "meta"
-        ]
-      },
-      "RuntimeErrorDto": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string",
-            "example": "CAMPAIGN_NOT_FOUND"
-          },
-          "message": {
-            "type": "string"
-          },
-          "fieldErrors": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          },
-          "details": {
-            "type": "object",
-            "additionalProperties": true
-          }
-        },
-        "required": [
-          "code",
-          "message"
         ]
       },
       "CreateCampaignDto": {

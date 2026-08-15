@@ -17,6 +17,7 @@ interface GroupListResponse {
     id: string;
     name: string;
     description: string | null;
+    participantsCount: number | null;
     isActive: boolean;
     sendCapability: { status: string; invalidatedAt: string | null };
   }>;
@@ -61,6 +62,7 @@ describe('group list HTTP API', () => {
           : index === 30 ? 'Zulu Moderator Circle' : `Team ${number}`,
         description: index === 31 ? 'Regional MODERATOR desk' : index === 32 ? 'literal 100%_match' : `Description ${number}`,
         active: index < 33,
+        participantsCount: index === 27 || index === 35 ? null : index * 10,
         status,
         stale: index % 2 === 1,
       };
@@ -68,10 +70,11 @@ describe('group list HTTP API', () => {
     for (const group of groups) {
       await pool.query(
         `INSERT INTO gateway_groups
-           (session_id, id, name, description, is_active, send_capability,
+           (session_id, id, name, description, participants_count, is_active, send_capability,
             send_capability_reason, capability_checked_at, capability_invalidated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, 'TEST', now(), CASE WHEN $7 THEN now() ELSE NULL END)`,
-        [INTEGRATION_SESSION_ID, group.id, group.name, group.description, group.active, group.status, group.stale],
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'TEST', now(), CASE WHEN $8 THEN now() ELSE NULL END)`,
+        [INTEGRATION_SESSION_ID, group.id, group.name, group.description, group.participantsCount,
+          group.active, group.status, group.stale],
       );
     }
     await pool.query(
@@ -182,6 +185,118 @@ describe('group list HTTP API', () => {
 
     const empty = await request({ query: 'no such synchronized group' });
     expect(empty.body).toEqual({ data: [], meta: { total: 0, limit: 50, offset: 0 } });
+  });
+
+  it('supports inclusive minimum, maximum, exact, and combined participant bounds including zero', async () => {
+    const zero = await request({ minParticipants: '0' });
+    expect(zero.body.meta.total).toBe(32);
+    expect(zero.body.data.every(group => group.participantsCount !== null)).toBe(true);
+
+    const minimum = await request({ minParticipants: '50' });
+    expect(minimum.body.meta.total).toBe(27);
+    expect(minimum.body.data.every(group => group.participantsCount !== null && group.participantsCount >= 50)).toBe(true);
+    expect(minimum.body.data.some(group => group.participantsCount === 50)).toBe(true);
+
+    const maximum = await request({ maxParticipants: '50' });
+    expect(maximum.body.meta.total).toBe(6);
+    expect(maximum.body.data.every(group => group.participantsCount !== null && group.participantsCount <= 50)).toBe(true);
+    expect(maximum.body.data.some(group => group.participantsCount === 50)).toBe(true);
+
+    const exact = await request({ minParticipants: '100', maxParticipants: '100' });
+    expect(exact.body.data.map(group => group.participantsCount)).toEqual([100]);
+
+    const range = await request({ minParticipants: '50', maxParticipants: '100' });
+    expect(range.body.meta.total).toBe(6);
+    expect(range.body.data.map(group => group.participantsCount).sort((left, right) => left! - right!))
+      .toEqual([50, 60, 70, 80, 90, 100]);
+  });
+
+  it('keeps unknown participant counts only when no participant bound is present', async () => {
+    const omitted = await request();
+    expect(omitted.body.meta.total).toBe(33);
+    expect(omitted.body.data.some(group => group.participantsCount === null)).toBe(true);
+
+    const minimum = await request({ minParticipants: '0' });
+    const maximum = await request({ maxParticipants: '1000' });
+    expect(minimum.body.data.some(group => group.participantsCount === null)).toBe(false);
+    expect(maximum.body.data.some(group => group.participantsCount === null)).toBe(false);
+  });
+
+  it('ANDs participant bounds with search, capability, freshness, and explicit active state', async () => {
+    const search = await request({ query: 'moderator', minParticipants: '305', maxParticipants: '315' });
+    expect(search.body.data.map(group => group.name)).toEqual(['Team 31']);
+
+    const oneCapability = await request({ capabilityStatus: 'DENIED', minParticipants: '50', maxParticipants: '100' });
+    expect(oneCapability.body.meta.total).toBe(2);
+
+    const multipleCapabilities = await request({
+      capabilityStatus: 'DENIED,UNKNOWN', minParticipants: '50', maxParticipants: '100',
+    });
+    expect(multipleCapabilities.body.meta.total).toBe(4);
+
+    const freshness = await request({
+      capabilityFreshness: 'STALE', minParticipants: '50', maxParticipants: '100',
+    });
+    expect(freshness.body.meta.total).toBe(3);
+
+    const active = await request({ isActive: 'true', minParticipants: '330', maxParticipants: '350' });
+    expect(active.body.meta.total).toBe(0);
+    const inactive = await request({ isActive: 'false', minParticipants: '330', maxParticipants: '350' });
+    expect(inactive.body.meta.total).toBe(2);
+    expect(inactive.body.data.every(group => !group.isActive)).toBe(true);
+
+    const all = await request({
+      query: 'team', capabilityStatus: 'DENIED,UNKNOWN', capabilityFreshness: 'STALE',
+      isActive: 'true', minParticipants: '50', maxParticipants: '200',
+    });
+    expect(all.body.meta.total).toBe(6);
+  });
+
+  it('applies participant filters before stable pagination and reports the filtered total', async () => {
+    const pages = await Promise.all([0, 7, 14].map(offset => request({
+      minParticipants: '50', maxParticipants: '250', limit: '7', offset: String(offset),
+    })));
+    expect(pages.every(page => page.body.meta.total === 21)).toBe(true);
+    const ids = pages.flatMap(page => page.body.data.map(group => group.id));
+    expect(ids).toHaveLength(21);
+    expect(new Set(ids).size).toBe(21);
+    const ordered = pages.flatMap(page => page.body.data.map(group => [group.name, group.id] as const));
+    expect(ordered).toEqual([...ordered].sort((left, right) =>
+      left[0].localeCompare(right[0]) || left[1].localeCompare(right[1]),
+    ));
+  });
+
+  it.each([
+    ['minParticipants', '-1'],
+    ['maxParticipants', '-1'],
+    ['minParticipants', '1.5'],
+    ['maxParticipants', '1.5'],
+    ['minParticipants', 'NaN'],
+    ['maxParticipants', 'not-a-number'],
+    ['minParticipants', '2147483648'],
+    ['maxParticipants', '2147483648'],
+  ] as const)('returns a typed error for invalid %s=%s', async (field, value) => {
+    const result = await request({ [field]: value });
+    expect(result.response.status).toBe(400);
+    expect(result.body as unknown).toMatchObject({
+      code: 'GROUP_FILTER_PARTICIPANTS_INVALID',
+      fieldErrors: { [field]: expect.any(Array) },
+      details: {},
+    });
+  });
+
+  it('returns a typed error when the participant range is inverted', async () => {
+    const result = await request({ minParticipants: '101', maxParticipants: '100' });
+    expect(result.response.status).toBe(400);
+    expect(result.body as unknown).toEqual({
+      code: 'GROUP_FILTER_PARTICIPANTS_RANGE_INVALID',
+      message: 'Participant count filter range is invalid.',
+      fieldErrors: {
+        minParticipants: ['Must be less than or equal to maxParticipants.'],
+        maxParticipants: ['Must be greater than or equal to minParticipants.'],
+      },
+      details: {},
+    });
   });
 
   it.each<Record<string, string>>([

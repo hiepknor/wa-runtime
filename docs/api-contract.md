@@ -73,7 +73,7 @@ GET  /sessions/{id}
 POST /sessions/{id}/sync
 GET  /sessions/{id}/sync-runs/{runId}
 
-GET  /groups?sessionId={sessionId}&limit=50&offset=0&query={search}&capabilityStatus={statuses}&capabilityFreshness={freshness}&isActive={boolean}
+GET  /groups?sessionId={sessionId}&limit=50&offset=0&query={search}&capabilityStatus={statuses}&capabilityFreshness={freshness}&isActive={boolean}&minParticipants={integer}&maxParticipants={integer}
 GET  /groups/{id}?sessionId={sessionId}
 GET  /groups/{id}/members?sessionId={sessionId}&limit=50&offset=0&query={search}
 POST /groups/{id}/refresh-capability?sessionId={sessionId}
@@ -86,7 +86,11 @@ name, ID and description. `capabilityStatus` and `capabilityFreshness` are comma
 values within one parameter are ORed and different filter types are ANDed. `CURRENT` means
 `sendCapability.invalidatedAt` is null and `STALE` means an invalidation is pending. Omitting
 `isActive` preserves the active-only behavior. Group list results use name then group ID ordering,
-and `meta.total` counts the complete filtered dataset before pagination.
+and `meta.total` counts the complete filtered dataset before pagination. Participant-count bounds
+are inclusive non-negative 32-bit integers, matching the persisted count type. When either bound is
+present, records whose synchronized `participantsCount` is unknown do not match; zero is a valid
+bound. Invalid bounds return HTTP 400 `GROUP_FILTER_PARTICIPANTS_INVALID`, while an inverted range returns
+`GROUP_FILTER_PARTICIPANTS_RANGE_INVALID`.
 
 Group detail contains metadata only; synchronized members are fetched separately with database-
 backed pagination and optional literal substring search across display name, phone number and

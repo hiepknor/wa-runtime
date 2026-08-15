@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { GroupQueryDto } from '../../contracts/groups/group-query.dto';
 import { GatewayRepository } from './gateway.repository';
 import { SessionScopeService } from './session-scope.service';
@@ -12,6 +12,18 @@ export class GroupService {
 
   async list(query: GroupQueryDto) {
     this.sessions.assertVisible(query.sessionId);
+    if (query.minParticipants !== undefined && query.maxParticipants !== undefined
+      && query.minParticipants > query.maxParticipants) {
+      throw new BadRequestException({
+        code: 'GROUP_FILTER_PARTICIPANTS_RANGE_INVALID',
+        message: 'Participant count filter range is invalid.',
+        fieldErrors: {
+          minParticipants: ['Must be less than or equal to maxParticipants.'],
+          maxParticipants: ['Must be greater than or equal to minParticipants.'],
+        },
+        details: {},
+      });
+    }
     const result = await this.repository.listGroups(query);
     return { data: result.data, meta: { total: result.total, limit: query.limit, offset: query.offset } };
   }

@@ -66,9 +66,10 @@ PostgreSQL is the source of truth. It stores:
 
 Group browsing is served directly from `gateway_groups`. Optional literal substring search across
 name, ID and description uses PostgreSQL trigram indexes; capability, freshness and active filters
-are applied in the same database predicate used by both the page and count queries. Capability
-freshness is authoritative when `capability_invalidated_at` is null (current) or non-null (stale).
-Group members are not joined into list queries.
+and inclusive participant-count bounds are applied in the same database predicate used by both the
+page and count queries. Unknown participant counts are excluded only when a count bound is present.
+Capability freshness is authoritative when `capability_invalidated_at` is null (current) or non-null
+(stale). Group members are not joined into list queries.
 
 Business state is committed before queue work is published. If Redis is unavailable after a commit,
 the scheduler retries publication from the durable row. Webhooks, message jobs and sync runs use

@@ -671,6 +671,8 @@ export class GatewayRepository {
         searchPattern,
         statuses,
         freshness,
+        query.minParticipants ?? null,
+        query.maxParticipants ?? null,
       ];
       const predicate = `session_id = $1 AND is_active = $2
         AND ($4::text IS NULL
@@ -681,7 +683,9 @@ export class GatewayRepository {
         AND ($5::group_send_capability[] IS NULL OR send_capability = ANY($5))
         AND ($6::text[] IS NULL
           OR ('CURRENT' = ANY($6) AND capability_invalidated_at IS NULL)
-          OR ('STALE' = ANY($6) AND capability_invalidated_at IS NOT NULL))`;
+          OR ('STALE' = ANY($6) AND capability_invalidated_at IS NOT NULL))
+        AND ($7::integer IS NULL OR participants_count >= $7::integer)
+        AND ($8::integer IS NULL OR participants_count <= $8::integer)`;
       const rows = await client.query<GroupRow>(
         `SELECT session_id, id, name, description, owner_id, linked_parent_id,
            participants_count, is_admin, is_read_only, is_announce, settings_locked, is_active,
@@ -692,7 +696,7 @@ export class GatewayRepository {
          FROM gateway_groups
          WHERE ${predicate}
          ORDER BY name ASC, id ASC
-         LIMIT $7 OFFSET $8`,
+         LIMIT $9 OFFSET $10`,
         [...values, query.limit, query.offset],
       );
       const count = await client.query<{ count: string }>(
