@@ -16,6 +16,7 @@ import { WebhookRegistrationReconciliationTick } from '../webhooks/webhook-regis
 import { ContactMemberIdentityBackfillTick } from '../contacts/contact-member-identity-backfill.tick';
 import { ContactResolutionTick } from '../contacts/contact-resolution.tick';
 import { ContactProjectionTick } from '../contacts/contact-projection.tick';
+import { SchedulerLeadershipService } from './scheduler-leadership.service';
 
 @Injectable()
 export class SchedulerRunnerService {
@@ -36,9 +37,12 @@ export class SchedulerRunnerService {
     private readonly contactMemberIdentityBackfill: ContactMemberIdentityBackfillTick,
     private readonly contactResolution: ContactResolutionTick,
     private readonly contactProjection: ContactProjectionTick,
+    private readonly leadership: SchedulerLeadershipService,
   ) {}
 
   async run(): Promise<void> {
+    await this.leadership.acquire();
+    this.logger.log({ event: 'scheduler.leadership.acquired' });
     const gatewayTick = this.tick(
       'gateway', this.config.GATEWAY_SYNC_POLL_INTERVAL_MS, 60_000, () => this.gateway.run(),
     );
@@ -85,18 +89,37 @@ export class SchedulerRunnerService {
     const stop = () => resolveStop?.();
     process.once('SIGTERM', stop);
     process.once('SIGINT', stop);
-    const heartbeat = setInterval(() => void this.publishHeartbeat(), RUNTIME_HEARTBEAT_INTERVAL_MS);
-    heartbeat.unref();
-    await this.publishHeartbeat();
-    for (const tick of ticks) tick.start();
-    await this.gatewayListener.start(() => gatewayTick.execute());
+    let heartbeat: NodeJS.Timeout | undefined;
+    let listenerStarted = false;
+    try {
+      heartbeat = setInterval(() => void this.publishHeartbeat(), RUNTIME_HEARTBEAT_INTERVAL_MS);
+      heartbeat.unref();
+      await this.publishHeartbeat();
+      for (const tick of ticks) tick.start();
+      await this.gatewayListener.start(() => gatewayTick.execute());
+      listenerStarted = true;
 
-    await stopped;
-    await this.gatewayListener.stop();
-    await Promise.all(ticks.map(tick => tick.stop()));
-    clearInterval(heartbeat);
-    process.removeListener('SIGTERM', stop);
-    process.removeListener('SIGINT', stop);
+      const leadershipFailure = await Promise.race([
+        stopped.then(() => null),
+        this.leadership.waitForLoss(),
+      ]);
+      if (leadershipFailure) throw leadershipFailure;
+    } finally {
+      const cleanup = await Promise.allSettled([
+        ...(listenerStarted ? [this.gatewayListener.stop()] : []),
+        ...ticks.map(tick => tick.stop()),
+      ]);
+      for (const result of cleanup) {
+        if (result.status === 'rejected') {
+          this.logger.error({ event: 'scheduler.shutdown.failed', error: result.reason });
+        }
+      }
+      if (heartbeat) clearInterval(heartbeat);
+      process.removeListener('SIGTERM', stop);
+      process.removeListener('SIGINT', stop);
+      await this.leadership.release();
+      this.logger.log({ event: 'scheduler.leadership.released' });
+    }
   }
 
   private tick(

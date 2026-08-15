@@ -14,6 +14,7 @@ import { SchedulerRunnerService } from './scheduler-runner.service';
 import { WebhookDispatchTick } from './webhook-dispatch.tick';
 import { GatewayWorkListenerService } from './gateway-work-listener.service';
 import { ContactsModule } from '../contacts/contacts.module';
+import { SchedulerLeadershipService } from './scheduler-leadership.service';
 
 @Module({
   imports: [DatabaseModule, QueueModule, MessagesModule, WebhooksModule, GatewayModule, CampaignsModule, ContactsModule],
@@ -25,6 +26,7 @@ import { ContactsModule } from '../contacts/contacts.module';
     CampaignLifecycleAuditTick,
     DataRetentionTick,
     SchedulerRunnerService,
+    SchedulerLeadershipService,
     GatewayWorkListenerService,
   ],
   exports: [SchedulerRunnerService],

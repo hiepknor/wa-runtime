@@ -6,8 +6,11 @@ import { JsonLogger } from '../core/observability/json-logger';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.createApplicationContext(SchedulerAppModule, { logger: new JsonLogger('scheduler') });
-  await app.get(SchedulerRunnerService).run();
-  await app.close();
+  try {
+    await app.get(SchedulerRunnerService).run();
+  } finally {
+    await app.close();
+  }
 }
 
 bootstrap().catch(error => {
