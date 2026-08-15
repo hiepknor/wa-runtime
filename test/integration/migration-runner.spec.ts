@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -60,5 +60,13 @@ describe('migration runner', () => {
       'SELECT checksum FROM schema_migrations WHERE name = $1', [migrationName],
     );
     expect(record.rows[0]?.checksum).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it('fails closed when an applied migration file is removed', async () => {
+    await unlink(resolve(directory, migrationName));
+
+    await expect(runMigrations(pool, directory)).rejects.toThrow(
+      `Applied migration file missing: ${migrationName}`,
+    );
   });
 });

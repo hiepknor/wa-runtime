@@ -29,6 +29,13 @@ export async function runMigrations(pool: Pool, directory: string): Promise<Migr
     await client.query('ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum text');
 
     const files = (await readdir(directory)).filter(name => name.endsWith('.sql')).sort();
+    const availableFiles = new Set(files);
+    const recorded = await client.query<{ name: string }>(
+      "SELECT name FROM schema_migrations WHERE name LIKE '%.sql' ORDER BY name",
+    );
+    const missing = recorded.rows.find(row => !availableFiles.has(row.name));
+    if (missing) throw new Error(`Applied migration file missing: ${missing.name}`);
+
     for (const file of files) {
       const contents = await readFile(resolve(directory, file), 'utf8');
       const currentChecksum = checksum(contents);
