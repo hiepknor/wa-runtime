@@ -10,8 +10,9 @@ scheduler.
 attempt fencing as the target model. Database-owned retry and lease-token fencing are implemented
 for webhook processing, gateway synchronization, campaign preparation and capability refresh.
 Session-scoped sync epochs now fence full-sync domain writes, and PostgreSQL session leases serialize
-outbound sends. Production remains restricted to one scheduler and one worker until the
-multi-process staging gate passes.
+outbound sends. The scheduler holds a dedicated PostgreSQL advisory-lock connection before starting
+ticks, listeners or heartbeats. A second scheduler fails fast; losing the owning connection stops
+the active runner. Worker replica count remains an operator-controlled rollout decision.
 
 ## Processing guarantees
 
@@ -83,6 +84,11 @@ The scheduler isolates failures between message, webhook, gateway and campaign t
 runner model gives each tick an interval, timeout, no-overlap guard and failure backoff. Feature
 processors through repositories—not Bull event listeners or executable entrypoints—own state
 transitions and side effects.
+
+Scheduler leadership is process-wide rather than tick-specific. The advisory lock prevents two
+replicas from concurrently publishing the same durable work, while repository leases and unique
+job IDs remain the per-item correctness fences. Leadership is deliberately fail-fast instead of
+automatic in-process standby promotion; the process supervisor owns restart and retry policy.
 
 A tick timeout emits telemetry but does not pretend to cancel an in-flight SQL or queue operation.
 The tick remains guarded until that operation settles, then schedules bounded exponential backoff.

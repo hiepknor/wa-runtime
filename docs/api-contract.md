@@ -39,6 +39,16 @@ distributed mobile binary must never embed it: introduce user authentication wit
 tokens, authorization scopes and a trusted backend/access layer first. No client may persist an
 OpenWA key in configuration, logs or local state.
 
+## Error envelope
+
+Feature-owned failures use stable domain codes such as `CAMPAIGN_*`, `GROUP_*` and `GROUP_LIST_*`.
+All remaining Nest HTTP exceptions are normalized to `RuntimeErrorDto`; authentication,
+authorization, not-found, conflict, validation, rate-limit and service-unavailable responses never
+fall back to Nest's default `{statusCode,error,message}` body. HTTP 400 validation failures include
+field-grouped `fieldErrors`, and every normalized fallback includes an empty `details` object.
+Unexpected exceptions return a non-diagnostic `INTERNAL_ERROR` body and are logged server-side.
+Clients must branch on `code` and HTTP status, not parse the human-readable `message`.
+
 ## Idempotency
 
 These creation endpoints require an `Idempotency-Key` header:

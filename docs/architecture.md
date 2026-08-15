@@ -18,8 +18,8 @@ The boundary is intentional:
 - WhatsApp remains the external authority for account, group and message-delivery facts.
 
 Clients must not receive `OPENWA_API_KEY`, call OpenWA endpoints or depend on upstream response
-shapes. Contacts are not part of the current product boundary; they can be added later without
-changing the group contract.
+shapes. The session-scoped Contacts projection enriches group-member identities without exposing
+OpenWA contact payloads or changing ownership of the group contract.
 
 The current `X-Runtime-Key` mechanism is suitable for development and trusted internal consumers.
 It must never be embedded in publicly distributed mobile binaries or browser JavaScript. Before
@@ -49,8 +49,9 @@ tick; PostgreSQL remains the work-state authority.
 The accepted target execution model is defined by
 [ADR 001](adr/001-postgresql-owned-durable-work-execution.md). Its implementation is in progress.
 Database-owned retry, lease-token fencing, session sync epochs and PostgreSQL outbound-session
-leases are implemented. Production remains restricted to one scheduler and one worker until the
-multi-process staging gate passes.
+leases are implemented. A PostgreSQL advisory lock allows exactly one scheduler to publish ticks
+and its heartbeat; a second scheduler fails fast, and loss of the lock connection terminates the
+active runner. Worker replica count remains an operator-controlled rollout decision.
 
 ## Infrastructure responsibilities
 

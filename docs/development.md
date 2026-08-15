@@ -85,8 +85,9 @@ docker compose logs --tail=100 migrate api worker scheduler
 
 Migration files are applied in filename order under a PostgreSQL advisory lock and recorded in
 `schema_migrations` with a SHA-256 checksum. Legacy records receive their checksum on the first run
-of the hardened migrator; subsequent content drift fails closed. Never edit a migration that has
-already been applied; add the next numbered migration.
+of the hardened migrator; subsequent content drift or removal of an applied `.sql` file fails
+closed. Never edit, rename or delete a migration that has already been applied; add the next numbered
+migration.
 
 ## Host-side npm commands
 
@@ -113,6 +114,7 @@ npm run build
 npm run check
 npm run test:integration
 npm run check:all
+npm run contract:check
 ```
 
 `npm test` runs only the fast unit suite. `npm run test:integration` builds the production artifact,
@@ -129,8 +131,13 @@ npm run dev:worker
 npm run dev:scheduler
 ```
 
-Do not run host and Docker schedulers/workers simultaneously against the same database unless the
-test explicitly targets multi-process concurrency.
+Only one scheduler may run against a database. A second scheduler exits because it cannot acquire
+the PostgreSQL leadership lock. Do not run host and Docker workers simultaneously unless the test
+explicitly targets multi-process concurrency.
+
+Pull requests and pushes to `main` run `check:all`, regenerate and verify the committed Runtime
+contract, and reject whitespace errors. The integration gate requires Docker because it provisions
+isolated PostgreSQL and Redis containers.
 
 ### Repeatable 500-target dry-run load test
 
