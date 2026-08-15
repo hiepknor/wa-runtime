@@ -55,9 +55,11 @@ GET /api/v1/health/live
 GET /api/v1/health/ready
 ```
 
-Liveness proves that the API process can answer. Readiness checks PostgreSQL, Redis and fresh TTL
-heartbeats from worker and scheduler, then reports the live-send interlock, pinned OpenWA release
-and allowlisted-session count. It does not prove that OpenWA is currently paired.
+Liveness proves that the API process can answer. Readiness requires PostgreSQL and Redis, then
+reports worker and scheduler heartbeat state independently as `healthy` or `degraded`, together with
+the live-send interlock, pinned OpenWA release and allowlisted-session count. A missing background
+heartbeat does not remove the API from routing because PostgreSQL still owns durable intent. The
+probe does not prove that OpenWA is currently paired.
 
 ## Manual diagnosis
 

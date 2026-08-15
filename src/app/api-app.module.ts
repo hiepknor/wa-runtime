@@ -5,6 +5,7 @@ import { DatabaseModule } from '../core/database/database.module';
 import { QueueModule } from '../core/queue/queue.module';
 import { RequestContextMiddleware } from '../core/observability/request-context.middleware';
 import { RuntimeHttpExceptionFilter } from '../core/http/runtime-http-exception.filter';
+import { RuntimeConfigModule } from '../core/config/runtime-config.module';
 import { OpenWAModule } from '../integrations/openwa/openwa.module';
 import { CampaignsModule } from '../modules/campaigns/campaigns.module';
 import { GatewayModule } from '../modules/gateway/gateway.module';
@@ -16,6 +17,7 @@ import { WebhooksModule } from '../modules/webhooks/webhooks.module';
 
 @Module({
   imports: [
+    RuntimeConfigModule,
     DatabaseModule,
     QueueModule,
     OpenWAModule,

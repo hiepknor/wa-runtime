@@ -1,9 +1,10 @@
-import { BadRequestException, Controller, Headers, Post, Req, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Controller, Headers, Inject, Post, Req, UnauthorizedException } from '@nestjs/common';
 import { ApiExcludeEndpoint, ApiTags } from '@nestjs/swagger';
 import type { RawBodyRequest } from '@nestjs/common';
 import type { Request } from 'express';
 import { Public } from '../../core/auth/public.decorator';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 import { QueueService } from '../../core/queue/queue.service';
 import { stableQueueJobId } from '../../core/queue/queue-job-id';
 import { SessionScopeService } from '../gateway/session-scope.service';
@@ -17,6 +18,7 @@ export class WebhookController {
     private readonly repository: WebhookRepository,
     private readonly queues: QueueService,
     private readonly sessions: SessionScopeService,
+    @Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig(),
   ) {}
 
   @Public()
@@ -26,7 +28,7 @@ export class WebhookController {
     @Req() request: RawBodyRequest<Request>,
     @Headers('x-openwa-signature') signature: string | undefined,
   ) {
-    if (!request.rawBody || !verifyOpenWASignature(request.rawBody, signature, runtimeConfig().OPENWA_WEBHOOK_SECRET)) {
+    if (!request.rawBody || !verifyOpenWASignature(request.rawBody, signature, this.config.OPENWA_WEBHOOK_SECRET)) {
       throw new UnauthorizedException('Invalid OpenWA webhook signature');
     }
 

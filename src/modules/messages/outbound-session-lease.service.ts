@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { Injectable } from '@nestjs/common';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { Inject, Injectable } from '@nestjs/common';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 import { MessageJobRepository } from './message-job.repository';
 import { OutboundSessionLeaseRepository } from './outbound-session-lease.repository';
 
@@ -9,11 +10,10 @@ export class OutboundSessionLeaseLostError extends Error {}
 
 @Injectable()
 export class OutboundSessionLeaseService {
-  private readonly config = runtimeConfig();
-
   constructor(
     private readonly leases: OutboundSessionLeaseRepository,
     private readonly messages: MessageJobRepository,
+    @Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig(),
   ) {}
 
   async withLease<T>(

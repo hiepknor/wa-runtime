@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { Inject, Injectable } from '@nestjs/common';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 import type { CampaignExecutionMode } from '../../contracts/campaigns/campaign-preflight.dto';
 import type { CampaignTargetDto } from '../../contracts/campaigns/campaign-target.dto';
 import { evaluateCampaignPreflight } from './campaign-preflight';
@@ -7,9 +8,10 @@ import { GatewayRepository } from '../gateway/gateway.repository';
 
 @Injectable()
 export class CampaignPreflightService {
-  private readonly config = runtimeConfig();
-
-  constructor(private readonly gateway: GatewayRepository) {}
+  constructor(
+    private readonly gateway: GatewayRepository,
+    @Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig(),
+  ) {}
 
   async evaluate(input: {
     executionMode: CampaignExecutionMode;

@@ -1,5 +1,6 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 import type { CampaignExecutionMode } from '../../contracts/campaigns/campaign-preflight.dto';
 import type { CreateCampaignRunDto } from '../../contracts/campaigns/campaign-run.dto';
 import { CampaignPreflightService } from './campaign-preflight.service';
@@ -9,12 +10,11 @@ import { CampaignError } from './campaign-error';
 
 @Injectable()
 export class CampaignRunService {
-  private readonly config = runtimeConfig();
-
   constructor(
     private readonly repository: CampaignRunRepository,
     private readonly campaigns: CampaignService,
     private readonly preflights: CampaignPreflightService,
+    @Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig(),
   ) {}
 
   async create(campaignId: string, rawIdempotencyKey: string | undefined, dto: CreateCampaignRunDto) {

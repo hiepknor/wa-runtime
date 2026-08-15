@@ -108,6 +108,7 @@ Then use:
 ```bash
 npm ci
 npm run clean
+npm run architecture:check
 npm run typecheck
 npm test
 npm run build

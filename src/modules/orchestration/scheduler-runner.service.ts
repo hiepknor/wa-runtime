@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 import { withCorrelationContext } from '../../core/observability/correlation-context';
 import { RUNTIME_HEARTBEAT_INTERVAL_MS } from '../../core/queue/runtime-heartbeat';
 import { QueueService } from '../../core/queue/queue.service';
@@ -21,8 +22,6 @@ import { SchedulerLeadershipService } from './scheduler-leadership.service';
 @Injectable()
 export class SchedulerRunnerService {
   private readonly logger = new Logger(SchedulerRunnerService.name);
-  private readonly config = runtimeConfig();
-
   constructor(
     private readonly messages: MessageDispatchTick,
     private readonly webhooks: WebhookDispatchTick,
@@ -38,6 +37,7 @@ export class SchedulerRunnerService {
     private readonly contactResolution: ContactResolutionTick,
     private readonly contactProjection: ContactProjectionTick,
     private readonly leadership: SchedulerLeadershipService,
+    @Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig(),
   ) {}
 
   async run(): Promise<void> {

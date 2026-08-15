@@ -1,16 +1,17 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../../core/database/database.service';
 import { GatewayGroupIntentRepository } from '../gateway/gateway-group-intent.repository';
 import type { RuntimeEvent } from './webhook-normalizer';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 
 @Injectable()
 export class RuntimeEventRepository {
   private readonly logger = new Logger(RuntimeEventRepository.name);
-  private readonly config = runtimeConfig();
   constructor(
     private readonly database: DatabaseService,
     private readonly groupIntents: GatewayGroupIntentRepository,
+    @Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig(),
   ) {}
 
   async store(event: RuntimeEvent): Promise<void> {

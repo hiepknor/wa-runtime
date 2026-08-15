@@ -1,12 +1,19 @@
 import { Logger } from '@nestjs/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const connections: Array<{ on: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }> = [];
+const connections: Array<{
+  on: ReturnType<typeof vi.fn>;
+  disconnect: ReturnType<typeof vi.fn>;
+  ping: ReturnType<typeof vi.fn>;
+  mget: ReturnType<typeof vi.fn>;
+}> = [];
 
 vi.mock('ioredis', () => ({
   default: class RedisMock {
     on = vi.fn();
     disconnect = vi.fn();
+    ping = vi.fn().mockResolvedValue('PONG');
+    mget = vi.fn().mockResolvedValue([null, null]);
     status = 'ready';
 
     constructor() {
@@ -47,6 +54,23 @@ describe('QueueService Redis connection logging', () => {
       event: 'redis.connection.error', connection: 'queue', code: 'ECONNREFUSED',
     });
     expect(JSON.stringify(warn.mock.calls)).not.toContain('redis://');
+    await service.onApplicationShutdown();
+  });
+
+  it('keeps Redis readiness separate from background process health', async () => {
+    const { QueueService } = await import('../../src/core/queue/queue.service');
+    const service = new QueueService();
+
+    await expect(service.readiness()).resolves.toEqual({ redis: true });
+    await expect(service.runtimeProcessHealth()).resolves.toEqual({
+      worker: 'degraded', scheduler: 'degraded',
+    });
+
+    const healthConnection = connections[1]!;
+    healthConnection.mget.mockResolvedValueOnce(['worker-heartbeat', 'scheduler-heartbeat']);
+    await expect(service.runtimeProcessHealth()).resolves.toEqual({
+      worker: 'healthy', scheduler: 'healthy',
+    });
     await service.onApplicationShutdown();
   });
 });

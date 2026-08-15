@@ -1,10 +1,15 @@
-import { Injectable, OnApplicationShutdown } from '@nestjs/common';
+import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
-import { runtimeConfig } from '../config/runtime-config';
+import { runtimeConfig, type RuntimeConfig } from '../config/runtime-config';
+import { RUNTIME_CONFIG } from '../config/runtime-config.module';
 
 @Injectable()
 export class DatabaseService implements OnApplicationShutdown {
-  readonly pool = new Pool({ connectionString: runtimeConfig().DATABASE_URL, max: 10 });
+  readonly pool: Pool;
+
+  constructor(@Inject(RUNTIME_CONFIG) config: RuntimeConfig = runtimeConfig()) {
+    this.pool = new Pool({ connectionString: config.DATABASE_URL, max: 10 });
+  }
 
   query<T extends QueryResultRow>(text: string, values: unknown[] = []) {
     return this.pool.query<T>(text, values);

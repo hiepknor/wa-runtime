@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { BadRequestException, ForbiddenException, HttpStatus, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { isISO8601, isUUID } from 'class-validator';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 import type { CampaignQueryDto } from '../../contracts/campaigns/campaign-query.dto';
 import type { CampaignPreflightRequestDto } from '../../contracts/campaigns/campaign-preflight.dto';
 import type { CreateCampaignDto } from '../../contracts/campaigns/create-campaign.dto';
@@ -13,11 +14,10 @@ import { CampaignError } from './campaign-error';
 
 @Injectable()
 export class CampaignService {
-  private readonly config = runtimeConfig();
-
   constructor(
     private readonly repository: CampaignRepository,
     private readonly preflights: CampaignPreflightService,
+    @Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig(),
   ) {}
 
   async create(dto: CreateCampaignDto, rawIdempotencyKey: string | undefined) {

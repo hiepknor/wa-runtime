@@ -2506,7 +2506,14 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthLiveDto"
+                }
+              }
+            }
           }
         },
         "tags": [
@@ -2520,7 +2527,24 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthReadyDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthNotReadyDto"
+                }
+              }
+            }
           }
         },
         "tags": [
@@ -4268,6 +4292,133 @@
           "sessionId",
           "recipientId",
           "text"
+        ]
+      },
+      "HealthLiveDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ]
+          },
+          "service": {
+            "type": "string",
+            "enum": [
+              "wa-runtime"
+            ]
+          },
+          "version": {
+            "type": "string",
+            "example": "0.1.0"
+          }
+        },
+        "required": [
+          "status",
+          "service",
+          "version"
+        ]
+      },
+      "HealthDependenciesDto": {
+        "type": "object",
+        "properties": {
+          "postgres": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "redis": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "postgres",
+          "redis"
+        ]
+      },
+      "RuntimeProcessHealthDto": {
+        "type": "object",
+        "properties": {
+          "worker": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "degraded"
+            ]
+          },
+          "scheduler": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "degraded"
+            ]
+          }
+        },
+        "required": [
+          "worker",
+          "scheduler"
+        ]
+      },
+      "HealthReadyDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready"
+            ]
+          },
+          "dependencies": {
+            "$ref": "#/components/schemas/HealthDependenciesDto"
+          },
+          "processes": {
+            "$ref": "#/components/schemas/RuntimeProcessHealthDto"
+          },
+          "liveSendsEnabled": {
+            "type": "boolean"
+          },
+          "openwaRelease": {
+            "type": "string",
+            "example": "0.18.0"
+          },
+          "allowedSessionCount": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "status",
+          "dependencies",
+          "processes",
+          "liveSendsEnabled",
+          "openwaRelease",
+          "allowedSessionCount"
+        ]
+      },
+      "HealthNotReadyDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_ready"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "Runtime dependency unavailable"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "reason"
         ]
       },
       "InboundMessageDto": {

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 import { DatabaseService } from '../../core/database/database.service';
 import { pendingGroupName, type OpenWAGroupSummary } from '../../integrations/openwa/openwa.client';
 import type { GatewaySyncMode } from '../../contracts/sessions/sync-request.dto';
@@ -27,11 +28,10 @@ const snapshotFingerprint = (groups: OpenWAGroupSummary[]): string => createHash
 
 @Injectable()
 export class GatewaySyncItemRepository {
-  private readonly config = runtimeConfig();
-
   constructor(
     private readonly database: DatabaseService,
     private readonly rateLimits: GatewaySyncRateLimitRepository = new GatewaySyncRateLimitRepository(database),
+    @Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig(),
   ) {}
 
   async publishDiscovery(

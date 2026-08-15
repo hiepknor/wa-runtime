@@ -19,9 +19,12 @@ describe('HealthController readiness', () => {
     expect(controller.live()).toEqual({ status: 'ok', service: 'wa-runtime', version: '0.1.0' });
   });
 
-  it('requires PostgreSQL, Redis, worker and scheduler', async () => {
+  it('requires PostgreSQL and Redis and reports healthy background processes', async () => {
     const database = { query: vi.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] }) };
-    const queues = { readiness: vi.fn().mockResolvedValue({ redis: true, worker: true, scheduler: true }) };
+    const queues = {
+      readiness: vi.fn().mockResolvedValue({ redis: true }),
+      runtimeProcessHealth: vi.fn().mockResolvedValue({ worker: 'healthy', scheduler: 'healthy' }),
+    };
     const controller = new HealthController(
       database as unknown as DatabaseService,
       queues as unknown as QueueService,
@@ -29,19 +32,55 @@ describe('HealthController readiness', () => {
 
     await expect(controller.ready()).resolves.toMatchObject({
       status: 'ready',
-      dependencies: { postgres: true, redis: true, worker: true, scheduler: true },
+      dependencies: { postgres: true, redis: true },
+      processes: { worker: 'healthy', scheduler: 'healthy' },
     });
   });
 
-  it('returns unavailable when a process heartbeat is missing', async () => {
+  it('remains ready and reports degraded background processes when heartbeats are missing', async () => {
+    const database = { query: vi.fn().mockResolvedValue({ rows: [] }) };
+    const queues = {
+      readiness: vi.fn().mockResolvedValue({ redis: true }),
+      runtimeProcessHealth: vi.fn().mockResolvedValue({ worker: 'degraded', scheduler: 'degraded' }),
+    };
+    const controller = new HealthController(
+      database as unknown as DatabaseService,
+      queues as unknown as QueueService,
+    );
+
+    await expect(controller.ready()).resolves.toMatchObject({
+      status: 'ready',
+      dependencies: { postgres: true, redis: true },
+      processes: { worker: 'degraded', scheduler: 'degraded' },
+    });
+  });
+
+  it('returns unavailable when Redis is unavailable', async () => {
     vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     const database = { query: vi.fn().mockResolvedValue({ rows: [] }) };
-    const queues = { readiness: vi.fn().mockRejectedValue(new Error('Runtime process heartbeat missing: worker')) };
+    const queues = {
+      readiness: vi.fn().mockRejectedValue(new Error('Redis unavailable')),
+      runtimeProcessHealth: vi.fn(),
+    };
     const controller = new HealthController(
       database as unknown as DatabaseService,
       queues as unknown as QueueService,
     );
 
     await expect(controller.ready()).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(queues.runtimeProcessHealth).not.toHaveBeenCalled();
+  });
+
+  it('returns unavailable when PostgreSQL is unavailable', async () => {
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const database = { query: vi.fn().mockRejectedValue(new Error('PostgreSQL unavailable')) };
+    const queues = { readiness: vi.fn(), runtimeProcessHealth: vi.fn() };
+    const controller = new HealthController(
+      database as unknown as DatabaseService,
+      queues as unknown as QueueService,
+    );
+
+    await expect(controller.ready()).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(queues.readiness).not.toHaveBeenCalled();
   });
 });

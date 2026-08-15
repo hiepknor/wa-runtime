@@ -1,15 +1,15 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 import { OpenWAClient } from '../../integrations/openwa/openwa.client';
 import { GatewayRepository } from './gateway.repository';
 
 @Injectable()
 export class SessionService {
-  private readonly config = runtimeConfig();
-
   constructor(
     private readonly repository: GatewayRepository,
     private readonly openwa: OpenWAClient,
+    @Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig(),
   ) {}
 
   async list() {

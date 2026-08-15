@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 import { DatabaseService } from '../../core/database/database.service';
 import { OpenWAClient, OpenWAHttpError } from '../../integrations/openwa/openwa.client';
 import { GatewayRepository } from '../gateway/gateway.repository';
@@ -19,8 +20,6 @@ const isDefinitiveUpstreamRejection = (error: unknown): boolean =>
 
 @Injectable()
 export class MessageJobProcessorService {
-  private readonly config = runtimeConfig();
-
   constructor(
     private readonly database: DatabaseService,
     private readonly messages: MessageJobRepository,
@@ -28,6 +27,7 @@ export class MessageJobProcessorService {
     private readonly openwa: OpenWAClient,
     private readonly gateway: GatewayRepository,
     private readonly outboundSessions: OutboundSessionLeaseService,
+    @Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig(),
   ) {}
 
   async process(payload: MessageSendQueuePayload): Promise<unknown> {

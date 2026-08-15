@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { z } from 'zod';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 
 export type OpenWASessionStatus =
   | 'created'
@@ -132,8 +133,9 @@ export class OpenWAResponseValidationError extends Error {
 
 @Injectable()
 export class OpenWAClient {
-  private readonly config = runtimeConfig();
   private readonly logger = new Logger(OpenWAClient.name);
+
+  constructor(@Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig()) {}
 
   private async request<T>(operation: string, path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
     const started = performance.now();

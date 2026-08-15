@@ -8,7 +8,8 @@ import { WebhookProcessorService } from './webhook-processor.service';
 import { ContactsModule } from '../contacts/contacts.module';
 import { OpenWAModule } from '../../integrations/openwa/openwa.module';
 import { OpenWAClient } from '../../integrations/openwa/openwa.client';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import type { RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 import { WebhookRegistrationReconciliationTick } from './webhook-registration-reconciliation.tick';
 
 @Module({
@@ -20,8 +21,7 @@ import { WebhookRegistrationReconciliationTick } from './webhook-registration-re
     WebhookProcessorService,
     {
       provide: WebhookRegistrationReconciliationTick,
-      useFactory: (openwa: OpenWAClient) => {
-        const config = runtimeConfig();
+      useFactory: (openwa: OpenWAClient, config: RuntimeConfig) => {
         return new WebhookRegistrationReconciliationTick(openwa, {
           enabled: config.OPENWA_WEBHOOK_RECONCILIATION_ENABLED,
           callbackUrl: config.OPENWA_WEBHOOK_CALLBACK_URL ?? null,
@@ -29,7 +29,7 @@ import { WebhookRegistrationReconciliationTick } from './webhook-registration-re
           allowedSessionIds: config.OPENWA_ALLOWED_SESSION_IDS,
         });
       },
-      inject: [OpenWAClient],
+      inject: [OpenWAClient, RUNTIME_CONFIG],
     },
   ],
   exports: [

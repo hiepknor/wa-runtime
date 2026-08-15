@@ -1,9 +1,14 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 
 @Injectable()
 export class SessionScopeService {
-  private readonly allowedIds = new Set(runtimeConfig().OPENWA_ALLOWED_SESSION_IDS);
+  private readonly allowedIds: Set<string>;
+
+  constructor(@Inject(RUNTIME_CONFIG) config: RuntimeConfig = runtimeConfig()) {
+    this.allowedIds = new Set(config.OPENWA_ALLOWED_SESSION_IDS);
+  }
 
   isAllowed(sessionId: string): boolean {
     return this.allowedIds.has(sessionId);

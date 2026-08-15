@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Client, type Notification } from 'pg';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 
 const gatewayWorkChannel = 'wa_runtime_gateway_work';
 
@@ -34,7 +35,8 @@ export class GatewayWakeCoordinator {
 @Injectable()
 export class GatewayWorkListenerService {
   private readonly logger = new Logger(GatewayWorkListenerService.name);
-  private readonly config = runtimeConfig();
+  constructor(@Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig()) {}
+
   private client: Client | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
   private stopped = true;

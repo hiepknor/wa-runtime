@@ -76,9 +76,11 @@ GET /api/v1/health/live
 GET /api/v1/health/ready
 ```
 
-Readiness checks PostgreSQL, Redis and fresh worker/scheduler heartbeats, then reports the live-send
-interlock, pinned OpenWA release and number of allowlisted sessions. It does not prove that OpenWA
-is currently paired; session sendability is visible through the session API and campaign preflight.
+Readiness requires PostgreSQL and Redis. It reports fresh worker/scheduler heartbeats separately as
+`healthy` or `degraded`, so a background-plane outage remains alertable without removing the API
+from routing while durable intent can still be stored. It also reports the live-send interlock,
+pinned OpenWA release and number of allowlisted sessions. It does not prove that OpenWA is currently
+paired; session sendability is visible through the session API and campaign preflight.
 
 All processes emit correlated JSON logs. The deployment has no trace store, metrics database,
 dashboard or alert engine. See [Observability](observability.md) for log fields and manual diagnosis.
@@ -121,11 +123,13 @@ pagination behavior before retrying full synchronization.
 ## Outbound pacing and retention
 
 `OUTBOUND_MIN_DELAY_MS` and `OUTBOUND_MAX_DELAY_MS` apply inside a token-owned PostgreSQL
-per-session lease. Multiple worker replicas must remain disabled until the staging concurrency gate
-for [ADR 001](adr/001-postgresql-owned-durable-work-execution.md) passes. For a
-500-group campaign on one session, messages are intentionally serialized; adding workers helps other
-sessions and non-send queues but does not increase that session's send rate. Keep the maximum at or
-below 60 seconds so the session and message processing leases remain bounded.
+per-session lease. `MESSAGE_WORKER_CONCURRENCY`, `WEBHOOK_WORKER_CONCURRENCY`,
+`GATEWAY_WORKER_CONCURRENCY` and `CAMPAIGN_WORKER_CONCURRENCY` set per-process BullMQ concurrency
+within the validated range 1–100. For a 500-group campaign on one session, messages are intentionally
+serialized; raising concurrency helps independent sessions and queues but does not increase that
+session's send rate. Increase one step at a time from the defaults while observing PostgreSQL pool
+pressure, queue age and OpenWA 429/5xx responses. Keep the outbound maximum delay at or below 60
+seconds so the session and message processing leases remain bounded.
 
 Terminal operational rows are retained for `RUNTIME_RETENTION_DAYS` (90 days by default), normalized
 events and their projections for `RUNTIME_EVENT_RETENTION_DAYS` (30 days), and raw webhook envelopes

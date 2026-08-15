@@ -12,7 +12,8 @@ import { GatewaySyncItemRepository } from './gateway-sync-item.repository';
 import { GatewayGroupIntentRepository } from './gateway-group-intent.repository';
 import { GatewaySyncRateLimitRepository } from './gateway-sync-rate-limit.repository';
 import { ContactsModule } from '../contacts/contacts.module';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import type { RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 import { DatabaseService } from '../../core/database/database.service';
 import { ContactRepository } from '../contacts/contact.repository';
 
@@ -22,12 +23,12 @@ import { ContactRepository } from '../contacts/contact.repository';
   providers: [
     {
       provide: GatewayRepository,
-      useFactory: (database: DatabaseService, contacts: ContactRepository) => new GatewayRepository(
+      useFactory: (database: DatabaseService, contacts: ContactRepository, config: RuntimeConfig) => new GatewayRepository(
         database,
         contacts,
-        runtimeConfig().CONTACT_PROJECTION_READ_ENABLED,
+        config.CONTACT_PROJECTION_READ_ENABLED,
       ),
-      inject: [DatabaseService, ContactRepository],
+      inject: [DatabaseService, ContactRepository, RUNTIME_CONFIG],
     },
     GatewaySyncRateLimitRepository,
     GatewaySyncItemRepository,

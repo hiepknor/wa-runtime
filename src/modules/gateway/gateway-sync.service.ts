@@ -1,5 +1,6 @@
-import { ConflictException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { ConflictException, ForbiddenException, Inject, Injectable, Logger } from '@nestjs/common';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 import type { SyncRunDto } from '../../contracts/sessions/sync-run.dto';
 import { GatewaySyncMode } from '../../contracts/sessions/sync-request.dto';
 import { OpenWAClient, OpenWAHttpError, OpenWAResponseValidationError } from '../../integrations/openwa/openwa.client';
@@ -11,7 +12,6 @@ import { ContactSyncService } from '../contacts/contact-sync.service';
 
 @Injectable()
 export class GatewaySyncService {
-  private readonly config = runtimeConfig();
   private readonly logger = new Logger(GatewaySyncService.name);
 
   constructor(
@@ -20,6 +20,7 @@ export class GatewaySyncService {
     private readonly openwa: OpenWAClient,
     private readonly groupIntents: GatewayGroupIntentRepository,
     private readonly contactSync: ContactSyncService,
+    @Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig(),
   ) {}
 
   async request(sessionId: string, mode: GatewaySyncMode = GatewaySyncMode.FULL): Promise<SyncRunDto> {

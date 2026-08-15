@@ -1,14 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 import { DatabaseService } from '../../core/database/database.service';
 import type { GatewaySyncFailurePolicy } from './gateway-sync-item.types';
 
 @Injectable()
 export class GatewaySyncRateLimitRepository {
-  private readonly config = runtimeConfig();
-
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    @Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig(),
+  ) {}
 
   async ensure(client: PoolClient, sessionId: string): Promise<void> {
     await client.query(

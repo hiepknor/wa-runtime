@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { PoolClient, QueryResult } from 'pg';
-import { runtimeConfig } from '../../core/config/runtime-config';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 import { DatabaseService } from '../../core/database/database.service';
 
 export interface RetentionResult {
@@ -24,9 +25,10 @@ interface RetentionOptions {
 @Injectable()
 export class DataRetentionTick {
   private readonly logger = new Logger(DataRetentionTick.name);
-  private readonly config = runtimeConfig();
-
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    @Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig(),
+  ) {}
 
   async run(): Promise<void> {
     const started = performance.now();

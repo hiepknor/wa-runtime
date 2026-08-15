@@ -32,6 +32,10 @@ const schema = z
     ALLOW_LIVE_SENDS: booleanFromEnv(false),
     OUTBOUND_MIN_DELAY_MS: z.coerce.number().int().min(0).max(60_000).default(3000),
     OUTBOUND_MAX_DELAY_MS: z.coerce.number().int().min(0).max(60_000).default(7000),
+    MESSAGE_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(1),
+    WEBHOOK_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(10),
+    GATEWAY_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(1),
+    CAMPAIGN_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(2),
     RUNTIME_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(90),
     RUNTIME_EVENT_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(30),
     RUNTIME_RAW_WEBHOOK_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(7),
@@ -168,12 +172,16 @@ export type RuntimeConfig = z.infer<typeof schema> & { enableRuntimeDocs: boolea
 
 let cached: RuntimeConfig | undefined;
 
-export function runtimeConfig(): RuntimeConfig {
-  if (cached) return cached;
-  const parsed = schema.parse(process.env);
-  cached = {
+export function parseRuntimeConfig(environment: NodeJS.ProcessEnv): RuntimeConfig {
+  const parsed = schema.parse(environment);
+  return {
     ...parsed,
     enableRuntimeDocs: parsed.ENABLE_RUNTIME_DOCS ?? parsed.NODE_ENV !== 'production',
   };
+}
+
+export function runtimeConfig(): RuntimeConfig {
+  if (cached) return cached;
+  cached = parseRuntimeConfig(process.env);
   return cached;
 }
