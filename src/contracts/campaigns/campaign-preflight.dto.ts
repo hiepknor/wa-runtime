@@ -23,6 +23,7 @@ export enum CampaignPreflightCheckCode {
 export enum CampaignTargetIssueReason {
   TARGET_CAPABILITY_DENIED = 'TARGET_CAPABILITY_DENIED',
   TARGET_CAPABILITY_UNKNOWN = 'TARGET_CAPABILITY_UNKNOWN',
+  TARGET_CAPABILITY_STALE = 'TARGET_CAPABILITY_STALE',
 }
 
 export class CampaignPreflightRequestDto {

@@ -1,7 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsInt, IsNotEmpty, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { PaginationQueryDto } from '../common/pagination.dto';
+
+const optionalInteger = ({ value }: { value: unknown }): unknown => {
+  if (typeof value !== 'string' || !/^\d+$/u.test(value)) return value;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : value;
+};
 
 export class GroupListQueryDto extends PaginationQueryDto {
   @ApiProperty({ description: 'Allowlisted Gateway session that owns the lists' })
@@ -19,4 +25,16 @@ export class GroupListQueryDto extends PaginationQueryDto {
   @IsString()
   @MaxLength(200)
   query?: string;
+}
+
+export class GroupListArchiveQueryDto {
+  @ApiPropertyOptional({
+    type: 'integer', minimum: 1,
+    description: 'Aggregate revision observed before archive. A stale value returns HTTP 409.',
+  })
+  @IsOptional()
+  @Transform(optionalInteger)
+  @IsInt()
+  @Min(1)
+  expectedRevision?: number;
 }

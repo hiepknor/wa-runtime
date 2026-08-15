@@ -8,5 +8,6 @@ import { GroupListService } from './group-list.service';
   imports: [GatewayModule],
   controllers: [GroupListController],
   providers: [GroupListRepository, GroupListService],
+  exports: [GroupListRepository],
 })
 export class GroupListsModule {}

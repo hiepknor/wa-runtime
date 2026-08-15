@@ -87,8 +87,9 @@ export class GroupListService {
     return updated;
   }
 
-  async archive(id: string): Promise<void> {
+  async archive(id: string, expectedRevision?: number): Promise<void> {
     const current = await this.getForMutation(id);
+    this.assertExpectedRevision(expectedRevision, current.revision);
     const archived = await this.repository.archive(id, current.revision);
     if (!archived) await this.throwMutationRace(id, current.revision);
   }
@@ -99,11 +100,25 @@ export class GroupListService {
     return { list: membership.list, data: membership.groups };
   }
 
-  async replaceGroups(id: string, groupIds: string[], expectedRevision?: number) {
+  async replaceGroups(
+    id: string,
+    groupIds: string[],
+    expectedRevision?: number,
+    expectedMembershipRevision?: number,
+  ) {
     const current = await this.getForMutation(id);
     this.assertExpectedRevision(expectedRevision, current.revision);
+    if (expectedMembershipRevision !== undefined
+      && expectedMembershipRevision !== current.membershipRevision) {
+      this.revisionConflict(expectedMembershipRevision, current.membershipRevision);
+    }
     this.validateGroupIds(groupIds);
-    const result = await this.repository.replaceGroups(id, [...groupIds].sort(), current.revision);
+    const result = await this.repository.replaceGroups(
+      id,
+      [...groupIds].sort(),
+      current.revision,
+      expectedMembershipRevision,
+    );
     if (result.revisionConflict) this.revisionConflict(current.revision);
     this.throwGroupValidation(result);
     if (!result.list || !result.groups) this.notFound();

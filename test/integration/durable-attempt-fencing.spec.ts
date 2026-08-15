@@ -69,6 +69,30 @@ describe('durable attempt fencing', () => {
     )).toBe('PREPARING');
   });
 
+  it('archives an ACTIVE campaign when recovery terminally fails its LIVE preparation', async () => {
+    const campaign = await pool.query<{ id: string }>(
+      `INSERT INTO campaigns (session_id, name, payload, status)
+       VALUES ($1, 'Recovery terminal', '{"text":"hello"}', 'ACTIVE') RETURNING id`,
+      [INTEGRATION_SESSION_ID],
+    );
+    await pool.query(
+      `INSERT INTO campaign_runs
+         (campaign_id, session_id, idempotency_key, execution_mode, payload_snapshot, scheduled_at,
+          preparation_attempt_count, preparation_lease_token, preparation_lease_expires_at)
+       VALUES ($1, $2, 'terminal-recovery', 'LIVE', '{"text":"hello"}', now(), 3,
+         gen_random_uuid(), now() - interval '1 second')`,
+      [campaign.rows[0]!.id, INTEGRATION_SESSION_ID],
+    );
+
+    expect(await campaigns.recoverExpiredPreparations()).toBe(1);
+    const state = await pool.query<{ campaign_status: string; run_status: string }>(
+      `SELECT c.status AS campaign_status, cr.status AS run_status
+       FROM campaigns c JOIN campaign_runs cr ON cr.campaign_id = c.id WHERE c.id = $1`,
+      [campaign.rows[0]!.id],
+    );
+    expect(state.rows[0]).toEqual({ campaign_status: 'ARCHIVED', run_status: 'FAILED' });
+  });
+
   it('prevents a stale capability refresh from failing a reclaimed attempt', async () => {
     await gateway.invalidateGroupCapability(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, 'MANUAL_REFRESH');
     const group = await gateway.findGroup(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID);

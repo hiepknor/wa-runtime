@@ -20,14 +20,22 @@ export function evaluateCampaignPreflight(input: {
 }): CampaignPreflightDto {
   const checks: CampaignPreflightDto['checks'] = [];
   const targetIssues = input.targets
-    .filter(target => target.sendCapability.status !== 'ALLOWED')
     .map(target => ({
+      target,
+      effectiveCapability: target.sendCapability.invalidatedAt === null
+        ? target.sendCapability.status
+        : 'UNKNOWN' as const,
+    }))
+    .filter(({ effectiveCapability }) => effectiveCapability !== 'ALLOWED')
+    .map(({ target, effectiveCapability }) => ({
       groupId: target.groupId,
       groupName: target.groupName,
-      capability: target.sendCapability.status,
-      reason: target.sendCapability.status === 'DENIED'
-        ? CampaignTargetIssueReason.TARGET_CAPABILITY_DENIED
-        : CampaignTargetIssueReason.TARGET_CAPABILITY_UNKNOWN,
+      capability: effectiveCapability,
+      reason: target.sendCapability.invalidatedAt !== null
+        ? CampaignTargetIssueReason.TARGET_CAPABILITY_STALE
+        : effectiveCapability === 'DENIED'
+          ? CampaignTargetIssueReason.TARGET_CAPABILITY_DENIED
+          : CampaignTargetIssueReason.TARGET_CAPABILITY_UNKNOWN,
     }));
   const allowedTargets = input.targets.length - targetIssues.length;
   const deniedTargets = targetIssues.filter(target => target.capability === 'DENIED').length;
@@ -75,7 +83,7 @@ export function evaluateCampaignPreflight(input: {
       ? CampaignPreflightStatus.WARN : CampaignPreflightStatus.PASS;
   return {
     status,
-    policyVersion: 1,
+    policyVersion: 2,
     campaignRevision: input.campaignRevision,
     targetsRevision: input.targetsRevision,
     executionMode: input.executionMode,

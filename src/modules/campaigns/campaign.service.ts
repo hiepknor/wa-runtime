@@ -117,8 +117,15 @@ export class CampaignService {
   }
 
   async listTargets(id: string) {
-    const campaign = await this.get(id);
-    return { data: await this.repository.listTargets(id), targetsRevision: campaign.targetsRevision };
+    const snapshot = await this.repository.getTargetsSnapshot(id);
+    if (!snapshot || !this.config.OPENWA_ALLOWED_SESSION_IDS.includes(snapshot.campaign.sessionId)) {
+      throw new CampaignError(HttpStatus.NOT_FOUND, 'CAMPAIGN_NOT_FOUND', 'Campaign not found');
+    }
+    return {
+      data: snapshot.targets,
+      targetsRevision: snapshot.campaign.targetsRevision,
+      source: snapshot.source,
+    };
   }
 
   async replaceTargets(id: string, groupIds: string[], expectedTargetsRevision?: number) {
@@ -165,7 +172,65 @@ export class CampaignService {
         'One or more groups are not present in the durable group read model',
         { invalidTargetCount: result.missingGroupIds.length });
     }
-    return { data: result.targets, targetsRevision: result.targetsRevision };
+    return { data: result.targets, targetsRevision: result.targetsRevision, source: result.source };
+  }
+
+  async applyGroupListTargets(id: string, input: {
+    groupListId: string;
+    expectedMembershipRevision?: number;
+    expectedTargetsRevision?: number;
+  }) {
+    const campaign = await this.get(id);
+    if (campaign.status !== 'DRAFT') {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_NOT_EDITABLE',
+        'Only DRAFT campaign targets can be edited');
+    }
+    if (input.expectedTargetsRevision !== undefined
+      && input.expectedTargetsRevision !== campaign.targetsRevision) {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_TARGETS_REVISION_CONFLICT',
+        'Campaign targets changed after they were loaded', {
+          expectedTargetsRevision: input.expectedTargetsRevision,
+          currentTargetsRevision: campaign.targetsRevision,
+        });
+    }
+    const result = await this.repository.applyGroupListTargets({
+      campaignId: id,
+      groupListId: input.groupListId,
+      expectedTargetsRevision: campaign.targetsRevision,
+      expectedMembershipRevision: input.expectedMembershipRevision,
+    });
+    if (!result.campaignFound) {
+      throw new CampaignError(HttpStatus.NOT_FOUND, 'CAMPAIGN_NOT_FOUND', 'Campaign not found');
+    }
+    if (!result.campaignEditable) {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_NOT_EDITABLE',
+        'Campaign is no longer editable');
+    }
+    if (result.targetRevisionConflict) {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_TARGETS_REVISION_CONFLICT',
+        'Campaign targets changed while the saved list was being applied');
+    }
+    if (!result.sourceFound) {
+      throw new CampaignError(HttpStatus.NOT_FOUND, 'CAMPAIGN_TARGET_SOURCE_NOT_FOUND',
+        'Saved group list not found');
+    }
+    if (result.sourceSessionMismatch) {
+      if (!result.sourceSessionId
+        || !this.config.OPENWA_ALLOWED_SESSION_IDS.includes(result.sourceSessionId)) {
+        throw new CampaignError(HttpStatus.NOT_FOUND, 'CAMPAIGN_TARGET_SOURCE_NOT_FOUND',
+          'Saved group list not found');
+      }
+      throw new CampaignError(HttpStatus.UNPROCESSABLE_ENTITY, 'CAMPAIGN_TARGET_SOURCE_SESSION_MISMATCH',
+        'Saved group list does not belong to the campaign session');
+    }
+    if (result.sourceRevisionConflict) {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_TARGET_SOURCE_REVISION_CONFLICT',
+        'Saved group-list membership changed after it was loaded', {
+          expectedMembershipRevision: input.expectedMembershipRevision,
+          currentMembershipRevision: result.currentSourceRevision,
+        });
+    }
+    return { data: result.targets, targetsRevision: result.targetsRevision, source: result.source };
   }
 
   async preflight(id: string, dto: CampaignPreflightRequestDto) {

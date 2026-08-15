@@ -33,6 +33,17 @@ describe('campaign draft contract HTTP API', () => {
   let app: INestApplication;
   let baseUrl: string;
   let runPreparer: { prepare(runId: string): Promise<void> };
+  let runRepository: {
+    getPreflightContext(runId: string): Promise<Record<string, any> | null>;
+    resume(runId: string, report: Record<string, any>, targets: Record<string, any>[]): Promise<unknown>;
+    claimPreparation(runId: string): Promise<{ leaseToken: string } | null>;
+    applyPreflight(
+      runId: string,
+      leaseToken: string,
+      report: Record<string, any>,
+      targets: Record<string, any>[],
+    ): Promise<unknown>;
+  };
   const auth = { 'x-runtime-key': process.env.RUNTIME_API_KEY! };
 
   beforeAll(async () => {
@@ -43,11 +54,15 @@ describe('campaign draft contract HTTP API', () => {
     const { CampaignRunService } = require(
       resolve(process.cwd(), 'dist/src/modules/campaigns/campaign-run.service.js'),
     ) as { CampaignRunService: new (...args: never[]) => { prepare(runId: string): Promise<void> } };
+    const { CampaignRunRepository } = require(
+      resolve(process.cwd(), 'dist/src/modules/campaigns/campaign-run.repository.js'),
+    ) as { CampaignRunRepository: new (...args: never[]) => typeof runRepository };
     app = await NestFactory.create(ApiAppModule, { rawBody: true, logger: false });
     app.setGlobalPrefix('api/v1');
     app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }));
     await app.listen(0, '127.0.0.1');
     runPreparer = app.get(CampaignRunService);
+    runRepository = app.get(CampaignRunRepository);
     const address = app.getHttpServer().address() as { port: number };
     baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
   });
@@ -266,6 +281,132 @@ describe('campaign draft contract HTTP API', () => {
     expect(empty.body.data).toEqual([]);
   });
 
+  it('atomically applies one saved-list membership revision and preserves auditable snapshot provenance', async () => {
+    await pool.query(
+      `INSERT INTO gateway_groups (session_id, id, name, send_capability, send_capability_reason)
+       VALUES ($1, 'second@g.us', 'Second group', 'ALLOWED', 'SEND_ALLOWED')`,
+      [INTEGRATION_SESSION_ID],
+    );
+    const list = await jsonRequest('/group-lists', {
+      method: 'POST',
+      headers: { 'idempotency-key': randomUUID() },
+      body: JSON.stringify({
+        sessionId: INTEGRATION_SESSION_ID,
+        name: 'Reusable audience',
+        groupIds: [INTEGRATION_GROUP_ID, 'second@g.us'],
+      }),
+    });
+    const campaign = await createCampaign();
+    const campaignId = campaign.body.id as string;
+    const applied = await jsonRequest(`/campaigns/${campaignId}/targets/apply-group-list`, {
+      method: 'POST',
+      body: JSON.stringify({
+        groupListId: list.body.id,
+        expectedMembershipRevision: 1,
+        expectedTargetsRevision: 0,
+      }),
+    });
+    expect(applied.response.status).toBe(200);
+    expect(applied.body).toMatchObject({
+      targetsRevision: 1,
+      source: {
+        type: 'GROUP_LIST', groupListId: list.body.id, membershipRevision: 1,
+      },
+    });
+    expect(applied.body.data).toHaveLength(2);
+
+    const editedList = await jsonRequest(`/group-lists/${list.body.id}/groups`, {
+      method: 'PUT',
+      body: JSON.stringify({ expectedMembershipRevision: 1, groupIds: ['second@g.us'] }),
+    });
+    expect(editedList.body.list.membershipRevision).toBe(2);
+    const unchangedCampaign = await jsonRequest(`/campaigns/${campaignId}/targets`);
+    expect(unchangedCampaign.body).toMatchObject({
+      targetsRevision: 1,
+      source: { groupListId: list.body.id, membershipRevision: 1 },
+    });
+    expect(unchangedCampaign.body.data).toHaveLength(2);
+
+    const stale = await jsonRequest(`/campaigns/${campaignId}/targets/apply-group-list`, {
+      method: 'POST',
+      body: JSON.stringify({
+        groupListId: list.body.id,
+        expectedMembershipRevision: 1,
+        expectedTargetsRevision: 1,
+      }),
+    });
+    expect(stale.response.status).toBe(409);
+    expect(stale.body.code).toBe('CAMPAIGN_TARGET_SOURCE_REVISION_CONFLICT');
+
+    const refreshed = await jsonRequest(`/campaigns/${campaignId}/targets/apply-group-list`, {
+      method: 'POST',
+      body: JSON.stringify({
+        groupListId: list.body.id,
+        expectedMembershipRevision: 2,
+        expectedTargetsRevision: 1,
+      }),
+    });
+    expect(refreshed.body).toMatchObject({
+      targetsRevision: 2,
+      source: { groupListId: list.body.id, membershipRevision: 2 },
+    });
+    expect(refreshed.body.data).toHaveLength(1);
+
+    const run = await jsonRequest(`/campaigns/${campaignId}/runs`, {
+      method: 'POST',
+      headers: { 'idempotency-key': randomUUID() },
+      body: JSON.stringify({
+        executionMode: 'DRY_RUN', expectedCampaignRevision: 1, expectedTargetsRevision: 2,
+      }),
+    });
+    expect(run.body.targetSource).toMatchObject({ groupListId: list.body.id, membershipRevision: 2 });
+
+    const manual = await jsonRequest(`/campaigns/${campaignId}/targets`, {
+      method: 'PUT',
+      body: JSON.stringify({ expectedTargetsRevision: 2, groupIds: ['second@g.us'] }),
+    });
+    expect(manual.body).toMatchObject({ targetsRevision: 3, source: null });
+  });
+
+  it('rejects archived and cross-session saved-list sources without changing campaign targets', async () => {
+    const campaign = await createCampaign();
+    const campaignId = campaign.body.id as string;
+    const archived = await jsonRequest('/group-lists', {
+      method: 'POST',
+      headers: { 'idempotency-key': randomUUID() },
+      body: JSON.stringify({ sessionId: INTEGRATION_SESSION_ID, name: 'Archived source' }),
+    });
+    const archiveResponse = await fetch(
+      `${baseUrl}/group-lists/${archived.body.id as string}?expectedRevision=1`,
+      { method: 'DELETE', headers: auth },
+    );
+    expect(archiveResponse.status).toBe(204);
+    const archivedApply = await jsonRequest(`/campaigns/${campaignId}/targets/apply-group-list`, {
+      method: 'POST', body: JSON.stringify({ groupListId: archived.body.id }),
+    });
+    expect(archivedApply.response.status).toBe(404);
+    expect(archivedApply.body.code).toBe('CAMPAIGN_TARGET_SOURCE_NOT_FOUND');
+
+    await pool.query(
+      `INSERT INTO gateway_sessions
+         (id, name, status, engine_loaded, gateway_created_at, gateway_updated_at)
+       VALUES ($1, 'Other', 'ready', true, now(), now())`,
+      [DISALLOWED_SESSION_ID],
+    );
+    const otherListId = randomUUID();
+    await pool.query(
+      `INSERT INTO group_lists (id, session_id, name) VALUES ($1, $2, 'Other source')`,
+      [otherListId, DISALLOWED_SESSION_ID],
+    );
+    const wrongSession = await jsonRequest(`/campaigns/${campaignId}/targets/apply-group-list`, {
+      method: 'POST', body: JSON.stringify({ groupListId: otherListId }),
+    });
+    expect(wrongSession.response.status).toBe(404);
+    expect(wrongSession.body.code).toBe('CAMPAIGN_TARGET_SOURCE_NOT_FOUND');
+    expect((await jsonRequest(`/campaigns/${campaignId}/targets`)).body)
+      .toMatchObject({ targetsRevision: 0, source: null, data: [] });
+  });
+
   it('rejects duplicate, over-limit, wrong-session, missing, and non-DRAFT replacements', async () => {
     const campaign = await createCampaign();
     const id = campaign.body.id as string;
@@ -348,7 +489,7 @@ describe('campaign draft contract HTTP API', () => {
       method: 'POST', body: JSON.stringify({ executionMode: 'LIVE' }),
     });
     expect(dryRun.body).toMatchObject({
-      status: 'WARN', policyVersion: 1, executionMode: 'DRY_RUN', campaignRevision: 1,
+      status: 'WARN', policyVersion: 2, executionMode: 'DRY_RUN', campaignRevision: 1,
       targetsRevision: 1, totalTargets: 3, allowedTargets: 1, deniedTargets: 1, unknownTargets: 1,
     });
     expect(live.body.status).toBe('BLOCK');
@@ -402,6 +543,163 @@ describe('campaign draft contract HTTP API', () => {
     expect(first.body.meta).toEqual({ total: 3, limit: 2, offset: 0 });
     expect(second.body.meta).toEqual({ total: 3, limit: 2, offset: 2 });
     expect([...first.body.data, ...second.body.data].map((run: { id: string }) => run.id)).toEqual(runIds);
+  });
+
+  it('permits many DRAFT dry-runs but atomically allows only one revision-bound LIVE launch', async () => {
+    const campaign = await createCampaign();
+    const campaignId = campaign.body.id as string;
+    await jsonRequest(`/campaigns/${campaignId}/targets`, {
+      method: 'PUT', body: JSON.stringify({ groupIds: [INTEGRATION_GROUP_ID] }),
+    });
+    for (let index = 0; index < 2; index += 1) {
+      const dryRun = await jsonRequest(`/campaigns/${campaignId}/runs`, {
+        method: 'POST',
+        headers: { 'idempotency-key': randomUUID() },
+        body: JSON.stringify({
+          executionMode: 'DRY_RUN', expectedCampaignRevision: 1, expectedTargetsRevision: 1,
+        }),
+      });
+      expect(dryRun.response.status).toBe(201);
+    }
+    expect((await jsonRequest(`/campaigns/${campaignId}`)).body.status).toBe('DRAFT');
+
+    const keys = [randomUUID(), randomUUID()];
+    const launches = await Promise.all(keys.map(key => jsonRequest(`/campaigns/${campaignId}/runs`, {
+      method: 'POST',
+      headers: { 'idempotency-key': key },
+      body: JSON.stringify({
+        executionMode: 'LIVE', expectedCampaignRevision: 1, expectedTargetsRevision: 1,
+      }),
+    })));
+    expect(launches.map(result => result.response.status).sort()).toEqual([201, 409]);
+    expect(launches.find(result => result.response.status === 409)?.body.code)
+      .toBe('CAMPAIGN_RUN_LAUNCH_CONFLICT');
+    const winnerIndex = launches.findIndex(result => result.response.status === 201);
+    const winner = launches[winnerIndex]!;
+    expect((await jsonRequest(`/campaigns/${campaignId}`)).body.status).toBe('ACTIVE');
+
+    const replay = await jsonRequest(`/campaigns/${campaignId}/runs`, {
+      method: 'POST',
+      headers: { 'idempotency-key': keys[winnerIndex]! },
+      body: JSON.stringify({ executionMode: 'LIVE' }),
+    });
+    expect(replay.response.status).toBe(200);
+    expect(replay.body.id).toBe(winner.body.id);
+
+    await runPreparer.prepare(winner.body.id as string);
+    expect((await jsonRequest(`/campaign-runs/${winner.body.id as string}`)).body.status).toBe('RUNNING');
+    await jsonRequest(`/campaign-runs/${winner.body.id as string}/pause`, { method: 'POST' });
+    expect((await jsonRequest(`/campaigns/${campaignId}`)).body.status).toBe('PAUSED');
+    await jsonRequest(`/campaign-runs/${winner.body.id as string}/resume`, { method: 'POST' });
+    expect((await jsonRequest(`/campaigns/${campaignId}`)).body.status).toBe('ACTIVE');
+    const cancelled = await jsonRequest(`/campaign-runs/${winner.body.id as string}/cancel`, { method: 'POST' });
+    expect(cancelled.body.status).toBe('CANCELLED');
+    expect((await jsonRequest(`/campaigns/${campaignId}`)).body.status).toBe('ARCHIVED');
+    const edit = await jsonRequest(`/campaigns/${campaignId}`, {
+      method: 'PATCH', body: JSON.stringify({ name: 'Too late' }),
+    });
+    expect(edit.body.code).toBe('CAMPAIGN_NOT_EDITABLE');
+  });
+
+  it('rejects a LIVE launch after an ONCE schedule has expired', async () => {
+    const campaign = await createCampaign({
+      scheduleType: 'ONCE', scheduledAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    await pool.query(
+      `UPDATE campaigns SET scheduled_at = now() - interval '1 minute' WHERE id = $1`,
+      [campaign.body.id],
+    );
+    const launch = await jsonRequest(`/campaigns/${campaign.body.id as string}/runs`, {
+      method: 'POST',
+      headers: { 'idempotency-key': randomUUID() },
+      body: JSON.stringify({ executionMode: 'LIVE' }),
+    });
+    expect(launch.response.status).toBe(409);
+    expect(launch.body.code).toBe('CAMPAIGN_RUN_SCHEDULE_EXPIRED');
+  });
+
+  it('keeps a campaign PAUSED when resume preflight remains blocked', async () => {
+    const campaign = await createCampaign();
+    const campaignId = campaign.body.id as string;
+    await jsonRequest(`/campaigns/${campaignId}/targets`, {
+      method: 'PUT', body: JSON.stringify({ groupIds: [INTEGRATION_GROUP_ID] }),
+    });
+    const run = await jsonRequest(`/campaigns/${campaignId}/runs`, {
+      method: 'POST',
+      headers: { 'idempotency-key': randomUUID() },
+      body: JSON.stringify({ executionMode: 'LIVE' }),
+    });
+    await runPreparer.prepare(run.body.id as string);
+    await jsonRequest(`/campaign-runs/${run.body.id as string}/pause`, { method: 'POST' });
+    await pool.query(
+      `UPDATE gateway_groups SET send_capability = 'DENIED',
+         send_capability_reason = 'GROUP_READ_ONLY', capability_revision = capability_revision + 1
+       WHERE session_id = $1 AND id = $2`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+
+    const resume = await jsonRequest(`/campaign-runs/${run.body.id as string}/resume`, { method: 'POST' });
+    expect(resume.response.status).toBe(409);
+    expect((await jsonRequest(`/campaign-runs/${run.body.id as string}`)).body.status).toBe('BLOCKED');
+    expect((await jsonRequest(`/campaigns/${campaignId}`)).body.status).toBe('PAUSED');
+  });
+
+  it('does not resume from a capability snapshot that changed during preflight', async () => {
+    const campaign = await createCampaign();
+    const campaignId = campaign.body.id as string;
+    await jsonRequest(`/campaigns/${campaignId}/targets`, {
+      method: 'PUT', body: JSON.stringify({ groupIds: [INTEGRATION_GROUP_ID] }),
+    });
+    const run = await jsonRequest(`/campaigns/${campaignId}/runs`, {
+      method: 'POST',
+      headers: { 'idempotency-key': randomUUID() },
+      body: JSON.stringify({ executionMode: 'LIVE' }),
+    });
+    const runId = run.body.id as string;
+    await runPreparer.prepare(runId);
+    await jsonRequest(`/campaign-runs/${runId}/pause`, { method: 'POST' });
+    const observed = await runRepository.getPreflightContext(runId);
+    expect(observed?.run.preflight.status).toBe('PASS');
+    await pool.query(
+      `UPDATE gateway_groups SET capability_revision = capability_revision + 1
+       WHERE session_id = $1 AND id = $2`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+
+    expect(await runRepository.resume(runId, observed!.run.preflight, observed!.targets))
+      .toBe('STALE_INPUT');
+    expect((await jsonRequest(`/campaign-runs/${runId}`)).body.status).toBe('PAUSED');
+    expect((await jsonRequest(`/campaigns/${campaignId}`)).body.status).toBe('PAUSED');
+  });
+
+  it('retries stale preparation input without consuming the failure-attempt budget', async () => {
+    const campaign = await createCampaign();
+    const campaignId = campaign.body.id as string;
+    await jsonRequest(`/campaigns/${campaignId}/targets`, {
+      method: 'PUT', body: JSON.stringify({ groupIds: [INTEGRATION_GROUP_ID] }),
+    });
+    const run = await jsonRequest(`/campaigns/${campaignId}/runs`, {
+      method: 'POST',
+      headers: { 'idempotency-key': randomUUID() },
+      body: JSON.stringify({ executionMode: 'DRY_RUN' }),
+    });
+    const runId = run.body.id as string;
+    const claim = await runRepository.claimPreparation(runId);
+    const observed = await runRepository.getPreflightContext(runId);
+    await pool.query(
+      `UPDATE gateway_groups SET capability_revision = capability_revision + 1
+       WHERE session_id = $1 AND id = $2`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+
+    expect(await runRepository.applyPreflight(runId, claim!.leaseToken, {}, observed!.targets))
+      .toBe('STALE_INPUT');
+    const attempt = await pool.query<{ preparation_attempt_count: number; preparation_lease_token: string | null }>(
+      `SELECT preparation_attempt_count, preparation_lease_token FROM campaign_runs WHERE id = $1`,
+      [runId],
+    );
+    expect(attempt.rows[0]).toEqual({ preparation_attempt_count: 0, preparation_lease_token: null });
+    expect(await runRepository.claimPreparation(runId)).not.toBeNull();
   });
 
   it('prepares, pauses, resumes, and cancels a dry-run without calling the send adapter', async () => {

@@ -139,16 +139,15 @@ wildcards. Active results use `updatedAt DESC, id ASC`; predicates run before pa
 `meta.total` counts the filtered active dataset.
 
 Create accepts optional initial membership and is atomic and idempotent. Complete membership reads
-are intentionally bounded rather than paginated so a client can stage one unambiguous snapshot.
+are intentionally bounded rather than paginated so a client can inspect one unambiguous snapshot.
 Replacement validates the whole set before writing, rejects duplicate, missing and cross-session
-IDs, and increments `revision` only when membership changes. Current group name, active state,
+IDs, and increments both `revision` and `membershipRevision` only when membership changes. Metadata
+edits advance only `revision`. Current group name, active state,
 participant count and send capability are returned for presentation; inactive, denied and unknown
 groups remain valid members.
 
-`DELETE` soft-archives a list. Archive and later list edits never alter campaign targets. Applying a
-list to a campaign is a client authoring operation that copies IDs into the staged selection; the
-existing campaign target replacement remains the only campaign persistence operation. Runtime does
-not persist campaign-to-list provenance or live binding in v1.
+`DELETE` soft-archives a list and accepts optional `expectedRevision`. Archive and later list edits
+never alter campaign targets already materialized from it. Archived lists cannot be newly applied.
 
 Saved-list validation uses stable `GROUP_LIST_*` codes, including `GROUP_LIST_SESSION_INVALID`,
 `GROUP_LIST_NAME_INVALID`, `GROUP_LIST_QUERY_INVALID`, `GROUP_LIST_GROUP_INVALID`, duplicate/limit,
@@ -164,6 +163,7 @@ GET   /campaigns/{id}
 PATCH /campaigns/{id}
 GET   /campaigns/{id}/targets
 PUT   /campaigns/{id}/targets
+POST  /campaigns/{id}/targets/apply-group-list
 POST  /campaigns/{id}/preflight
 POST  /campaigns/{id}/runs
 GET   /campaigns/{id}/runs
@@ -182,16 +182,25 @@ A content-only PATCH preserves scheduling, while changing back to `IMMEDIATE` cl
 All timestamps are emitted as ISO-8601 UTC. Only `DRAFT` campaigns can be edited.
 
 Campaign PATCH accepts optional `expectedRevision`, and target replacement accepts optional
-`expectedTargetsRevision`. Saved-list metadata and membership mutations similarly accept optional
-`expectedRevision`. Authorized stale writes return typed HTTP 409 responses and never overwrite the
-newer aggregate state. Omitting the precondition remains backward-compatible, while Runtime still
-uses an internal compare-and-swap fence against races during one request.
+`expectedTargetsRevision`. Saved-list metadata/archive mutations accept optional `expectedRevision`;
+membership replacement and saved-list application use `expectedMembershipRevision`. Authorized
+stale writes return typed HTTP 409 responses and never overwrite the newer aggregate state. Omitting
+the precondition remains backward-compatible, while Runtime still uses an internal compare-and-swap
+fence against races during one request.
 
 Target replacement rejects duplicates and more than 1,000 IDs, validates the complete set before
 writing, and returns the complete canonical list ordered by group name then ID. Existing inactive,
 denied and unknown groups may remain targets; preflight owns capability policy. Campaign responses
 carry independent `revision` and `targetsRevision` counters. Preflight binds its result to both
 counters, uses stable check/target-reason enums, and never creates a run, job or delivery.
+
+Saved-list application is a single Runtime transaction: it locks the DRAFT campaign and source list,
+checks session and optional revisions, copies the complete membership, and returns target data,
+`targetsRevision`, and nullable source provenance as one atomic result. Manual target replacement clears
+provenance. A source edit or archive never propagates into an already materialized campaign target
+set, and runs snapshot the source list ID and membership revision for audit.
+Sources outside the configured session allowlist follow not-found semantics and do not reveal their
+existence; an authorized source owned by another session returns a typed session-mismatch error.
 
 ### Campaign runs
 
@@ -202,6 +211,18 @@ POST /campaign-runs/{id}/pause
 POST /campaign-runs/{id}/resume
 POST /campaign-runs/{id}/cancel
 ```
+
+A campaign accepts multiple DRY_RUN creations while it remains `DRAFT`, but at most one LIVE run.
+LIVE creation atomically snapshots the campaign and changes its status to `ACTIVE`; optional
+`expectedCampaignRevision` and `expectedTargetsRevision` reject stale launches. A past `ONCE`
+schedule cannot be launched LIVE. Pausing and successfully resuming the LIVE run set the campaign to
+`PAUSED` and `ACTIVE`; a blocked resume keeps it paused, while terminal completion, cancellation or
+preparation failure archives it. Idempotent replay of the winning launch key remains available after
+the campaign leaves DRAFT.
+
+Before migration 036 is applied to an environment with historical run data, deployment must confirm
+that no campaign has more than one existing LIVE run. Runtime does not discard or silently select a
+legacy run to satisfy the new invariant.
 
 ### Low-level message jobs
 

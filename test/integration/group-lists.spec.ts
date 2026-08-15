@@ -94,6 +94,7 @@ describe('saved group lists HTTP API', () => {
       description: 'Daily list',
       groupCount: 1,
       revision: 1,
+      membershipRevision: 1,
       archivedAt: null,
     });
 
@@ -190,6 +191,7 @@ describe('saved group lists HTTP API', () => {
       method: 'PATCH', body: JSON.stringify({ name: 'Moderators', description: ' Updated ' }),
     });
     expect(changed.body).toMatchObject({ name: 'Moderators', description: 'Updated', revision: 2 });
+    expect(changed.body.membershipRevision).toBe(1);
 
     await createList({ name: 'Operators', groupIds: [] });
     const conflict = await jsonRequest(`/group-lists/${id}`, {
@@ -216,11 +218,13 @@ describe('saved group lists HTTP API', () => {
 
     const replaced = await jsonRequest(`/group-lists/${id}/groups`, {
       method: 'PUT',
-      body: JSON.stringify({ expectedRevision: 2, groupIds: [INTEGRATION_GROUP_ID] }),
+      body: JSON.stringify({ expectedRevision: 2, expectedMembershipRevision: 1,
+        groupIds: [INTEGRATION_GROUP_ID] }),
     });
     expect(replaced.body.list.revision).toBe(3);
+    expect(replaced.body.list.membershipRevision).toBe(2);
     const staleMembership = await jsonRequest(`/group-lists/${id}/groups`, {
-      method: 'PUT', body: JSON.stringify({ expectedRevision: 2, groupIds: [] }),
+      method: 'PUT', body: JSON.stringify({ expectedMembershipRevision: 1, groupIds: [] }),
     });
     expect(staleMembership.response.status).toBe(409);
     expect(staleMembership.body.code).toBe('GROUP_LIST_REVISION_CONFLICT');
@@ -242,7 +246,7 @@ describe('saved group lists HTTP API', () => {
       body: JSON.stringify({ groupIds: ['denied@g.us', INTEGRATION_GROUP_ID, 'unknown@g.us'] }),
     });
     expect(replaced.response.status).toBe(200);
-    expect(replaced.body.list).toMatchObject({ groupCount: 3, revision: 2 });
+    expect(replaced.body.list).toMatchObject({ groupCount: 3, revision: 2, membershipRevision: 2 });
     expect(replaced.body.data.map((group: { groupName: string }) => group.groupName)).toEqual([
       'Alpha unknown', 'Integration group', 'Zulu denied',
     ]);
@@ -258,6 +262,7 @@ describe('saved group lists HTTP API', () => {
       body: JSON.stringify({ groupIds: ['unknown@g.us', INTEGRATION_GROUP_ID, 'denied@g.us'] }),
     });
     expect(same.body.list.revision).toBe(2);
+    expect(same.body.list.membershipRevision).toBe(2);
 
     const membership = await jsonRequest(`/group-lists/${id}/groups`);
     expect(membership.body.list.revision).toBe(2);
@@ -317,6 +322,12 @@ describe('saved group lists HTTP API', () => {
   it('soft-archives a list without changing campaign targets and hides it from all active reads', async () => {
     const created = await createList();
     const listId = created.body.id as string;
+    const updated = await jsonRequest(`/group-lists/${listId}`, {
+      method: 'PATCH', body: JSON.stringify({ expectedRevision: 1, description: 'Ready to archive' }),
+    });
+    const staleArchive = await jsonRequest(`/group-lists/${listId}?expectedRevision=1`, { method: 'DELETE' });
+    expect(staleArchive.response.status).toBe(409);
+    expect(staleArchive.body.code).toBe('GROUP_LIST_REVISION_CONFLICT');
     const campaignId = randomUUID();
     await pool.query(
       `INSERT INTO campaigns (id, session_id, name, payload)
@@ -328,7 +339,10 @@ describe('saved group lists HTTP API', () => {
       [campaignId, INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
     );
 
-    const archived = await jsonRequest(`/group-lists/${listId}`, { method: 'DELETE' });
+    const archived = await jsonRequest(
+      `/group-lists/${listId}?expectedRevision=${updated.body.revision as number}`,
+      { method: 'DELETE' },
+    );
     expect(archived.response.status).toBe(204);
     const list = await jsonRequest(`/group-lists/${listId}`);
     const membership = await jsonRequest(`/group-lists/${listId}/groups`);

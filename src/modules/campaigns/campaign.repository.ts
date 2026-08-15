@@ -1,10 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import { CampaignStatus, type CampaignDto } from '../../contracts/campaigns/campaign.dto';
-import type { CampaignTargetDto } from '../../contracts/campaigns/campaign-target.dto';
+import type {
+  CampaignTargetDto,
+  CampaignTargetSourceDto,
+} from '../../contracts/campaigns/campaign-target.dto';
 import type { CampaignScheduleType } from '../../contracts/campaigns/create-campaign.dto';
 import { DatabaseService } from '../../core/database/database.service';
 import type { GroupSendCapabilityStatus } from '../gateway/group-capability';
+import { GroupListRepository } from '../group-lists/group-list.repository';
 
 interface CampaignRow {
   id: string;
@@ -17,6 +21,9 @@ interface CampaignRow {
   target_count: string | number;
   revision: string | number;
   targets_revision: string | number;
+  target_source_group_list_id: string | null;
+  target_source_membership_revision: string | number | null;
+  target_source_applied_at: Date | null;
   create_request_hash?: string | null;
   created_at: Date;
   updated_at: Date;
@@ -66,9 +73,22 @@ const mapTarget = (row: TargetRow): CampaignTargetDto => ({
   },
 });
 
+const mapTargetSource = (row: CampaignRow): CampaignTargetSourceDto | null =>
+  row.target_source_group_list_id && row.target_source_membership_revision && row.target_source_applied_at
+    ? {
+        type: 'GROUP_LIST',
+        groupListId: row.target_source_group_list_id,
+        membershipRevision: Number(row.target_source_membership_revision),
+        appliedAt: row.target_source_applied_at,
+      }
+    : null;
+
 @Injectable()
 export class CampaignRepository {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly groupLists: GroupListRepository,
+  ) {}
 
   async sessionExists(sessionId: string): Promise<boolean> {
     const result = await this.database.query('SELECT 1 FROM gateway_sessions WHERE id = $1', [sessionId]);
@@ -183,17 +203,22 @@ export class CampaignRepository {
     return result.rows[0] ? mapCampaign(result.rows[0]) : null;
   }
 
-  async listTargets(campaignId: string): Promise<CampaignTargetDto[]> {
-    const result = await this.database.query<TargetRow>(
-      `SELECT ct.group_id, g.name AS group_name, ct.enabled, g.send_capability,
-         g.send_capability_reason, g.capability_checked_at, g.capability_invalidated_at,
-         g.capability_revision
-       FROM campaign_targets ct
-       JOIN gateway_groups g ON g.session_id = ct.session_id AND g.id = ct.group_id
-       WHERE ct.campaign_id = $1 ORDER BY g.name, g.id`,
-      [campaignId],
-    );
-    return result.rows.map(mapTarget);
+  async getTargetsSnapshot(campaignId: string): Promise<{
+    campaign: CampaignDto;
+    targets: CampaignTargetDto[];
+    source: CampaignTargetSourceDto | null;
+  } | null> {
+    return this.database.transaction(async client => {
+      await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const campaignResult = await client.query<CampaignRow>(`${campaignSelect} WHERE c.id = $1`, [campaignId]);
+      const row = campaignResult.rows[0];
+      if (!row) return null;
+      return {
+        campaign: mapCampaign(row),
+        targets: await this.listTargetsWithClient(client, campaignId),
+        source: mapTargetSource(row),
+      };
+    });
   }
 
   async getPreflightSnapshot(campaignId: string): Promise<{
@@ -220,10 +245,17 @@ export class CampaignRepository {
     campaignEditable: boolean;
     revisionConflict: boolean;
     targetsRevision: number;
+    source: CampaignTargetSourceDto | null;
   }> {
     return this.database.transaction(async client => {
-      const campaignResult = await client.query<{ session_id: string; status: string; targets_revision: string }>(
-        'SELECT session_id, status, targets_revision::text FROM campaigns WHERE id = $1 FOR UPDATE', [campaignId],
+      const campaignResult = await client.query<{
+        session_id: string;
+        status: string;
+        targets_revision: string;
+        target_source_group_list_id: string | null;
+      }>(
+        `SELECT session_id, status, targets_revision::text, target_source_group_list_id
+         FROM campaigns WHERE id = $1 FOR UPDATE`, [campaignId],
       );
       const campaign = campaignResult.rows[0];
       if (!campaign || campaign.status !== 'DRAFT') {
@@ -231,6 +263,7 @@ export class CampaignRepository {
           targets: [], missingGroupIds: [], mismatchedGroupIds: [],
           campaignFound: Boolean(campaign), campaignEditable: false, revisionConflict: false,
           targetsRevision: campaign ? Number(campaign.targets_revision) : 0,
+          source: null,
         };
       }
       if (Number(campaign.targets_revision) !== expectedTargetsRevision) {
@@ -238,6 +271,7 @@ export class CampaignRepository {
           targets: [], missingGroupIds: [], mismatchedGroupIds: [],
           campaignFound: true, campaignEditable: true, revisionConflict: true,
           targetsRevision: Number(campaign.targets_revision),
+          source: null,
         };
       }
 
@@ -259,6 +293,7 @@ export class CampaignRepository {
           targets: [], missingGroupIds, mismatchedGroupIds,
           campaignFound: true, campaignEditable: true, revisionConflict: false,
           targetsRevision: Number(campaign.targets_revision),
+          source: null,
         };
       }
 
@@ -268,19 +303,27 @@ export class CampaignRepository {
       );
       const current = currentResult.rows.map(row => row.group_id);
       const next = [...groupIds].sort();
-      const changed = current.length !== next.length || current.some((id, index) => id !== next[index]);
+      const membershipChanged = current.length !== next.length
+        || current.some((id, index) => id !== next[index]);
+      const changed = membershipChanged || campaign.target_source_group_list_id !== null;
       let targetsRevision = Number(campaign.targets_revision);
       if (changed) {
-        await client.query('DELETE FROM campaign_targets WHERE campaign_id = $1', [campaignId]);
-        if (next.length) {
-          await client.query(
-            `INSERT INTO campaign_targets (campaign_id, session_id, group_id)
-             SELECT $1, $2, target_id FROM unnest($3::text[]) AS target_id`,
-            [campaignId, campaign.session_id, next],
-          );
+        if (membershipChanged) {
+          await client.query('DELETE FROM campaign_targets WHERE campaign_id = $1', [campaignId]);
+          if (next.length) {
+            await client.query(
+              `INSERT INTO campaign_targets (campaign_id, session_id, group_id)
+               SELECT $1, $2, target_id FROM unnest($3::text[]) AS target_id`,
+              [campaignId, campaign.session_id, next],
+            );
+          }
         }
         const revision = await client.query<{ targets_revision: string }>(
-          `UPDATE campaigns SET targets_revision = targets_revision + 1, updated_at = now()
+          `UPDATE campaigns SET targets_revision = targets_revision + 1,
+             target_source_group_list_id = NULL,
+             target_source_membership_revision = NULL,
+             target_source_applied_at = NULL,
+             updated_at = now()
            WHERE id = $1 RETURNING targets_revision::text`,
           [campaignId],
         );
@@ -289,7 +332,127 @@ export class CampaignRepository {
       return {
         targets: await this.listTargetsWithClient(client, campaignId),
         missingGroupIds: [], mismatchedGroupIds: [], campaignFound: true, campaignEditable: true,
-        revisionConflict: false, targetsRevision,
+        revisionConflict: false, targetsRevision, source: null,
+      };
+    });
+  }
+
+  async applyGroupListTargets(input: {
+    campaignId: string;
+    groupListId: string;
+    expectedTargetsRevision: number;
+    expectedMembershipRevision?: number;
+  }): Promise<{
+    targets: CampaignTargetDto[];
+    targetsRevision: number;
+    source: CampaignTargetSourceDto | null;
+    campaignFound: boolean;
+    campaignEditable: boolean;
+    targetRevisionConflict: boolean;
+    sourceFound: boolean;
+    sourceSessionMismatch: boolean;
+    sourceSessionId?: string;
+    sourceRevisionConflict: boolean;
+    currentSourceRevision?: number;
+  }> {
+    return this.database.transaction(async client => {
+      const campaignResult = await client.query<{
+        session_id: string;
+        status: string;
+        targets_revision: string;
+        target_source_group_list_id: string | null;
+        target_source_membership_revision: string | null;
+      }>(
+        `SELECT session_id, status, targets_revision::text, target_source_group_list_id,
+           target_source_membership_revision::text
+         FROM campaigns WHERE id = $1 FOR UPDATE`,
+        [input.campaignId],
+      );
+      const campaign = campaignResult.rows[0];
+      const empty = {
+        targets: [] as CampaignTargetDto[], targetsRevision: campaign ? Number(campaign.targets_revision) : 0,
+        source: null, campaignFound: Boolean(campaign), campaignEditable: campaign?.status === 'DRAFT',
+        targetRevisionConflict: false, sourceFound: false, sourceSessionMismatch: false,
+        sourceRevisionConflict: false,
+      };
+      if (!campaign || campaign.status !== 'DRAFT') return empty;
+      if (Number(campaign.targets_revision) !== input.expectedTargetsRevision) {
+        return { ...empty, targetRevisionConflict: true };
+      }
+
+      const source = await this.groupLists.lockMembershipSnapshot(client, input.groupListId);
+      if (!source) return empty;
+      if (source.sessionId !== campaign.session_id) {
+        return {
+          ...empty, sourceFound: true, sourceSessionMismatch: true, sourceSessionId: source.sessionId,
+        };
+      }
+      if (input.expectedMembershipRevision !== undefined
+        && source.membershipRevision !== input.expectedMembershipRevision) {
+        return {
+          ...empty,
+          sourceFound: true,
+          sourceRevisionConflict: true,
+          currentSourceRevision: source.membershipRevision,
+        };
+      }
+
+      const currentResult = await client.query<{ group_id: string }>(
+        'SELECT group_id FROM campaign_targets WHERE campaign_id = $1 ORDER BY group_id FOR UPDATE',
+        [input.campaignId],
+      );
+      const current = currentResult.rows.map(row => row.group_id);
+      const membershipChanged = current.length !== source.groupIds.length
+        || current.some((id, index) => id !== source.groupIds[index]);
+      const provenanceChanged = campaign.target_source_group_list_id !== source.id
+        || Number(campaign.target_source_membership_revision) !== source.membershipRevision;
+      let targetsRevision = Number(campaign.targets_revision);
+      let appliedAt = new Date();
+      if (membershipChanged || provenanceChanged) {
+        if (membershipChanged) {
+          await client.query('DELETE FROM campaign_targets WHERE campaign_id = $1', [input.campaignId]);
+          if (source.groupIds.length) {
+            await client.query(
+              `INSERT INTO campaign_targets (campaign_id, session_id, group_id)
+               SELECT $1, $2, group_id FROM unnest($3::text[]) AS group_id`,
+              [input.campaignId, campaign.session_id, source.groupIds],
+            );
+          }
+        }
+        const updated = await client.query<{
+          targets_revision: string;
+          target_source_applied_at: Date;
+        }>(
+          `UPDATE campaigns SET targets_revision = targets_revision + 1,
+             target_source_group_list_id = $2,
+             target_source_membership_revision = $3,
+             target_source_applied_at = now(), updated_at = now()
+           WHERE id = $1
+           RETURNING targets_revision::text, target_source_applied_at`,
+          [input.campaignId, source.id, source.membershipRevision],
+        );
+        targetsRevision = Number(updated.rows[0]!.targets_revision);
+        appliedAt = updated.rows[0]!.target_source_applied_at;
+      } else {
+        const existing = await client.query<{ target_source_applied_at: Date }>(
+          'SELECT target_source_applied_at FROM campaigns WHERE id = $1',
+          [input.campaignId],
+        );
+        appliedAt = existing.rows[0]!.target_source_applied_at;
+      }
+      return {
+        targets: await this.listTargetsWithClient(client, input.campaignId),
+        targetsRevision,
+        source: {
+          type: 'GROUP_LIST', groupListId: source.id,
+          membershipRevision: source.membershipRevision, appliedAt,
+        },
+        campaignFound: true,
+        campaignEditable: true,
+        targetRevisionConflict: false,
+        sourceFound: true,
+        sourceSessionMismatch: false,
+        sourceRevisionConflict: false,
       };
     });
   }

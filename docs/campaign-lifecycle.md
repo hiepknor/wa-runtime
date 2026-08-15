@@ -35,7 +35,8 @@ cannot overwrite a newer group event.
 
 ## Draft and targets
 
-Campaign targets are replaced atomically. Target IDs must be unique group JIDs ending in `@g.us`,
+Campaign targets are replaced atomically, either from explicit group IDs or by applying one exact
+saved-list membership revision. Target IDs must be unique group JIDs ending in `@g.us`,
 must belong to the campaign's session and must exist in the durable group read model. Inactive,
 denied and unknown groups may be retained so clients can show them and preflight can explain the
 policy result. Replacement rejects duplicate IDs and more than 1,000 unique IDs. It validates the
@@ -61,9 +62,18 @@ write. Legacy omission remains accepted, but Runtime still protects the request'
 with an internal compare-and-swap predicate. Target list and replacement responses include the
 canonical `targetsRevision` represented by their complete target data.
 
+Saved-list application locks the DRAFT campaign and saved list in one transaction, validates session
+scope and optional target/membership revision preconditions, then materializes a campaign-owned target
+snapshot. The response returns nullable source provenance with list ID, membership revision and apply
+time as part of the same atomic operation. Subsequent target reads use one repeatable-read snapshot
+for campaign revision, provenance and target data. Editing, renaming or archiving the list
+does not propagate. Manual target replacement clears provenance. A run snapshots the provenance for
+audit but never resolves the mutable saved list during preflight or delivery.
+
 ## Preflight
 
-Preflight policy version 1 evaluates five checks:
+Preflight policy version 2 evaluates five checks. Version 2 treats invalidated capability snapshots
+as stale/unknown even when their last stored status was `ALLOWED`.
 
 | Check | Blocks when |
 | --- | --- |
@@ -78,8 +88,13 @@ calls OpenWA's send endpoint. A run with a blocking result enters `BLOCKED` with
 Standalone `POST /campaigns/{id}/preflight` is read-only for both `DRY_RUN` and `LIVE`: it does not
 create a campaign run, run target, delivery or message job and does not enqueue or call a send
 adapter. `BLOCK` takes precedence over `WARN`, which takes precedence over `PASS`. Target issue
-reasons are stable `TARGET_CAPABILITY_DENIED` or `TARGET_CAPABILITY_UNKNOWN` codes; the underlying
-capability remains a separate field. Reports include the campaign and target revisions they checked.
+reasons are stable `TARGET_CAPABILITY_DENIED`, `TARGET_CAPABILITY_UNKNOWN` or
+`TARGET_CAPABILITY_STALE` codes; an invalidated capability is treated as unknown even when its stored
+status was previously allowed. The underlying capability remains a separate field. Reports include
+the campaign and target revisions they checked.
+Preparation and resume compare observed capability revisions again before committing the decision.
+A changed revision causes a retry/conflict rather than applying stale policy, and preparation churn
+does not consume the operational failure-attempt budget.
 
 ## Reusable staging fixture
 
@@ -108,9 +123,17 @@ atomically creates the run and snapshots:
 - session ID and scheduled time;
 - selected group IDs and names;
 - each group's capability, reason and revision.
+- optional saved-list source provenance for the materialized target set.
 
 Repeating the same key and mode returns the existing run. Reusing the key with a different mode
 returns HTTP 409.
+
+A campaign is one live send plan. While `DRAFT`, it may create multiple DRY_RUN snapshots without a
+status change. The first LIVE launch atomically changes the campaign to `ACTIVE`; a database unique
+index permits at most one LIVE run for that campaign. New launches may send optional expected
+campaign/target revisions, and stale values return HTTP 409. A LIVE `ONCE` launch whose scheduled
+instant has passed is rejected. Idempotent replay of the winning key is checked before lifecycle
+rejection and therefore remains safe after launch.
 
 ## Run states
 
@@ -158,18 +181,24 @@ and must not derive authoritative progress from locally cached rows.
 
 `POST /campaign-runs/{id}/pause` accepts `SCHEDULED` or `RUNNING`. It prevents new delivery
 materialization but does not claim to recall jobs already processing.
+Pausing a LIVE run also changes its campaign to `PAUSED`; DRY_RUN controls do not change campaign
+status.
 
 ### Resume
 
 `POST /campaign-runs/{id}/resume` accepts `PAUSED` or `BLOCKED`. It reruns preflight and refreshes
 capability snapshots only for work that has not started. A still-blocked run remains `BLOCKED` and
 returns HTTP 409 with the current preflight report.
+Successful LIVE resume changes the campaign to `ACTIVE`; a blocked resume leaves the campaign
+`PAUSED`.
 
 ### Cancel
 
 `POST /campaign-runs/{id}/cancel` accepts any non-terminal run. It creates missing delivery audit
 rows, marks pending targets cancelled, and cancels linked message jobs that are still scheduled or
 queued. Processing and already accepted messages cannot be recalled.
+Cancelling a LIVE run archives its campaign. LIVE completion, partial failure or exhausted
+preparation retries also archive the one-send plan; detailed outcome remains on the immutable run.
 
 ## Recovery
 

@@ -15,7 +15,7 @@ import {
   SavedGroupListDto,
   SavedGroupListPageDto,
 } from '../../contracts/group-lists/group-list.dto';
-import { GroupListQueryDto } from '../../contracts/group-lists/group-list-query.dto';
+import { GroupListArchiveQueryDto, GroupListQueryDto } from '../../contracts/group-lists/group-list-query.dto';
 import { ReplaceGroupListGroupsDto } from '../../contracts/group-lists/replace-group-list-groups.dto';
 import { UpdateGroupListDto } from '../../contracts/group-lists/update-group-list.dto';
 import { GroupListHttpExceptionFilter } from './group-list-http-exception.filter';
@@ -75,8 +75,11 @@ export class GroupListController {
   @HttpCode(204)
   @ApiOperation({ summary: 'Archive a saved group list without changing campaign targets' })
   @ApiNoContentResponse()
-  async archive(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
-    await this.groupLists.archive(id);
+  async archive(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: GroupListArchiveQueryDto,
+  ): Promise<void> {
+    await this.groupLists.archive(id, query.expectedRevision);
   }
 
   @Get(':id/groups')
@@ -96,6 +99,11 @@ export class GroupListController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReplaceGroupListGroupsDto,
   ) {
-    return this.groupLists.replaceGroups(id, dto.groupIds, dto.expectedRevision);
+    return this.groupLists.replaceGroups(
+      id,
+      dto.groupIds,
+      dto.expectedRevision,
+      dto.expectedMembershipRevision,
+    );
   }
 }

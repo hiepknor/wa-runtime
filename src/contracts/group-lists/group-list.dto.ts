@@ -21,6 +21,12 @@ export class SavedGroupListDto {
   @ApiProperty({ type: 'integer', minimum: 1 })
   revision!: number;
 
+  @ApiProperty({
+    type: 'integer', minimum: 1,
+    description: 'Revision of the static group-ID membership only; metadata edits do not change it.',
+  })
+  membershipRevision!: number;
+
   @ApiProperty({ type: String, format: 'date-time', nullable: true })
   archivedAt!: Date | null;
 

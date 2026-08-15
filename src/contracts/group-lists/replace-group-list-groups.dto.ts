@@ -4,12 +4,22 @@ import { IsArray, IsInt, IsOptional, IsString, Matches, Min } from 'class-valida
 export class ReplaceGroupListGroupsDto {
   @ApiPropertyOptional({
     type: 'integer', minimum: 1,
-    description: 'Saved-list revision observed by the editor. A stale value returns HTTP 409.',
+    deprecated: true,
+    description: 'Aggregate revision observed by a legacy editor. Prefer expectedMembershipRevision.',
   })
   @IsOptional()
   @IsInt()
   @Min(1)
   expectedRevision?: number;
+
+  @ApiPropertyOptional({
+    type: 'integer', minimum: 1,
+    description: 'Membership revision represented by the editor. A stale value returns HTTP 409.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  expectedMembershipRevision?: number;
 
   @ApiProperty({
     type: [String],

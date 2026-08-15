@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { runtimeConfig } from '../../core/config/runtime-config';
 import type { CampaignExecutionMode } from '../../contracts/campaigns/campaign-preflight.dto';
+import type { CreateCampaignRunDto } from '../../contracts/campaigns/campaign-run.dto';
 import { CampaignPreflightService } from './campaign-preflight.service';
 import { CampaignRunRepository } from './campaign-run.repository';
 import { CampaignService } from './campaign.service';
@@ -16,7 +17,7 @@ export class CampaignRunService {
     private readonly preflights: CampaignPreflightService,
   ) {}
 
-  async create(campaignId: string, rawIdempotencyKey: string | undefined, executionMode: CampaignExecutionMode) {
+  async create(campaignId: string, rawIdempotencyKey: string | undefined, dto: CreateCampaignRunDto) {
     const idempotencyKey = rawIdempotencyKey?.trim();
     if (!idempotencyKey) {
       throw new CampaignError(HttpStatus.BAD_REQUEST, 'CAMPAIGN_RUN_IDEMPOTENCY_KEY_REQUIRED',
@@ -27,13 +28,38 @@ export class CampaignRunService {
         'Idempotency-Key must not exceed 200 characters');
     }
     await this.campaigns.get(campaignId);
-    const result = await this.repository.create({ campaignId, idempotencyKey, executionMode });
-    if (!result.run || !result.campaignFound) {
+    const result = await this.repository.create({
+      campaignId,
+      idempotencyKey,
+      executionMode: dto.executionMode,
+      expectedCampaignRevision: dto.expectedCampaignRevision,
+      expectedTargetsRevision: dto.expectedTargetsRevision,
+    });
+    if (!result.campaignFound) {
       throw new CampaignError(HttpStatus.NOT_FOUND, 'CAMPAIGN_NOT_FOUND', 'Campaign not found');
     }
     if (result.idempotencyConflict) {
       throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_IDEMPOTENCY_CONFLICT',
         'Idempotency-Key was already used with a different executionMode');
+    }
+    if (result.campaignNotLaunchable) {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_LAUNCH_CONFLICT',
+        'Campaign is not launchable from its current lifecycle state');
+    }
+    if (result.revisionConflict) {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_REVISION_CONFLICT',
+        'Campaign content or targets changed after launch review', {
+          currentCampaignRevision: result.currentCampaignRevision,
+          currentTargetsRevision: result.currentTargetsRevision,
+        });
+    }
+    if (result.scheduleExpired) {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_SCHEDULE_EXPIRED',
+        'The ONCE campaign schedule is already in the past');
+    }
+    if (!result.run) {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_LAUNCH_CONFLICT',
+        'Campaign run could not be created');
     }
     return result;
   }
@@ -52,7 +78,7 @@ export class CampaignRunService {
         campaignRevision: context.campaignRevision,
         targetsRevision: context.targetsRevision,
       });
-      await this.repository.applyPreflight(runId, claim.leaseToken, report);
+      await this.repository.applyPreflight(runId, claim.leaseToken, report, context.targets);
     } catch (error) {
       await this.repository.failPreparationAttempt(
         runId,
@@ -116,7 +142,11 @@ export class CampaignRunService {
       throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_STATE_CONFLICT',
         'Campaign run is still blocked by preflight', { preflight: report });
     }
-    const run = await this.repository.resume(id, report);
+    const run = await this.repository.resume(id, report, context.targets);
+    if (run === 'STALE_INPUT') {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_STATE_CONFLICT',
+        'Group capability changed during resume preflight; retry with current state');
+    }
     if (!run) throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_STATE_CONFLICT',
       'Campaign run state changed; reload and retry');
     return run;

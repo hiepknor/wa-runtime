@@ -75,8 +75,9 @@ Capability freshness is authoritative when `capability_invalidated_at` is null (
 Saved group lists are user-managed aggregates stored separately from `gateway_groups`. Composite
 foreign keys bind every membership to the list session and durable group identity. List metadata and
 membership writes do not call OpenWA, enqueue work or mutate campaign targets. A complete membership
-is bounded at 1,000 groups; clients copy those IDs into a staged campaign target snapshot and persist
-that snapshot through the existing campaign API.
+is bounded at 1,000 groups. Campaigns may copy one exact membership revision through a Runtime-owned
+transaction; the materialized target set and its provenance then remain unchanged when the list is
+renamed, edited or archived.
 
 Business state is committed before queue work is published. If Redis is unavailable after a commit,
 the scheduler retries publication from the durable row. Webhooks, message jobs and sync runs use
@@ -190,6 +191,11 @@ campaign + selected groups
 At most five message jobs per running campaign are buffered in `SCHEDULED`, `QUEUED` or
 `PROCESSING`. This bounds queue pressure while preserving PostgreSQL as the complete work list.
 
+A campaign represents one live send plan. It can have multiple review-only DRY_RUN snapshots while
+`DRAFT`, but the first LIVE launch atomically changes it to `ACTIVE` and a partial unique index
+prevents a second LIVE run. LIVE pause/resume maps the campaign to `PAUSED`/`ACTIVE`; terminal LIVE
+completion, cancellation or exhausted preparation archives the plan.
+
 ## Contract ownership
 
 ```text
@@ -211,6 +217,10 @@ those shapes to consumers.
 - API idempotency prevents duplicate message jobs and campaign runs.
 - Campaign payloads and targets are snapshotted at run creation, so later draft edits cannot change
   an existing run.
+- Target reads return campaign existence, the complete target set, target revision and saved-list
+  provenance from one repeatable-read snapshot.
+- Run preparation reads current capabilities from one repeatable-read snapshot and compares their
+  revisions again before committing preflight, retrying instead of applying a stale decision.
 - A live delivery rechecks the group's capability revision before materialization.
 - A live worker checks durable session sendability immediately before its OpenWA call.
 - A live worker acquires the per-session send lease, refreshes its processing lease, waits the

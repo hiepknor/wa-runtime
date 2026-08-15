@@ -43,6 +43,8 @@ describe('saved group-list OpenAPI contract', () => {
       .toMatchObject({ type: 'integer', minimum: 1 });
     expect(contract.components.schemas.ReplaceGroupListGroupsDto?.properties.expectedRevision)
       .toMatchObject({ type: 'integer', minimum: 1 });
+    expect(contract.components.schemas.ReplaceGroupListGroupsDto?.properties.expectedMembershipRevision)
+      .toMatchObject({ type: 'integer', minimum: 1 });
 
     const membership = contract.components.schemas.GroupListMembershipDto!;
     expect(membership.required).toEqual(['list', 'data']);
@@ -58,10 +60,11 @@ describe('saved group-list OpenAPI contract', () => {
     const list = contract.components.schemas.SavedGroupListDto!;
     expect(list.required).toEqual([
       'id', 'sessionId', 'name', 'description', 'groupCount', 'revision',
-      'archivedAt', 'createdAt', 'updatedAt',
+      'membershipRevision', 'archivedAt', 'createdAt', 'updatedAt',
     ]);
     expect(list.properties.groupCount).toMatchObject({ type: 'integer', minimum: 0 });
     expect(list.properties.revision).toMatchObject({ type: 'integer', minimum: 1 });
+    expect(list.properties.membershipRevision).toMatchObject({ type: 'integer', minimum: 1 });
     expect(list.properties.archivedAt).toMatchObject({ type: 'string', format: 'date-time', nullable: true });
 
     const get = contract.paths['/api/v1/group-lists']?.get;
@@ -73,6 +76,12 @@ describe('saved group-list OpenAPI contract', () => {
     expect(parameters.get('limit')?.schema).toMatchObject({ minimum: 1, maximum: 200, default: 50 });
     expect(parameters.get('offset')?.schema).toMatchObject({ minimum: 0, default: 0 });
     expect(get?.description).toContain('applied before pagination');
+
+    const archiveParameters = contract.paths['/api/v1/group-lists/{id}']?.delete?.parameters ?? [];
+    expect(archiveParameters).toContainEqual(expect.objectContaining({
+      name: 'expectedRevision', required: false,
+      schema: expect.objectContaining({ type: 'integer', minimum: 1 }),
+    }));
   });
 
   it('documents typed errors for every saved-list operation', () => {

@@ -20,6 +20,13 @@ const ready = { status: 'ready', engineLoaded: true, restricted: false };
 const revisions = { campaignRevision: 7, targetsRevision: 4 };
 
 describe('evaluateCampaignPreflight', () => {
+  it('publishes policy version 2 for invalidation-aware capability semantics', () => {
+    expect(evaluateCampaignPreflight({
+      executionMode: CampaignExecutionMode.DRY_RUN,
+      text: 'hello', targets: [target('ALLOWED')], session: ready, liveSendsEnabled: false, ...revisions,
+    }).policyVersion).toBe(2);
+  });
+
   it('passes a live campaign only when all capabilities and the kill switch allow it', () => {
     const report = evaluateCampaignPreflight({
       executionMode: CampaignExecutionMode.LIVE,
@@ -81,5 +88,19 @@ describe('evaluateCampaignPreflight', () => {
     });
     expect(block.checks.some(check => check.status === 'WARN')).toBe(true);
     expect(block.status).toBe('BLOCK');
+  });
+
+  it('treats an invalidated ALLOWED capability as effectively UNKNOWN', () => {
+    const stale = target('ALLOWED');
+    stale.sendCapability.invalidatedAt = new Date();
+    const report = evaluateCampaignPreflight({
+      executionMode: CampaignExecutionMode.LIVE,
+      text: 'hello', targets: [stale], session: ready, liveSendsEnabled: true, ...revisions,
+    });
+    expect(report.status).toBe('BLOCK');
+    expect(report).toMatchObject({ allowedTargets: 0, unknownTargets: 1 });
+    expect(report.targetIssues).toEqual([
+      expect.objectContaining({ capability: 'UNKNOWN', reason: 'TARGET_CAPABILITY_STALE' }),
+    ]);
   });
 });

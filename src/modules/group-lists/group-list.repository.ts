@@ -13,6 +13,7 @@ interface GroupListRow {
   description: string | null;
   group_count: string | number;
   revision: string | number;
+  membership_revision: string | number;
   create_request_hash: string | null;
   archived_at: Date | null;
   created_at: Date;
@@ -60,6 +61,7 @@ const mapList = (row: GroupListRow): SavedGroupListDto => ({
   description: row.description,
   groupCount: Number(row.group_count),
   revision: Number(row.revision),
+  membershipRevision: Number(row.membership_revision),
   archivedAt: row.archived_at,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -240,15 +242,23 @@ export class GroupListRepository {
     });
   }
 
-  async replaceGroups(id: string, groupIds: string[], expectedRevision: number): Promise<MutationResult> {
+  async replaceGroups(
+    id: string,
+    groupIds: string[],
+    expectedRevision: number,
+    expectedMembershipRevision?: number,
+  ): Promise<MutationResult> {
     return this.database.transaction(async client => {
-      const listResult = await client.query<{ session_id: string; revision: string }>(
-        'SELECT session_id, revision::text FROM group_lists WHERE id = $1 AND archived_at IS NULL FOR UPDATE',
+      const listResult = await client.query<{ session_id: string; revision: string; membership_revision: string }>(
+        `SELECT session_id, revision::text, membership_revision::text
+         FROM group_lists WHERE id = $1 AND archived_at IS NULL FOR UPDATE`,
         [id],
       );
       const list = listResult.rows[0];
       if (!list) return { list: null, missingGroupIds: [], mismatchedGroupIds: [] };
-      if (Number(list.revision) !== expectedRevision) {
+      if (Number(list.revision) !== expectedRevision
+        || (expectedMembershipRevision !== undefined
+          && Number(list.membership_revision) !== expectedMembershipRevision)) {
         return { list: null, missingGroupIds: [], mismatchedGroupIds: [], revisionConflict: true };
       }
 
@@ -267,7 +277,8 @@ export class GroupListRepository {
         await client.query('DELETE FROM group_list_items WHERE group_list_id = $1', [id]);
         await this.insertItems(client, id, list.session_id, next);
         await client.query(
-          'UPDATE group_lists SET revision = revision + 1, updated_at = now() WHERE id = $1',
+          `UPDATE group_lists SET revision = revision + 1,
+             membership_revision = membership_revision + 1, updated_at = now() WHERE id = $1`,
           [id],
         );
       }
@@ -279,6 +290,38 @@ export class GroupListRepository {
         mismatchedGroupIds: [],
       };
     });
+  }
+
+  async lockMembershipSnapshot(client: PoolClient, id: string): Promise<{
+    id: string;
+    sessionId: string;
+    revision: number;
+    membershipRevision: number;
+    groupIds: string[];
+  } | null> {
+    const list = await client.query<{
+      id: string;
+      session_id: string;
+      revision: string;
+      membership_revision: string;
+    }>(
+      `SELECT id, session_id, revision::text, membership_revision::text
+       FROM group_lists WHERE id = $1 AND archived_at IS NULL FOR SHARE`,
+      [id],
+    );
+    const row = list.rows[0];
+    if (!row) return null;
+    const membership = await client.query<{ group_id: string }>(
+      'SELECT group_id FROM group_list_items WHERE group_list_id = $1 ORDER BY group_id',
+      [id],
+    );
+    return {
+      id: row.id,
+      sessionId: row.session_id,
+      revision: Number(row.revision),
+      membershipRevision: Number(row.membership_revision),
+      groupIds: membership.rows.map(item => item.group_id),
+    };
   }
 
   private async validateGroups(

@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Get, Headers, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res, UseFilters,
+  Body, Controller, Get, Headers, HttpCode, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res, UseFilters,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse, ApiConflictResponse, ApiCreatedResponse, ApiHeader, ApiNotFoundResponse,
@@ -11,7 +11,11 @@ import { RuntimeErrorDto } from '../../contracts/common/runtime-error.dto';
 import { CampaignDto, CampaignListDto, CampaignStatus } from '../../contracts/campaigns/campaign.dto';
 import { CampaignQueryDto } from '../../contracts/campaigns/campaign-query.dto';
 import { CampaignPreflightDto, CampaignPreflightRequestDto } from '../../contracts/campaigns/campaign-preflight.dto';
-import { CampaignTargetListDto, ReplaceCampaignTargetsDto } from '../../contracts/campaigns/campaign-target.dto';
+import {
+  ApplyGroupListTargetsDto,
+  CampaignTargetListDto,
+  ReplaceCampaignTargetsDto,
+} from '../../contracts/campaigns/campaign-target.dto';
 import { CampaignScheduleType, CreateCampaignDto } from '../../contracts/campaigns/create-campaign.dto';
 import { UpdateCampaignDto } from '../../contracts/campaigns/update-campaign.dto';
 import { CampaignRunDto, CampaignRunListDto, CreateCampaignRunDto } from '../../contracts/campaigns/campaign-run.dto';
@@ -90,6 +94,17 @@ export class CampaignController {
     return this.campaigns.replaceTargets(id, dto.groupIds, dto.expectedTargetsRevision);
   }
 
+  @Post(':id/targets/apply-group-list')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Atomically replace DRAFT campaign targets from one saved group-list revision' })
+  @ApiOkResponse({ type: CampaignTargetListDto })
+  applyGroupListTargets(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ApplyGroupListTargetsDto,
+  ) {
+    return this.campaigns.applyGroupListTargets(id, dto);
+  }
+
   @Post(':id/preflight')
   @ApiOperation({ summary: 'Evaluate a campaign without creating a run' })
   @ApiOkResponse({ type: CampaignPreflightDto })
@@ -110,7 +125,7 @@ export class CampaignController {
     @Body() dto: CreateCampaignRunDto,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const result = await this.runs.create(id, idempotencyKey, dto.executionMode);
+    const result = await this.runs.create(id, idempotencyKey, dto);
     response.status(result.created ? 201 : 200);
     return result.run;
   }

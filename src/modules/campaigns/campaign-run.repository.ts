@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { PoolClient } from 'pg';
 import type { CampaignDeliveryDto } from '../../contracts/campaigns/campaign-delivery.dto';
 import type { CampaignExecutionMode, CampaignPreflightDto } from '../../contracts/campaigns/campaign-preflight.dto';
 import type { CampaignRunDto, CampaignRunProgressDto } from '../../contracts/campaigns/campaign-run.dto';
@@ -20,6 +21,9 @@ interface CampaignRunRow {
   payload_snapshot: { text: string };
   campaign_revision: string | number;
   targets_revision: string | number;
+  target_source_group_list_id: string | null;
+  target_source_membership_revision: string | number | null;
+  target_source_applied_at: Date | null;
   preflight_report: CampaignPreflightDto | null;
   scheduled_at: Date;
   started_at: Date | null;
@@ -47,6 +51,8 @@ export interface ClaimedCampaignPreparation {
 }
 
 export type CampaignPreparationResult = 'PREPARING' | 'FAILED' | 'LOST_OWNERSHIP';
+export type CampaignPreflightApplyResult = 'APPLIED' | 'STALE_INPUT' | 'LOST_OWNERSHIP';
+export type CampaignResumeResult = CampaignRunDto | 'STALE_INPUT' | null;
 
 interface PreflightTargetRow {
   group_id: string;
@@ -102,6 +108,16 @@ const mapRun = (row: CampaignRunRow): CampaignRunDto => ({
   status: row.status,
   statusReason: row.status_reason,
   text: row.payload_snapshot.text,
+  targetSource: row.target_source_group_list_id
+    && row.target_source_membership_revision
+    && row.target_source_applied_at
+    ? {
+        type: 'GROUP_LIST',
+        groupListId: row.target_source_group_list_id,
+        membershipRevision: Number(row.target_source_membership_revision),
+        appliedAt: row.target_source_applied_at,
+      }
+    : null,
   preflight: row.preflight_report,
   totalTargets: Number(row.target_count),
   progress: mapProgress(row.delivery_counts),
@@ -143,11 +159,22 @@ export class CampaignRunRepository {
     private readonly messageJobs: MessageJobRepository,
   ) {}
 
-  async create(input: { campaignId: string; idempotencyKey: string; executionMode: CampaignExecutionMode }): Promise<{
+  async create(input: {
+    campaignId: string;
+    idempotencyKey: string;
+    executionMode: CampaignExecutionMode;
+    expectedCampaignRevision?: number;
+    expectedTargetsRevision?: number;
+  }): Promise<{
     run: CampaignRunDto | null;
     created: boolean;
     campaignFound: boolean;
     idempotencyConflict: boolean;
+    campaignNotLaunchable: boolean;
+    revisionConflict: boolean;
+    scheduleExpired: boolean;
+    currentCampaignRevision?: number;
+    currentTargetsRevision?: number;
   }> {
     return this.database.transaction(async client => {
       const campaignResult = await client.query<{
@@ -156,12 +183,54 @@ export class CampaignRunRepository {
         payload: { text: string };
         schedule_type: CampaignScheduleType;
         scheduled_at: Date | null;
+        status: string;
         revision: string | number;
         targets_revision: string | number;
-      }>(`SELECT id, session_id, payload, schedule_type, scheduled_at, revision, targets_revision
-           FROM campaigns WHERE id = $1 FOR SHARE`, [input.campaignId]);
+        target_source_group_list_id: string | null;
+        target_source_membership_revision: string | number | null;
+        target_source_applied_at: Date | null;
+      }>(`SELECT id, session_id, payload, schedule_type, scheduled_at, status, revision, targets_revision
+             , target_source_group_list_id, target_source_membership_revision, target_source_applied_at
+           FROM campaigns WHERE id = $1 FOR UPDATE`, [input.campaignId]);
       const campaign = campaignResult.rows[0];
-      if (!campaign) return { run: null, created: false, campaignFound: false, idempotencyConflict: false };
+      const empty = {
+        run: null, created: false, campaignFound: Boolean(campaign), idempotencyConflict: false,
+        campaignNotLaunchable: false, revisionConflict: false, scheduleExpired: false,
+      };
+      if (!campaign) return empty;
+
+      const existing = await client.query<CampaignRunRow>(
+        `${runSelect} WHERE cr.campaign_id = $1 AND cr.idempotency_key = $2`,
+        [campaign.id, input.idempotencyKey],
+      );
+      if (existing.rows[0]) {
+        const run = existing.rows[0];
+        return {
+          ...empty,
+          run: mapRun(run),
+          campaignFound: true,
+          idempotencyConflict: run.execution_mode !== input.executionMode,
+        };
+      }
+
+      const currentCampaignRevision = Number(campaign.revision);
+      const currentTargetsRevision = Number(campaign.targets_revision);
+      if ((input.expectedCampaignRevision !== undefined
+          && input.expectedCampaignRevision !== currentCampaignRevision)
+        || (input.expectedTargetsRevision !== undefined
+          && input.expectedTargetsRevision !== currentTargetsRevision)) {
+        return {
+          ...empty, campaignFound: true, revisionConflict: true,
+          currentCampaignRevision, currentTargetsRevision,
+        };
+      }
+      if (campaign.status !== 'DRAFT') {
+        return { ...empty, campaignFound: true, campaignNotLaunchable: true };
+      }
+      if (input.executionMode === 'LIVE' && campaign.schedule_type === 'ONCE'
+        && campaign.scheduled_at && campaign.scheduled_at <= new Date()) {
+        return { ...empty, campaignFound: true, scheduleExpired: true };
+      }
 
       const scheduledAt = campaign.schedule_type === 'ONCE' && campaign.scheduled_at
         ? campaign.scheduled_at
@@ -169,19 +238,23 @@ export class CampaignRunRepository {
       const inserted = await client.query<{ id: string }>(
          `INSERT INTO campaign_runs
            (campaign_id, session_id, idempotency_key, execution_mode, payload_snapshot, scheduled_at,
-            campaign_revision, targets_revision)
-         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8)
+            campaign_revision, targets_revision, target_source_group_list_id,
+            target_source_membership_revision, target_source_applied_at)
+         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11)
          ON CONFLICT (campaign_id, idempotency_key) DO NOTHING RETURNING id`,
         [campaign.id, campaign.session_id, input.idempotencyKey, input.executionMode,
-          JSON.stringify(campaign.payload), scheduledAt, campaign.revision, campaign.targets_revision],
+          JSON.stringify(campaign.payload), scheduledAt, campaign.revision, campaign.targets_revision,
+          campaign.target_source_group_list_id, campaign.target_source_membership_revision,
+          campaign.target_source_applied_at],
       );
       if (!inserted.rows[0]) {
-        const existing = await client.query<CampaignRunRow>(
+        const replay = await client.query<CampaignRunRow>(
           `${runSelect} WHERE cr.campaign_id = $1 AND cr.idempotency_key = $2`,
           [campaign.id, input.idempotencyKey],
         );
-        const run = existing.rows[0]!;
+        const run = replay.rows[0]!;
         return {
+          ...empty,
           run: mapRun(run),
           created: false,
           campaignFound: true,
@@ -201,8 +274,17 @@ export class CampaignRunRepository {
          WHERE ct.campaign_id = $2 AND ct.enabled`,
         [runId, campaign.id],
       );
+      if (input.executionMode === 'LIVE') {
+        await client.query(
+          `UPDATE campaigns SET status = 'ACTIVE', updated_at = now()
+           WHERE id = $1 AND status = 'DRAFT'`,
+          [campaign.id],
+        );
+      }
       const result = await client.query<CampaignRunRow>(`${runSelect} WHERE cr.id = $1`, [runId]);
-      return { run: mapRun(result.rows[0]!), created: true, campaignFound: true, idempotencyConflict: false };
+      return {
+        ...empty, run: mapRun(result.rows[0]!), created: true, campaignFound: true,
+      };
     });
   }
 
@@ -253,8 +335,9 @@ export class CampaignRunRepository {
   }
 
   async recoverExpiredPreparations(): Promise<number> {
-    const result = await this.database.query(
-      `UPDATE campaign_runs SET
+    return this.database.transaction(async client => {
+      const result = await client.query<{ campaign_id: string; execution_mode: CampaignExecutionMode; status: string }>(
+        `UPDATE campaign_runs SET
          status = CASE WHEN preparation_attempt_count >= 3 THEN 'FAILED'::campaign_run_status
            ELSE 'PREPARING'::campaign_run_status END,
          status_reason = CASE WHEN preparation_attempt_count >= 3 THEN 'PREPARATION_FAILED' ELSE status_reason END,
@@ -266,9 +349,20 @@ export class CampaignRunRepository {
        WHERE status = 'PREPARING' AND (
          (preparation_lease_token IS NOT NULL AND preparation_lease_expires_at < now())
          OR (preparation_lease_token IS NULL AND preparation_attempt_count >= 3)
-       )`,
-    );
-    return result.rowCount ?? 0;
+       ) RETURNING campaign_id, execution_mode, status`,
+      );
+      const failedLiveCampaignIds = result.rows
+        .filter(row => row.execution_mode === 'LIVE' && row.status === 'FAILED')
+        .map(row => row.campaign_id);
+      if (failedLiveCampaignIds.length) {
+        await client.query(
+          `UPDATE campaigns SET status = 'ARCHIVED', updated_at = now()
+           WHERE id = ANY($1::uuid[]) AND status IN ('ACTIVE','PAUSED')`,
+          [failedLiveCampaignIds],
+        );
+      }
+      return result.rowCount ?? 0;
+    });
   }
 
   async getPreflightContext(runId: string): Promise<{
@@ -277,27 +371,34 @@ export class CampaignRunRepository {
     campaignRevision: number;
     targetsRevision: number;
   } | null> {
-    const runResult = await this.database.query<CampaignRunRow>(`${runSelect} WHERE cr.id = $1`, [runId]);
-    const row = runResult.rows[0];
-    if (!row) return null;
-    const run = mapRun(row);
-    const result = await this.database.query<PreflightTargetRow>(
-      `SELECT crt.group_id, crt.group_name, g.send_capability, g.send_capability_reason,
-         g.capability_checked_at, g.capability_invalidated_at, g.capability_revision
-       FROM campaign_run_targets crt
-       JOIN gateway_groups g ON g.session_id = crt.session_id AND g.id = crt.group_id
-       WHERE crt.run_id = $1 ORDER BY crt.group_name, crt.group_id`,
-      [runId],
-    );
-    return {
-      run,
-      targets: result.rows.map(mapPreflightTarget),
-      campaignRevision: Number(row.campaign_revision),
-      targetsRevision: Number(row.targets_revision),
-    };
+    return this.database.transaction(async client => {
+      await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const runResult = await client.query<CampaignRunRow>(`${runSelect} WHERE cr.id = $1`, [runId]);
+      const row = runResult.rows[0];
+      if (!row) return null;
+      const result = await client.query<PreflightTargetRow>(
+        `SELECT crt.group_id, crt.group_name, g.send_capability, g.send_capability_reason,
+           g.capability_checked_at, g.capability_invalidated_at, g.capability_revision
+         FROM campaign_run_targets crt
+         JOIN gateway_groups g ON g.session_id = crt.session_id AND g.id = crt.group_id
+         WHERE crt.run_id = $1 ORDER BY crt.group_name, crt.group_id`,
+        [runId],
+      );
+      return {
+        run: mapRun(row),
+        targets: result.rows.map(mapPreflightTarget),
+        campaignRevision: Number(row.campaign_revision),
+        targetsRevision: Number(row.targets_revision),
+      };
+    });
   }
 
-  async applyPreflight(runId: string, leaseToken: string, report: CampaignPreflightDto): Promise<boolean> {
+  async applyPreflight(
+    runId: string,
+    leaseToken: string,
+    report: CampaignPreflightDto,
+    observedTargets: CampaignTargetDto[],
+  ): Promise<CampaignPreflightApplyResult> {
     return this.database.transaction(async client => {
       const locked = await client.query<{ status: string; scheduled_at: Date }>(
          `SELECT status, scheduled_at FROM campaign_runs
@@ -306,7 +407,17 @@ export class CampaignRunRepository {
         [runId, leaseToken],
       );
       const run = locked.rows[0];
-      if (!run) return false;
+      if (!run) return 'LOST_OWNERSHIP';
+      if (await this.capabilitySnapshotChanged(client, runId, observedTargets)) {
+        await client.query(
+          `UPDATE campaign_runs SET preparation_lease_token = NULL,
+             preparation_lease_expires_at = NULL, preparation_next_attempt_at = now(),
+             preparation_attempt_count = GREATEST(0, preparation_attempt_count - 1), updated_at = now()
+           WHERE id = $1 AND status = 'PREPARING' AND preparation_lease_token = $2`,
+          [runId, leaseToken],
+        );
+        return 'STALE_INPUT';
+      }
       if (report.status === 'BLOCK') {
         await client.query(
           `UPDATE campaign_runs SET status = 'BLOCKED', status_reason = 'PREFLIGHT_BLOCKED', preflight_status = $2,
@@ -315,7 +426,7 @@ export class CampaignRunRepository {
            WHERE id = $1`,
           [runId, report.status, report.policyVersion, JSON.stringify(report)],
         );
-        return true;
+        return 'APPLIED';
       }
 
       await client.query(
@@ -342,7 +453,7 @@ export class CampaignRunRepository {
         [runId, startsNow ? 'RUNNING' : 'SCHEDULED', report.status,
           report.policyVersion, JSON.stringify(report)],
       );
-      return true;
+      return 'APPLIED';
     });
   }
 
@@ -351,8 +462,13 @@ export class CampaignRunRepository {
     leaseToken: string,
     error: string,
   ): Promise<CampaignPreparationResult> {
-    const result = await this.database.query<{ status: 'PREPARING' | 'FAILED' }>(
-      `UPDATE campaign_runs SET
+    return this.database.transaction(async client => {
+      const result = await client.query<{
+        status: 'PREPARING' | 'FAILED';
+        campaign_id: string;
+        execution_mode: CampaignExecutionMode;
+      }>(
+        `UPDATE campaign_runs SET
          status = CASE WHEN preparation_attempt_count >= 3 THEN 'FAILED'::campaign_run_status
            ELSE 'PREPARING'::campaign_run_status END,
          status_reason = CASE WHEN preparation_attempt_count >= 3 THEN 'PREPARATION_FAILED' ELSE status_reason END,
@@ -364,10 +480,19 @@ export class CampaignRunRepository {
          updated_at = now()
        WHERE id = $1 AND status = 'PREPARING' AND preparation_lease_token = $2
          AND preparation_lease_expires_at > now()
-       RETURNING status`,
-      [runId, leaseToken, error],
-    );
-    return result.rows[0]?.status ?? 'LOST_OWNERSHIP';
+       RETURNING status, campaign_id, execution_mode`,
+        [runId, leaseToken, error],
+      );
+      const row = result.rows[0];
+      if (row?.status === 'FAILED' && row.execution_mode === 'LIVE') {
+        await client.query(
+          `UPDATE campaigns SET status = 'ARCHIVED', updated_at = now()
+           WHERE id = $1 AND status IN ('ACTIVE','PAUSED')`,
+          [row.campaign_id],
+        );
+      }
+      return row?.status ?? 'LOST_OWNERSHIP';
+    });
   }
 
   async activateDueRuns(): Promise<number> {
@@ -406,8 +531,9 @@ export class CampaignRunRepository {
   }
 
   async finalizeRuns(limit: number): Promise<number> {
-    const result = await this.database.query(
-      `WITH finalizable AS (
+    return this.database.transaction(async client => {
+      const result = await client.query<{ campaign_id: string; execution_mode: CampaignExecutionMode }>(
+        `WITH finalizable AS (
          SELECT cr.id,
            bool_or(cd.status IN ('FAILED','UNKNOWN','BLOCKED_CAPABILITY_CHANGED','CANCELLED')) AS has_failure
          FROM campaign_runs cr
@@ -423,19 +549,40 @@ export class CampaignRunRepository {
                        ELSE 'COMPLETED'::campaign_run_status END,
          status_reason = CASE WHEN f.has_failure THEN 'ONE_OR_MORE_DELIVERIES_FAILED' ELSE NULL END,
          completed_at = now(), updated_at = now()
-       FROM finalizable f WHERE cr.id = f.id`,
-      [limit],
-    );
-    return result.rowCount ?? 0;
+       FROM finalizable f WHERE cr.id = f.id
+       RETURNING cr.campaign_id, cr.execution_mode`,
+        [limit],
+      );
+      const liveCampaignIds = result.rows
+        .filter(row => row.execution_mode === 'LIVE')
+        .map(row => row.campaign_id);
+      if (liveCampaignIds.length) {
+        await client.query(
+          `UPDATE campaigns SET status = 'ARCHIVED', updated_at = now()
+           WHERE id = ANY($1::uuid[]) AND status IN ('ACTIVE','PAUSED')`,
+          [liveCampaignIds],
+        );
+      }
+      return result.rowCount ?? 0;
+    });
   }
 
   async pause(id: string): Promise<CampaignRunDto | null> {
     return this.database.transaction(async client => {
-      const updated = await client.query(
+      const updated = await client.query<{ campaign_id: string; execution_mode: CampaignExecutionMode }>(
         `UPDATE campaign_runs SET status = 'PAUSED', status_reason = 'MANUAL_PAUSE', updated_at = now()
-         WHERE id = $1 AND status IN ('SCHEDULED','RUNNING') RETURNING id`, [id],
+         WHERE id = $1 AND status IN ('SCHEDULED','RUNNING')
+         RETURNING campaign_id, execution_mode`, [id],
       );
-      if (!updated.rows[0]) return null;
+      const transition = updated.rows[0];
+      if (!transition) return null;
+      if (transition.execution_mode === 'LIVE') {
+        await client.query(
+          `UPDATE campaigns SET status = 'PAUSED', updated_at = now()
+           WHERE id = $1 AND status = 'ACTIVE'`,
+          [transition.campaign_id],
+        );
+      }
       const result = await client.query<CampaignRunRow>(`${runSelect} WHERE cr.id = $1`, [id]);
       return mapRun(result.rows[0]!);
     });
@@ -450,13 +597,24 @@ export class CampaignRunRepository {
     );
   }
 
-  async resume(id: string, report: CampaignPreflightDto): Promise<CampaignRunDto | null> {
+  async resume(
+    id: string,
+    report: CampaignPreflightDto,
+    observedTargets: CampaignTargetDto[],
+  ): Promise<CampaignResumeResult> {
     return this.database.transaction(async client => {
-      const locked = await client.query<{ status: string; scheduled_at: Date }>(
-        `SELECT status, scheduled_at FROM campaign_runs WHERE id = $1 FOR UPDATE`, [id],
+      const locked = await client.query<{
+        status: string;
+        scheduled_at: Date;
+        campaign_id: string;
+        execution_mode: CampaignExecutionMode;
+      }>(
+        `SELECT status, scheduled_at, campaign_id, execution_mode
+         FROM campaign_runs WHERE id = $1 FOR UPDATE`, [id],
       );
       const run = locked.rows[0];
       if (!run || !['PAUSED', 'BLOCKED'].includes(run.status)) return null;
+      if (await this.capabilitySnapshotChanged(client, id, observedTargets)) return 'STALE_INPUT';
       await client.query(
         `UPDATE campaign_run_targets crt SET
            capability = g.send_capability, capability_reason = g.send_capability_reason,
@@ -482,6 +640,13 @@ export class CampaignRunRepository {
            completed_at = NULL, updated_at = now() WHERE id = $1`,
         [id, status, report.status, report.policyVersion, JSON.stringify(report)],
       );
+      if (run.execution_mode === 'LIVE') {
+        await client.query(
+          `UPDATE campaigns SET status = 'ACTIVE', updated_at = now()
+           WHERE id = $1 AND status = 'PAUSED'`,
+          [run.campaign_id],
+        );
+      }
       const result = await client.query<CampaignRunRow>(`${runSelect} WHERE cr.id = $1`, [id]);
       return mapRun(result.rows[0]!);
     });
@@ -489,8 +654,12 @@ export class CampaignRunRepository {
 
   async cancel(id: string): Promise<CampaignRunDto | null> {
     return this.database.transaction(async client => {
-      const locked = await client.query<{ status: string }>(
-        `SELECT status FROM campaign_runs WHERE id = $1 FOR UPDATE`, [id],
+      const locked = await client.query<{
+        status: string;
+        campaign_id: string;
+        execution_mode: CampaignExecutionMode;
+      }>(
+        `SELECT status, campaign_id, execution_mode FROM campaign_runs WHERE id = $1 FOR UPDATE`, [id],
       );
       const run = locked.rows[0];
       if (!run || !['PREPARING', 'BLOCKED', 'SCHEDULED', 'RUNNING', 'PAUSED'].includes(run.status)) return null;
@@ -517,6 +686,13 @@ export class CampaignRunRepository {
         `UPDATE campaign_runs SET status = 'CANCELLED', status_reason = 'CANCELLED_BY_OPERATOR',
            completed_at = now(), updated_at = now() WHERE id = $1`, [id],
       );
+      if (run.execution_mode === 'LIVE') {
+        await client.query(
+          `UPDATE campaigns SET status = 'ARCHIVED', updated_at = now()
+           WHERE id = $1 AND status IN ('ACTIVE','PAUSED')`,
+          [run.campaign_id],
+        );
+      }
       const result = await client.query<CampaignRunRow>(`${runSelect} WHERE cr.id = $1`, [id]);
       return mapRun(result.rows[0]!);
     });
@@ -529,9 +705,32 @@ export class CampaignRunRepository {
     return result.rows.map(row => row.id);
   }
 
+  private async capabilitySnapshotChanged(
+    client: PoolClient,
+    runId: string,
+    observedTargets: CampaignTargetDto[],
+  ): Promise<boolean> {
+    if (!observedTargets.length) return false;
+    const current = await client.query<{ stale: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM unnest($2::text[], $3::integer[]) AS expected(group_id, capability_revision)
+         LEFT JOIN campaign_run_targets crt
+           ON crt.run_id = $1 AND crt.group_id = expected.group_id
+         LEFT JOIN gateway_groups g
+           ON g.session_id = crt.session_id AND g.id = crt.group_id
+         WHERE g.id IS NULL OR g.capability_revision <> expected.capability_revision
+       ) AS stale`,
+      [runId, observedTargets.map(target => target.groupId),
+        observedTargets.map(target => target.sendCapability.revision)],
+    );
+    return current.rows[0]?.stale ?? false;
+  }
+
   async materializePending(runId: string, maxBuffered: number): Promise<number> {
     return this.database.transaction(async client => {
       const runResult = await client.query<{
+        campaign_id: string;
         session_id: string;
         execution_mode: CampaignExecutionMode;
         payload_snapshot: { text: string };
@@ -539,7 +738,7 @@ export class CampaignRunRepository {
         session_status: string | null;
         engine_loaded: boolean | null;
         restriction: Record<string, unknown> | null;
-      }>(`SELECT cr.session_id, cr.execution_mode, cr.payload_snapshot, cr.status,
+      }>(`SELECT cr.campaign_id, cr.session_id, cr.execution_mode, cr.payload_snapshot, cr.status,
              gs.status AS session_status, gs.engine_loaded, gs.restriction
            FROM campaign_runs cr LEFT JOIN gateway_sessions gs ON gs.id = cr.session_id
            WHERE cr.id = $1 FOR UPDATE OF cr`, [runId]);
@@ -549,7 +748,12 @@ export class CampaignRunRepository {
         && (run.session_status !== 'ready' || run.engine_loaded !== true || run.restriction != null)) {
         await client.query(
           `UPDATE campaign_runs SET status = 'PAUSED', status_reason = 'SESSION_NOT_SENDABLE', updated_at = now()
-           WHERE id = $1 AND status = 'RUNNING'`, [runId],
+          WHERE id = $1 AND status = 'RUNNING'`, [runId],
+        );
+        await client.query(
+          `UPDATE campaigns SET status = 'PAUSED', updated_at = now()
+           WHERE id = $1 AND status = 'ACTIVE'`,
+          [run.campaign_id],
         );
         return 0;
       }

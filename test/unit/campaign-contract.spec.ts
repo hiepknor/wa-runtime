@@ -36,12 +36,26 @@ describe('campaign OpenAPI contract', () => {
       'CONTENT_VALID', 'TARGETS_VALID', 'SESSION_SENDABLE', 'GROUP_CAPABILITY', 'LIVE_SEND_ALLOWED',
     ]);
     expect(contract.components.schemas.CampaignTargetIssueDto?.properties?.reason?.enum).toEqual([
-      'TARGET_CAPABILITY_DENIED', 'TARGET_CAPABILITY_UNKNOWN',
+      'TARGET_CAPABILITY_DENIED', 'TARGET_CAPABILITY_UNKNOWN', 'TARGET_CAPABILITY_STALE',
     ]);
     expect(contract.components.schemas.CampaignTargetDto?.required).toEqual([
       'groupId', 'groupName', 'enabled', 'sendCapability',
     ]);
-    expect(contract.components.schemas.CampaignTargetListDto?.required).toEqual(['data', 'targetsRevision']);
+    expect(contract.components.schemas.CampaignTargetListDto?.required).toEqual([
+      'data', 'targetsRevision', 'source',
+    ]);
+    expect(contract.components.schemas.ApplyGroupListTargetsDto?.properties).toEqual(expect.objectContaining({
+      groupListId: expect.objectContaining({ format: 'uuid' }),
+      expectedMembershipRevision: expect.objectContaining({ minimum: 1 }),
+      expectedTargetsRevision: expect.objectContaining({ minimum: 0 }),
+    }));
+    const apply = contract.paths['/api/v1/campaigns/{id}/targets/apply-group-list']?.post as Record<string, any>;
+    expect(apply.responses).toHaveProperty('200');
+    expect(apply.responses).not.toHaveProperty('201');
+    expect(contract.components.schemas.CampaignTargetSourceDto?.required).toEqual([
+      'type', 'groupListId', 'membershipRevision', 'appliedAt',
+    ]);
+    expect(contract.components.schemas.CampaignRunDto?.required).toContain('targetSource');
     expect(contract.components.schemas.RuntimeErrorDto?.required).toEqual(['code', 'message']);
     expect(contract.components.schemas.UpdateCampaignDto?.properties?.expectedRevision).toMatchObject({
       type: 'integer', minimum: 1,
@@ -61,6 +75,11 @@ describe('campaign OpenAPI contract', () => {
     expect(createRun.responses).toHaveProperty('409');
     const getRun = contract.paths['/api/v1/campaign-runs/{id}']?.get as Record<string, any>;
     expect(getRun.responses).toHaveProperty('404');
+    expect(contract.components.schemas.CreateCampaignRunDto?.properties).toEqual(expect.objectContaining({
+      expectedCampaignRevision: expect.objectContaining({ minimum: 1 }),
+      expectedTargetsRevision: expect.objectContaining({ minimum: 0 }),
+    }));
+    expect(contract.components.schemas.CreateCampaignRunDto?.required).toEqual(['executionMode']);
   });
 
   it('publishes comma-separated campaign list filters and the bounded search query', () => {

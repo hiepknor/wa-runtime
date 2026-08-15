@@ -929,6 +929,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "expectedRevision",
+            "required": false,
+            "in": "query",
+            "description": "Aggregate revision observed before archive. A stale value returns HTTP 409.",
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -1705,6 +1715,92 @@
           }
         ],
         "summary": "Atomically replace all group targets of a campaign draft",
+        "tags": [
+          "campaigns"
+        ]
+      }
+    },
+    "/api/v1/campaigns/{id}/targets/apply-group-list": {
+      "post": {
+        "operationId": "CampaignController_applyGroupListTargets",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyGroupListTargetsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignTargetListDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "runtime-key": []
+          }
+        ],
+        "summary": "Atomically replace DRAFT campaign targets from one saved group-list revision",
         "tags": [
           "campaigns"
         ]
@@ -3179,6 +3275,11 @@
             "type": "integer",
             "minimum": 1
           },
+          "membershipRevision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Revision of the static group-ID membership only; metadata edits do not change it."
+          },
           "archivedAt": {
             "type": "string",
             "format": "date-time",
@@ -3200,6 +3301,7 @@
           "description",
           "groupCount",
           "revision",
+          "membershipRevision",
           "archivedAt",
           "createdAt",
           "updatedAt"
@@ -3348,7 +3450,13 @@
           "expectedRevision": {
             "type": "integer",
             "minimum": 1,
-            "description": "Saved-list revision observed by the editor. A stale value returns HTTP 409."
+            "deprecated": true,
+            "description": "Aggregate revision observed by a legacy editor. Prefer expectedMembershipRevision."
+          },
+          "expectedMembershipRevision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Membership revision represented by the editor. A stale value returns HTTP 409."
           },
           "groupIds": {
             "maxItems": 1000,
@@ -3569,6 +3677,35 @@
           "sendCapability"
         ]
       },
+      "CampaignTargetSourceDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "GROUP_LIST"
+            ]
+          },
+          "groupListId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "membershipRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "appliedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "groupListId",
+          "membershipRevision",
+          "appliedAt"
+        ]
+      },
       "CampaignTargetListDto": {
         "type": "object",
         "properties": {
@@ -3582,11 +3719,22 @@
             "type": "integer",
             "minimum": 0,
             "description": "Canonical target-set revision represented by this complete response."
+          },
+          "source": {
+            "nullable": true,
+            "description": "Latest saved-list source for this materialized target set; null after manual replacement.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CampaignTargetSourceDto"
+              }
+            ]
           }
         },
         "required": [
           "data",
-          "targetsRevision"
+          "targetsRevision",
+          "source"
         ]
       },
       "ReplaceCampaignTargetsDto": {
@@ -3612,6 +3760,28 @@
         },
         "required": [
           "groupIds"
+        ]
+      },
+      "ApplyGroupListTargetsDto": {
+        "type": "object",
+        "properties": {
+          "groupListId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedMembershipRevision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Saved-list membership revision to copy. A stale value returns HTTP 409."
+          },
+          "expectedTargetsRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Campaign target revision observed by the editor. A stale value returns HTTP 409."
+          }
+        },
+        "required": [
+          "groupListId"
         ]
       },
       "CampaignPreflightRequestDto": {
@@ -3682,7 +3852,8 @@
             "type": "string",
             "enum": [
               "TARGET_CAPABILITY_DENIED",
-              "TARGET_CAPABILITY_UNKNOWN"
+              "TARGET_CAPABILITY_UNKNOWN",
+              "TARGET_CAPABILITY_STALE"
             ]
           }
         },
@@ -3776,6 +3947,16 @@
               "LIVE"
             ],
             "default": "DRY_RUN"
+          },
+          "expectedCampaignRevision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Campaign content revision to launch. A stale value returns HTTP 409."
+          },
+          "expectedTargetsRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Campaign target revision to launch. A stale value returns HTTP 409."
           }
         },
         "required": [
@@ -3884,6 +4065,15 @@
           "text": {
             "type": "string"
           },
+          "targetSource": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CampaignTargetSourceDto"
+              }
+            ]
+          },
           "preflight": {
             "nullable": true,
             "type": "object",
@@ -3926,6 +4116,7 @@
           "status",
           "statusReason",
           "text",
+          "targetSource",
           "preflight",
           "totalTargets",
           "progress",
