@@ -76,7 +76,10 @@ read projection consumed by WA Studio.
     rows actually inserted or changed request new projection work; one changed membership must not
     requeue every otherwise unchanged participant in the group.
 15. Page and count queries retain one repeatable-read snapshot, database-side filtering and a final
-    participant-ID tie-breaker. A dataset revision lets clients detect enrichment between page reads.
+    participant-ID tie-breaker. A group-level dataset generation is incremented transactionally by
+    every member insert, update or delete, allowing clients to detect membership or enrichment changes
+    between page reads. A maximum row-projection revision is insufficient because delayed lower-
+    revision work or deletion of a non-maximum row can change ordering without changing that maximum.
 
 ### Isolation, privacy and rollout
 

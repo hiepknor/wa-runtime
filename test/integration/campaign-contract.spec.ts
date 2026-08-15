@@ -32,6 +32,7 @@ describe('campaign draft contract HTTP API', () => {
   let pool: Pool;
   let app: INestApplication;
   let baseUrl: string;
+  let runPreparer: { prepare(runId: string): Promise<void> };
   const auth = { 'x-runtime-key': process.env.RUNTIME_API_KEY! };
 
   beforeAll(async () => {
@@ -39,10 +40,14 @@ describe('campaign draft contract HTTP API', () => {
     const { ApiAppModule } = require(resolve(process.cwd(), 'dist/src/app/api-app.module.js')) as {
       ApiAppModule: new (...args: never[]) => unknown;
     };
+    const { CampaignRunService } = require(
+      resolve(process.cwd(), 'dist/src/modules/campaigns/campaign-run.service.js'),
+    ) as { CampaignRunService: new (...args: never[]) => { prepare(runId: string): Promise<void> } };
     app = await NestFactory.create(ApiAppModule, { rawBody: true, logger: false });
     app.setGlobalPrefix('api/v1');
     app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }));
     await app.listen(0, '127.0.0.1');
+    runPreparer = app.get(CampaignRunService);
     const address = app.getHttpServer().address() as { port: number };
     baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
   });
@@ -96,6 +101,18 @@ describe('campaign draft contract HTTP API', () => {
     const conflict = await createCampaign({ text: 'Different payload' }, key);
     expect(conflict.response.status).toBe(409);
     expect(conflict.body.code).toBe('CAMPAIGN_IDEMPOTENCY_CONFLICT');
+  });
+
+  it('serializes concurrent campaign creation retries', async () => {
+    const key = randomUUID();
+    const [left, right] = await Promise.all([
+      createCampaign({}, key),
+      createCampaign({}, key),
+    ]);
+    expect([left.response.status, right.response.status].sort()).toEqual([200, 201]);
+    expect(left.body.id).toBe(right.body.id);
+    const count = await pool.query<{ count: string }>('SELECT count(*)::text AS count FROM campaigns');
+    expect(count.rows[0]?.count).toBe('1');
   });
 
   it('requires a UUID idempotency key and returns typed validation errors', async () => {
@@ -174,6 +191,39 @@ describe('campaign draft contract HTTP API', () => {
     expect(response.response.status).toBe(409);
     expect(response.body.code).toBe('CAMPAIGN_NOT_EDITABLE');
     expect(new Date(created.body.createdAt as string).toISOString()).toBe(created.body.createdAt);
+  });
+
+  it('rejects stale campaign and target revisions without overwriting newer state', async () => {
+    const created = await createCampaign();
+    const id = created.body.id as string;
+    const updated = await jsonRequest(`/campaigns/${id}`, {
+      method: 'PATCH', body: JSON.stringify({ expectedRevision: 1, name: 'Current name' }),
+    });
+    expect(updated.body).toMatchObject({ name: 'Current name', revision: 2 });
+
+    const staleContent = await jsonRequest(`/campaigns/${id}`, {
+      method: 'PATCH', body: JSON.stringify({ expectedRevision: 1, text: 'Stale overwrite' }),
+    });
+    expect(staleContent.response.status).toBe(409);
+    expect(staleContent.body.code).toBe('CAMPAIGN_REVISION_CONFLICT');
+    expect((await jsonRequest(`/campaigns/${id}`)).body).toMatchObject({
+      name: 'Current name', text: 'Hello group', revision: 2,
+    });
+
+    const targets = await jsonRequest(`/campaigns/${id}/targets`, {
+      method: 'PUT',
+      body: JSON.stringify({ expectedTargetsRevision: 0, groupIds: [INTEGRATION_GROUP_ID] }),
+    });
+    expect(targets.response.status).toBe(200);
+    expect(targets.body.targetsRevision).toBe(1);
+    const staleTargets = await jsonRequest(`/campaigns/${id}/targets`, {
+      method: 'PUT', body: JSON.stringify({ expectedTargetsRevision: 0, groupIds: [] }),
+    });
+    expect(staleTargets.response.status).toBe(409);
+    expect(staleTargets.body.code).toBe('CAMPAIGN_TARGETS_REVISION_CONFLICT');
+    expect((await jsonRequest(`/campaigns/${id}/targets`)).body).toMatchObject({
+      targetsRevision: 1, data: [expect.objectContaining({ groupId: INTEGRATION_GROUP_ID })],
+    });
   });
 
   it('atomically replaces targets, permits durable inactive/capability records, and returns canonical order', async () => {
@@ -321,5 +371,77 @@ describe('campaign draft contract HTTP API', () => {
       sendCalls: number;
     };
     expect(sendStats.sendCalls).toBe(0);
+  });
+
+  it('returns typed run-create validation and lists runs from one stable deterministic snapshot', async () => {
+    const campaign = await createCampaign();
+    const campaignId = campaign.body.id as string;
+    const missingKey = await jsonRequest(`/campaigns/${campaignId}/runs`, {
+      method: 'POST', body: JSON.stringify({ executionMode: 'DRY_RUN' }),
+    });
+    expect(missingKey.response.status).toBe(400);
+    expect(missingKey.body.code).toBe('CAMPAIGN_RUN_IDEMPOTENCY_KEY_REQUIRED');
+
+    const runIds = [
+      '20000000-0000-4000-8000-000000000001',
+      '20000000-0000-4000-8000-000000000002',
+      '20000000-0000-4000-8000-000000000003',
+    ];
+    await pool.query(
+      `INSERT INTO campaign_runs
+         (id, campaign_id, session_id, idempotency_key, execution_mode, payload_snapshot, scheduled_at,
+          created_at, updated_at)
+       SELECT id, $1, $2, 'run-' || ordinal, 'DRY_RUN', '{"text":"hello"}'::jsonb, now(),
+         '2030-01-01T00:00:00Z'::timestamptz, '2030-01-01T00:00:00Z'::timestamptz
+       FROM unnest($3::uuid[]) WITH ORDINALITY AS input(id, ordinal)`,
+      [campaignId, INTEGRATION_SESSION_ID, runIds],
+    );
+
+    const first = await jsonRequest(`/campaigns/${campaignId}/runs?limit=2&offset=0`);
+    const second = await jsonRequest(`/campaigns/${campaignId}/runs?limit=2&offset=2`);
+    expect(first.body.meta).toEqual({ total: 3, limit: 2, offset: 0 });
+    expect(second.body.meta).toEqual({ total: 3, limit: 2, offset: 2 });
+    expect([...first.body.data, ...second.body.data].map((run: { id: string }) => run.id)).toEqual(runIds);
+  });
+
+  it('prepares, pauses, resumes, and cancels a dry-run without calling the send adapter', async () => {
+    const campaign = await createCampaign();
+    const campaignId = campaign.body.id as string;
+    await jsonRequest(`/campaigns/${campaignId}/targets`, {
+      method: 'PUT', body: JSON.stringify({ groupIds: [INTEGRATION_GROUP_ID] }),
+    });
+    await fetch(`${process.env.OPENWA_BASE_URL}/__test/reset`, { method: 'POST' });
+
+    const created = await jsonRequest(`/campaigns/${campaignId}/runs`, {
+      method: 'POST',
+      headers: { 'idempotency-key': randomUUID() },
+      body: JSON.stringify({ executionMode: 'DRY_RUN' }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.status).toBe('PREPARING');
+    const runId = created.body.id as string;
+
+    await runPreparer.prepare(runId);
+    const prepared = await jsonRequest(`/campaign-runs/${runId}`);
+    expect(prepared.body).toMatchObject({ status: 'RUNNING', totalTargets: 1 });
+    expect(prepared.body.preflight).toMatchObject({ status: 'PASS', executionMode: 'DRY_RUN' });
+    expect((await pool.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM campaign_deliveries WHERE run_id = $1', [runId],
+    )).rows[0]?.count).toBe('1');
+
+    const paused = await jsonRequest(`/campaign-runs/${runId}/pause`, { method: 'POST' });
+    expect(paused.body.status).toBe('PAUSED');
+    const resumed = await jsonRequest(`/campaign-runs/${runId}/resume`, { method: 'POST' });
+    expect(resumed.body.status).toBe('RUNNING');
+    const cancelled = await jsonRequest(`/campaign-runs/${runId}/cancel`, { method: 'POST' });
+    expect(cancelled.body.status).toBe('CANCELLED');
+    const invalidPause = await jsonRequest(`/campaign-runs/${runId}/pause`, { method: 'POST' });
+    expect(invalidPause.response.status).toBe(409);
+    expect(invalidPause.body.code).toBe('CAMPAIGN_RUN_STATE_CONFLICT');
+
+    const stats = await fetch(`${process.env.OPENWA_BASE_URL}/__test/stats`).then(response => response.json()) as {
+      sendCalls: number;
+    };
+    expect(stats.sendCalls).toBe(0);
   });
 });

@@ -84,25 +84,37 @@ export class CampaignRepository {
     idempotencyKey: string;
     requestHash: string;
   }): Promise<{ campaign: CampaignDto; created: boolean; requestHash: string }> {
-    const result = await this.database.query<CampaignRow>(
-      `WITH inserted AS (
-         INSERT INTO campaigns
+    return this.database.transaction(async client => {
+      const existing = await client.query<CampaignRow>(
+        `${campaignSelect} WHERE c.create_idempotency_key = $1::uuid FOR UPDATE OF c`,
+        [input.idempotencyKey],
+      );
+      if (existing.rows[0]) {
+        const row = existing.rows[0];
+        return { campaign: mapCampaign(row), created: false, requestHash: row.create_request_hash! };
+      }
+
+      const inserted = await client.query<CampaignRow>(
+        `INSERT INTO campaigns
            (session_id, name, payload, schedule_type, scheduled_at, create_idempotency_key, create_request_hash)
          VALUES ($1,$2,$3::jsonb,$4,$5,$6::uuid,$7)
          ON CONFLICT (create_idempotency_key) WHERE create_idempotency_key IS NOT NULL DO NOTHING
-         RETURNING *
-       ), selected AS (
-         SELECT inserted.*, true AS created FROM inserted
-         UNION ALL
-         SELECT existing.*, false AS created FROM campaigns existing
-         WHERE existing.create_idempotency_key = $6::uuid AND NOT EXISTS (SELECT 1 FROM inserted)
-       )
-       SELECT selected.*, 0 AS target_count FROM selected LIMIT 1`,
-      [input.sessionId, input.name, JSON.stringify({ text: input.text }), input.scheduleType, input.scheduledAt,
-        input.idempotencyKey, input.requestHash],
-    );
-    const row = result.rows[0]! as CampaignRow & { created: boolean };
-    return { campaign: mapCampaign(row), created: row.created, requestHash: row.create_request_hash! };
+         RETURNING *, 0 AS target_count`,
+        [input.sessionId, input.name, JSON.stringify({ text: input.text }), input.scheduleType, input.scheduledAt,
+          input.idempotencyKey, input.requestHash],
+      );
+      if (inserted.rows[0]) {
+        return { campaign: mapCampaign(inserted.rows[0]), created: true, requestHash: input.requestHash };
+      }
+
+      const replay = await client.query<CampaignRow>(
+        `${campaignSelect} WHERE c.create_idempotency_key = $1::uuid FOR UPDATE OF c`,
+        [input.idempotencyKey],
+      );
+      const row = replay.rows[0];
+      if (!row) throw new Error('Campaign idempotency conflict row was not visible after insert conflict');
+      return { campaign: mapCampaign(row), created: false, requestHash: row.create_request_hash! };
+    });
   }
 
   async find(id: string): Promise<CampaignDto | null> {
@@ -152,7 +164,7 @@ export class CampaignRepository {
     text: string;
     scheduleType: CampaignScheduleType;
     scheduledAt: Date | null;
-  }): Promise<CampaignDto | null> {
+  }, expectedRevision: number): Promise<CampaignDto | null> {
     const result = await this.database.query<CampaignRow>(
       `WITH updated AS (
          UPDATE campaigns SET name = $2, payload = $3::jsonb, schedule_type = $4,
@@ -161,12 +173,12 @@ export class CampaignRepository {
              IS DISTINCT FROM ($2, $3::jsonb, $4::campaign_schedule_type, $5::timestamptz) THEN 1 ELSE 0 END,
            updated_at = CASE WHEN (name, payload, schedule_type, scheduled_at)
              IS DISTINCT FROM ($2, $3::jsonb, $4::campaign_schedule_type, $5::timestamptz) THEN now() ELSE updated_at END
-         WHERE id = $1 AND status = 'DRAFT' RETURNING *
+         WHERE id = $1 AND status = 'DRAFT' AND revision = $6 RETURNING *
        )
        SELECT updated.*,
          (SELECT count(*) FROM campaign_targets WHERE campaign_id = updated.id AND enabled) AS target_count
        FROM updated`,
-      [id, input.name, JSON.stringify({ text: input.text }), input.scheduleType, input.scheduledAt],
+      [id, input.name, JSON.stringify({ text: input.text }), input.scheduleType, input.scheduledAt, expectedRevision],
     );
     return result.rows[0] ? mapCampaign(result.rows[0]) : null;
   }
@@ -200,22 +212,32 @@ export class CampaignRepository {
     });
   }
 
-  async replaceTargets(campaignId: string, groupIds: string[]): Promise<{
+  async replaceTargets(campaignId: string, groupIds: string[], expectedTargetsRevision: number): Promise<{
     targets: CampaignTargetDto[];
     missingGroupIds: string[];
     mismatchedGroupIds: string[];
     campaignFound: boolean;
     campaignEditable: boolean;
+    revisionConflict: boolean;
+    targetsRevision: number;
   }> {
     return this.database.transaction(async client => {
-      const campaignResult = await client.query<{ session_id: string; status: string }>(
-        'SELECT session_id, status FROM campaigns WHERE id = $1 FOR UPDATE', [campaignId],
+      const campaignResult = await client.query<{ session_id: string; status: string; targets_revision: string }>(
+        'SELECT session_id, status, targets_revision::text FROM campaigns WHERE id = $1 FOR UPDATE', [campaignId],
       );
       const campaign = campaignResult.rows[0];
       if (!campaign || campaign.status !== 'DRAFT') {
         return {
           targets: [], missingGroupIds: [], mismatchedGroupIds: [],
-          campaignFound: Boolean(campaign), campaignEditable: false,
+          campaignFound: Boolean(campaign), campaignEditable: false, revisionConflict: false,
+          targetsRevision: campaign ? Number(campaign.targets_revision) : 0,
+        };
+      }
+      if (Number(campaign.targets_revision) !== expectedTargetsRevision) {
+        return {
+          targets: [], missingGroupIds: [], mismatchedGroupIds: [],
+          campaignFound: true, campaignEditable: true, revisionConflict: true,
+          targetsRevision: Number(campaign.targets_revision),
         };
       }
 
@@ -235,7 +257,8 @@ export class CampaignRepository {
       if (missingGroupIds.length || mismatchedGroupIds.length) {
         return {
           targets: [], missingGroupIds, mismatchedGroupIds,
-          campaignFound: true, campaignEditable: true,
+          campaignFound: true, campaignEditable: true, revisionConflict: false,
+          targetsRevision: Number(campaign.targets_revision),
         };
       }
 
@@ -246,6 +269,7 @@ export class CampaignRepository {
       const current = currentResult.rows.map(row => row.group_id);
       const next = [...groupIds].sort();
       const changed = current.length !== next.length || current.some((id, index) => id !== next[index]);
+      let targetsRevision = Number(campaign.targets_revision);
       if (changed) {
         await client.query('DELETE FROM campaign_targets WHERE campaign_id = $1', [campaignId]);
         if (next.length) {
@@ -255,14 +279,17 @@ export class CampaignRepository {
             [campaignId, campaign.session_id, next],
           );
         }
-        await client.query(
-          'UPDATE campaigns SET targets_revision = targets_revision + 1, updated_at = now() WHERE id = $1',
+        const revision = await client.query<{ targets_revision: string }>(
+          `UPDATE campaigns SET targets_revision = targets_revision + 1, updated_at = now()
+           WHERE id = $1 RETURNING targets_revision::text`,
           [campaignId],
         );
+        targetsRevision = Number(revision.rows[0]!.targets_revision);
       }
       return {
         targets: await this.listTargetsWithClient(client, campaignId),
         missingGroupIds: [], mismatchedGroupIds: [], campaignFound: true, campaignEditable: true,
+        revisionConflict: false, targetsRevision,
       };
     });
   }

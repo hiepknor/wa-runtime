@@ -39,6 +39,10 @@ describe('saved group-list OpenAPI contract', () => {
       type: 'array', maxItems: 1000, uniqueItems: true,
     });
     expect(create.properties.description).toMatchObject({ type: 'string', nullable: true, maxLength: 500 });
+    expect(contract.components.schemas.UpdateGroupListDto?.properties.expectedRevision)
+      .toMatchObject({ type: 'integer', minimum: 1 });
+    expect(contract.components.schemas.ReplaceGroupListGroupsDto?.properties.expectedRevision)
+      .toMatchObject({ type: 'integer', minimum: 1 });
 
     const membership = contract.components.schemas.GroupListMembershipDto!;
     expect(membership.required).toEqual(['list', 'data']);

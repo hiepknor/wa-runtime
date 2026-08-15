@@ -1,8 +1,17 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { CampaignScheduleType } from './create-campaign.dto';
 
 export class UpdateCampaignDto {
+  @ApiPropertyOptional({
+    type: 'integer', minimum: 1,
+    description: 'Campaign revision observed by the editor. A stale value returns HTTP 409.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  expectedRevision?: number;
+
   @ApiPropertyOptional({ maxLength: 120 })
   @IsOptional()
   @IsString()

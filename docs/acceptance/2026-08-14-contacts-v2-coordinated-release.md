@@ -6,6 +6,11 @@ reads or disable legacy fan-out in production from this document alone.
 
 ## Runtime contract
 
+> Contract amendment (2026-08-15): migration 034 replaces the maximum row projection used by
+> `meta.datasetRevision` with a group-level generation bumped on every member insert, update or
+> delete. The response type and Studio restart behavior are unchanged; the token now detects all
+> ordering, search and membership mutations rather than only increases of the maximum row revision.
+
 `GET /api/v1/groups/{groupId}/members` retains `participantId`, deprecated `phoneNumber`,
 `displayName`, `isAdmin` and `isSuperAdmin`, and adds:
 

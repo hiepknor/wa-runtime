@@ -55,8 +55,11 @@ responses serialize timestamps in UTC.
 
 Campaign content/schedule changes advance `revision`; target-set changes independently advance
 `targetsRevision`. Material no-op writes do not advance either counter. These revisions bind a
-preflight result to the definition it checked; PATCH and PUT remain last-write-wins in this milestone
-and do not yet accept an optimistic-concurrency precondition.
+preflight result to the definition it checked. PATCH accepts optional `expectedRevision`, while target
+replacement accepts optional `expectedTargetsRevision`; stale values return typed HTTP 409 without a
+write. Legacy omission remains accepted, but Runtime still protects the request's read/write window
+with an internal compare-and-swap predicate. Target list and replacement responses include the
+canonical `targetsRevision` represented by their complete target data.
 
 ## Preflight
 

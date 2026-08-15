@@ -76,20 +76,21 @@ export class GroupListService {
 
   async update(id: string, dto: UpdateGroupListDto) {
     const current = await this.getForMutation(id);
+    this.assertExpectedRevision(dto.expectedRevision, current.revision);
     const name = dto.name === undefined ? current.name : this.normalizeName(dto.name);
     const description = dto.description === undefined
       ? current.description
       : this.normalizeDescription(dto.description);
-    const updated = await this.repository.update(id, { name, description })
+    const updated = await this.repository.update(id, { name, description }, current.revision)
       .catch(error => this.rethrowPersistenceError(error));
-    if (!updated) this.notFound();
+    if (!updated) await this.throwMutationRace(id, current.revision);
     return updated;
   }
 
   async archive(id: string): Promise<void> {
-    await this.getForMutation(id);
-    const archived = await this.repository.archive(id);
-    if (!archived) this.notFound();
+    const current = await this.getForMutation(id);
+    const archived = await this.repository.archive(id, current.revision);
+    if (!archived) await this.throwMutationRace(id, current.revision);
   }
 
   async membership(id: string) {
@@ -98,10 +99,12 @@ export class GroupListService {
     return { list: membership.list, data: membership.groups };
   }
 
-  async replaceGroups(id: string, groupIds: string[]) {
-    await this.getForMutation(id);
+  async replaceGroups(id: string, groupIds: string[], expectedRevision?: number) {
+    const current = await this.getForMutation(id);
+    this.assertExpectedRevision(expectedRevision, current.revision);
     this.validateGroupIds(groupIds);
-    const result = await this.repository.replaceGroups(id, [...groupIds].sort());
+    const result = await this.repository.replaceGroups(id, [...groupIds].sort(), current.revision);
+    if (result.revisionConflict) this.revisionConflict(current.revision);
     this.throwGroupValidation(result);
     if (!result.list || !result.groups) this.notFound();
     return { list: result.list!, data: result.groups! };
@@ -166,6 +169,29 @@ export class GroupListService {
         'Archived saved group lists cannot be changed');
     }
     return list;
+  }
+
+  private assertExpectedRevision(expectedRevision: number | undefined, currentRevision: number): void {
+    if (expectedRevision !== undefined && expectedRevision !== currentRevision) {
+      this.revisionConflict(expectedRevision, currentRevision);
+    }
+  }
+
+  private async throwMutationRace(id: string, expectedRevision: number): Promise<never> {
+    const latest = await this.repository.find(id, true);
+    if (!latest || !this.sessions.isAllowed(latest.sessionId)) this.notFound();
+    if (latest.archivedAt) {
+      throw new GroupListError(HttpStatus.CONFLICT, 'GROUP_LIST_ARCHIVED',
+        'Archived saved group lists cannot be changed');
+    }
+    return this.revisionConflict(expectedRevision, latest.revision);
+  }
+
+  private revisionConflict(expectedRevision: number, currentRevision?: number): never {
+    throw new GroupListError(HttpStatus.CONFLICT, 'GROUP_LIST_REVISION_CONFLICT',
+      'Saved group list changed after it was loaded', {
+        expectedRevision, ...(currentRevision === undefined ? {} : { currentRevision }),
+      });
   }
 
   private notFound(): never {

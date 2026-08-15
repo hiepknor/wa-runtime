@@ -1,9 +1,10 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
 import { runtimeConfig } from '../../core/config/runtime-config';
 import type { CampaignExecutionMode } from '../../contracts/campaigns/campaign-preflight.dto';
 import { CampaignPreflightService } from './campaign-preflight.service';
 import { CampaignRunRepository } from './campaign-run.repository';
 import { CampaignService } from './campaign.service';
+import { CampaignError } from './campaign-error';
 
 @Injectable()
 export class CampaignRunService {
@@ -15,13 +16,24 @@ export class CampaignRunService {
     private readonly preflights: CampaignPreflightService,
   ) {}
 
-  async create(campaignId: string, idempotencyKey: string, executionMode: CampaignExecutionMode) {
-    if (idempotencyKey.length > 200) throw new BadRequestException('Idempotency-Key must not exceed 200 characters');
+  async create(campaignId: string, rawIdempotencyKey: string | undefined, executionMode: CampaignExecutionMode) {
+    const idempotencyKey = rawIdempotencyKey?.trim();
+    if (!idempotencyKey) {
+      throw new CampaignError(HttpStatus.BAD_REQUEST, 'CAMPAIGN_RUN_IDEMPOTENCY_KEY_REQUIRED',
+        'Idempotency-Key header is required');
+    }
+    if (idempotencyKey.length > 200) {
+      throw new CampaignError(HttpStatus.BAD_REQUEST, 'CAMPAIGN_RUN_IDEMPOTENCY_KEY_INVALID',
+        'Idempotency-Key must not exceed 200 characters');
+    }
     await this.campaigns.get(campaignId);
     const result = await this.repository.create({ campaignId, idempotencyKey, executionMode });
-    if (!result.run || !result.campaignFound) throw new NotFoundException('Campaign not found');
+    if (!result.run || !result.campaignFound) {
+      throw new CampaignError(HttpStatus.NOT_FOUND, 'CAMPAIGN_NOT_FOUND', 'Campaign not found');
+    }
     if (result.idempotencyConflict) {
-      throw new ConflictException('Idempotency-Key was already used with a different executionMode');
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_IDEMPOTENCY_CONFLICT',
+        'Idempotency-Key was already used with a different executionMode');
     }
     return result;
   }
@@ -54,7 +66,7 @@ export class CampaignRunService {
   async get(id: string) {
     const run = await this.repository.find(id);
     if (!run || !this.config.OPENWA_ALLOWED_SESSION_IDS.includes(run.sessionId)) {
-      throw new NotFoundException('Campaign run not found');
+      throw new CampaignError(HttpStatus.NOT_FOUND, 'CAMPAIGN_RUN_NOT_FOUND', 'Campaign run not found');
     }
     return run;
   }
@@ -74,20 +86,23 @@ export class CampaignRunService {
   async pause(id: string) {
     const current = await this.get(id);
     if (!['SCHEDULED', 'RUNNING'].includes(current.status)) {
-      throw new ConflictException(`Campaign run cannot be paused from ${current.status}`);
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_STATE_CONFLICT',
+        `Campaign run cannot be paused from ${current.status}`);
     }
     const run = await this.repository.pause(id);
-    if (!run) throw new ConflictException('Campaign run state changed; reload and retry');
+    if (!run) throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_STATE_CONFLICT',
+      'Campaign run state changed; reload and retry');
     return run;
   }
 
   async resume(id: string) {
     const current = await this.get(id);
     if (!['PAUSED', 'BLOCKED'].includes(current.status)) {
-      throw new ConflictException(`Campaign run cannot be resumed from ${current.status}`);
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_STATE_CONFLICT',
+        `Campaign run cannot be resumed from ${current.status}`);
     }
     const context = await this.repository.getPreflightContext(id);
-    if (!context) throw new NotFoundException('Campaign run not found');
+    if (!context) throw new CampaignError(HttpStatus.NOT_FOUND, 'CAMPAIGN_RUN_NOT_FOUND', 'Campaign run not found');
     const report = await this.preflights.evaluate({
       executionMode: context.run.executionMode,
       sessionId: context.run.sessionId,
@@ -98,20 +113,24 @@ export class CampaignRunService {
     });
     if (report.status === 'BLOCK') {
       await this.repository.recordBlockedResume(id, report);
-      throw new ConflictException({ message: 'Campaign run is still blocked by preflight', preflight: report });
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_STATE_CONFLICT',
+        'Campaign run is still blocked by preflight', { preflight: report });
     }
     const run = await this.repository.resume(id, report);
-    if (!run) throw new ConflictException('Campaign run state changed; reload and retry');
+    if (!run) throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_STATE_CONFLICT',
+      'Campaign run state changed; reload and retry');
     return run;
   }
 
   async cancel(id: string) {
     const current = await this.get(id);
     if (!['PREPARING', 'BLOCKED', 'SCHEDULED', 'RUNNING', 'PAUSED'].includes(current.status)) {
-      throw new ConflictException(`Campaign run cannot be cancelled from ${current.status}`);
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_STATE_CONFLICT',
+        `Campaign run cannot be cancelled from ${current.status}`);
     }
     const run = await this.repository.cancel(id);
-    if (!run) throw new ConflictException('Campaign run state changed; reload and retry');
+    if (!run) throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_RUN_STATE_CONFLICT',
+      'Campaign run state changed; reload and retry');
     return run;
   }
 }

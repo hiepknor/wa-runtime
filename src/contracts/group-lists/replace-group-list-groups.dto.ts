@@ -1,7 +1,16 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsArray, IsString, Matches } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsArray, IsInt, IsOptional, IsString, Matches, Min } from 'class-validator';
 
 export class ReplaceGroupListGroupsDto {
+  @ApiPropertyOptional({
+    type: 'integer', minimum: 1,
+    description: 'Saved-list revision observed by the editor. A stale value returns HTTP 409.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  expectedRevision?: number;
+
   @ApiProperty({
     type: [String],
     maxItems: 1000,

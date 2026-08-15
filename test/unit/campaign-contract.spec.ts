@@ -41,12 +41,26 @@ describe('campaign OpenAPI contract', () => {
     expect(contract.components.schemas.CampaignTargetDto?.required).toEqual([
       'groupId', 'groupName', 'enabled', 'sendCapability',
     ]);
+    expect(contract.components.schemas.CampaignTargetListDto?.required).toEqual(['data', 'targetsRevision']);
     expect(contract.components.schemas.RuntimeErrorDto?.required).toEqual(['code', 'message']);
+    expect(contract.components.schemas.UpdateCampaignDto?.properties?.expectedRevision).toMatchObject({
+      type: 'integer', minimum: 1,
+    });
+    expect(contract.components.schemas.ReplaceCampaignTargetsDto?.properties?.expectedTargetsRevision)
+      .toMatchObject({ type: 'integer', minimum: 0 });
   });
 
   it('requires an idempotency key for campaign creation', () => {
     const parameters = contract.paths['/api/v1/campaigns']?.post?.parameters ?? [];
     expect(parameters).toContainEqual(expect.objectContaining({ name: 'Idempotency-Key', required: true }));
+  });
+
+  it('publishes typed errors for campaign-run operations', () => {
+    const createRun = contract.paths['/api/v1/campaigns/{id}/runs']?.post as Record<string, any>;
+    expect(createRun.responses).toHaveProperty('400');
+    expect(createRun.responses).toHaveProperty('409');
+    const getRun = contract.paths['/api/v1/campaign-runs/{id}']?.get as Record<string, any>;
+    expect(getRun.responses).toHaveProperty('404');
   });
 
   it('publishes comma-separated campaign list filters and the bounded search query', () => {

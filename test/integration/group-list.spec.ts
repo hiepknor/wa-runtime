@@ -187,6 +187,32 @@ describe('group list HTTP API', () => {
     expect(empty.body).toEqual({ data: [], meta: { total: 0, limit: 50, offset: 0 } });
   });
 
+  it('keeps inactive durable groups readable while rejecting capability refresh', async () => {
+    const groupId = '120363000000000033@g.us';
+    const detail = await fetch(
+      `${baseUrl}/groups/${groupId}?sessionId=${INTEGRATION_SESSION_ID}`,
+      { headers },
+    );
+    expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({ id: groupId, isActive: false });
+
+    const members = await fetch(
+      `${baseUrl}/groups/${groupId}/members?sessionId=${INTEGRATION_SESSION_ID}`,
+      { headers },
+    );
+    expect(members.status).toBe(200);
+    expect(await members.json()).toMatchObject({
+      data: [], meta: { total: 0, limit: 50, offset: 0 },
+    });
+
+    const refresh = await fetch(
+      `${baseUrl}/groups/${groupId}/refresh-capability?sessionId=${INTEGRATION_SESSION_ID}`,
+      { method: 'POST', headers },
+    );
+    expect(refresh.status).toBe(404);
+    expect(await refresh.json()).toMatchObject({ code: 'GROUP_NOT_FOUND' });
+  });
+
   it('supports inclusive minimum, maximum, exact, and combined participant bounds including zero', async () => {
     const zero = await request({ minParticipants: '0' });
     expect(zero.body.meta.total).toBe(32);
@@ -324,5 +350,22 @@ describe('group list HTTP API', () => {
       { headers },
     );
     expect(response.status).toBe(400);
+  });
+
+  it('rejects oversized group and member searches with the typed group error contract', async () => {
+    const list = await request({ query: 'x'.repeat(201) });
+    expect(list.response.status).toBe(400);
+    expect(list.body as unknown).toMatchObject({
+      code: 'GROUP_QUERY_INVALID', fieldErrors: { query: expect.any(Array) },
+    });
+
+    const memberResponse = await fetch(
+      `${baseUrl}/groups/120363000000000000@g.us/members?sessionId=${INTEGRATION_SESSION_ID}&query=${'x'.repeat(201)}`,
+      { headers },
+    );
+    expect(memberResponse.status).toBe(400);
+    expect(await memberResponse.json()).toMatchObject({
+      code: 'GROUP_QUERY_INVALID', fieldErrors: { query: expect.any(Array) },
+    });
   });
 });

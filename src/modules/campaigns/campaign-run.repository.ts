@@ -212,16 +212,17 @@ export class CampaignRunRepository {
   }
 
   async listByCampaign(campaignId: string, limit: number, offset: number) {
-    const [rows, count] = await Promise.all([
-      this.database.query<CampaignRunRow>(
-        `${runSelect} WHERE cr.campaign_id = $1 ORDER BY cr.created_at DESC LIMIT $2 OFFSET $3`,
+    return this.database.transaction(async client => {
+      await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const rows = await client.query<CampaignRunRow>(
+        `${runSelect} WHERE cr.campaign_id = $1 ORDER BY cr.created_at DESC, cr.id ASC LIMIT $2 OFFSET $3`,
         [campaignId, limit, offset],
-      ),
-      this.database.query<{ count: string }>(
+      );
+      const count = await client.query<{ count: string }>(
         'SELECT count(*)::text AS count FROM campaign_runs WHERE campaign_id = $1', [campaignId],
-      ),
-    ]);
-    return { data: rows.rows.map(mapRun), total: Number(count.rows[0]?.count ?? 0) };
+      );
+      return { data: rows.rows.map(mapRun), total: Number(count.rows[0]?.count ?? 0) };
+    });
   }
 
   async listPreparing(limit: number): Promise<Array<{ id: string }>> {

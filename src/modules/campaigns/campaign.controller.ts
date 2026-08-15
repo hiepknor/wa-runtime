@@ -87,7 +87,7 @@ export class CampaignController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReplaceCampaignTargetsDto,
   ) {
-    return this.campaigns.replaceTargets(id, dto.groupIds);
+    return this.campaigns.replaceTargets(id, dto.groupIds, dto.expectedTargetsRevision);
   }
 
   @Post(':id/preflight')
@@ -110,11 +110,7 @@ export class CampaignController {
     @Body() dto: CreateCampaignRunDto,
     @Res({ passthrough: true }) response: Response,
   ) {
-    if (!idempotencyKey?.trim()) {
-      response.status(400);
-      return { statusCode: 400, message: 'Idempotency-Key header is required' };
-    }
-    const result = await this.runs.create(id, idempotencyKey.trim(), dto.executionMode);
+    const result = await this.runs.create(id, idempotencyKey, dto.executionMode);
     response.status(result.created ? 201 : 200);
     return result.run;
   }

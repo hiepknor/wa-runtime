@@ -1,5 +1,8 @@
 import { Controller, Get, HttpCode, Param, Post, Query, UseFilters } from '@nestjs/common';
-import { ApiAcceptedResponse, ApiBadRequestResponse, ApiOkResponse, ApiOperation, ApiQuery, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import {
+  ApiAcceptedResponse, ApiBadRequestResponse, ApiNotFoundResponse, ApiOkResponse, ApiOperation,
+  ApiQuery, ApiSecurity, ApiTags,
+} from '@nestjs/swagger';
 import { RuntimeErrorDto } from '../../contracts/common/runtime-error.dto';
 import { GroupDetailDto, GroupListDto, GroupMemberListDto } from '../../contracts/groups/group.dto';
 import { GroupIdentityQueryDto, GroupMemberQueryDto, GroupQueryDto } from '../../contracts/groups/group-query.dto';
@@ -8,6 +11,9 @@ import { GroupHttpExceptionFilter } from './group-http-exception.filter';
 
 @ApiTags('groups')
 @ApiSecurity('runtime-key')
+@ApiBadRequestResponse({ type: RuntimeErrorDto })
+@ApiNotFoundResponse({ type: RuntimeErrorDto })
+@UseFilters(GroupHttpExceptionFilter)
 @Controller('groups')
 export class GroupController {
   constructor(private readonly groups: GroupService) {}
@@ -33,9 +39,7 @@ export class GroupController {
     summary: 'Search and filter synchronized groups from the Runtime read model',
     description: 'Results are ordered deterministically by group name and group ID. Search, capability, freshness, active-state, and inclusive participant-count filters are applied before pagination; meta.total counts the filtered dataset. Omitting isActive preserves active-only behavior.',
   })
-  @ApiBadRequestResponse({ type: RuntimeErrorDto })
   @ApiOkResponse({ type: GroupListDto })
-  @UseFilters(GroupHttpExceptionFilter)
   list(@Query() query: GroupQueryDto) {
     return this.groups.list(query);
   }
@@ -50,7 +54,7 @@ export class GroupController {
   @Get(':id/members')
   @ApiOperation({
     summary: 'List materialized synchronized group members',
-    description: 'Results use deterministic super-admin, admin, normalized display name, and participant ID ordering. resolvedPhoneNumber is nullable and phoneNumber remains a deprecated upstream compatibility value. meta.datasetRevision changes when member enrichment is materialized.',
+    description: 'Results use deterministic super-admin, admin, normalized display name, and participant ID ordering. resolvedPhoneNumber is nullable and phoneNumber remains a deprecated upstream compatibility value. meta.datasetRevision changes after every committed member dataset mutation.',
   })
   @ApiOkResponse({ type: GroupMemberListDto })
   members(

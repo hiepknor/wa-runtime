@@ -140,7 +140,7 @@ export class GroupMemberPageMetaDto extends PageMetaDto {
 
   @ApiProperty({
     minimum: 0,
-    description: 'Highest member projection revision in the group; clients may detect enrichment between page reads',
+    description: 'Monotonic group-level member dataset generation. It changes for every committed member insert, update, or delete; zero denotes the legacy projection path.',
   })
   datasetRevision!: number;
 }

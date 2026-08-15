@@ -39,6 +39,7 @@ interface GroupValidation {
 interface MutationResult extends GroupValidation {
   list: SavedGroupListDto | null;
   groups?: GroupListGroupDto[];
+  revisionConflict?: boolean;
 }
 
 interface CreateResult extends MutationResult {
@@ -183,36 +184,40 @@ export class GroupListRepository {
     });
   }
 
-  async update(id: string, input: { name: string; description: string | null }): Promise<SavedGroupListDto | null> {
+  async update(
+    id: string,
+    input: { name: string; description: string | null },
+    expectedRevision: number,
+  ): Promise<SavedGroupListDto | null> {
     const result = await this.database.query<GroupListRow>(
       `WITH updated AS (
          UPDATE group_lists
          SET name = $2, description = $3,
            revision = revision + CASE WHEN (name, description) IS DISTINCT FROM ($2, $3) THEN 1 ELSE 0 END,
            updated_at = CASE WHEN (name, description) IS DISTINCT FROM ($2, $3) THEN now() ELSE updated_at END
-         WHERE id = $1 AND archived_at IS NULL
+         WHERE id = $1 AND archived_at IS NULL AND revision = $4
          RETURNING *
        )
        SELECT updated.*,
          (SELECT count(*) FROM group_list_items gli WHERE gli.group_list_id = updated.id) AS group_count
        FROM updated`,
-      [id, input.name, input.description],
+      [id, input.name, input.description, expectedRevision],
     );
     return result.rows[0] ? mapList(result.rows[0]) : null;
   }
 
-  async archive(id: string): Promise<SavedGroupListDto | null> {
+  async archive(id: string, expectedRevision: number): Promise<SavedGroupListDto | null> {
     const result = await this.database.query<GroupListRow>(
       `WITH archived AS (
          UPDATE group_lists
          SET archived_at = now(), revision = revision + 1, updated_at = now()
-         WHERE id = $1 AND archived_at IS NULL
+         WHERE id = $1 AND archived_at IS NULL AND revision = $2
          RETURNING *
        )
        SELECT archived.*,
          (SELECT count(*) FROM group_list_items gli WHERE gli.group_list_id = archived.id) AS group_count
        FROM archived`,
-      [id],
+      [id, expectedRevision],
     );
     return result.rows[0] ? mapList(result.rows[0]) : null;
   }
@@ -235,14 +240,17 @@ export class GroupListRepository {
     });
   }
 
-  async replaceGroups(id: string, groupIds: string[]): Promise<MutationResult> {
+  async replaceGroups(id: string, groupIds: string[], expectedRevision: number): Promise<MutationResult> {
     return this.database.transaction(async client => {
-      const listResult = await client.query<{ session_id: string }>(
-        'SELECT session_id FROM group_lists WHERE id = $1 AND archived_at IS NULL FOR UPDATE',
+      const listResult = await client.query<{ session_id: string; revision: string }>(
+        'SELECT session_id, revision::text FROM group_lists WHERE id = $1 AND archived_at IS NULL FOR UPDATE',
         [id],
       );
       const list = listResult.rows[0];
       if (!list) return { list: null, missingGroupIds: [], mismatchedGroupIds: [] };
+      if (Number(list.revision) !== expectedRevision) {
+        return { list: null, missingGroupIds: [], mismatchedGroupIds: [], revisionConflict: true };
+      }
 
       const validation = await this.validateGroups(client, list.session_id, groupIds);
       if (validation.missingGroupIds.length || validation.mismatchedGroupIds.length) {

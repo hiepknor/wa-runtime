@@ -96,6 +96,6 @@ export class GroupListController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReplaceGroupListGroupsDto,
   ) {
-    return this.groupLists.replaceGroups(id, dto.groupIds);
+    return this.groupLists.replaceGroups(id, dto.groupIds, dto.expectedRevision);
   }
 }

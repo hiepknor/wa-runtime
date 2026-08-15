@@ -105,12 +105,12 @@ are asynchronous.
 
 Member rows add exact `identityType`, nullable `resolvedPhoneNumber`, `displayNameSource` provenance
 and a monotonic `projectionRevision`. The legacy `phoneNumber` remains present but may contain a LID
-user-part and must not be presented as a verified phone. `meta.datasetRevision` is the highest
-materialized member revision in the whole group (not only the filtered page); a change between page
-requests tells clients to restart pagination if they require one stable enrichment snapshot. A value
-of zero denotes the legacy fallback before projection cutover. Search/count/order continue to use the
-same materialized row and repeatable-read database snapshot; member reads never resolve Contacts or
-call OpenWA.
+user-part and must not be presented as a verified phone. `meta.datasetRevision` is a monotonic
+group-level generation bumped by every committed member insert, update or delete; a change between
+page requests tells clients to restart pagination if they require one stable dataset snapshot. A
+value of zero denotes the legacy fallback before projection cutover. Search/count/order continue to
+use the same materialized row and repeatable-read database snapshot; member reads never resolve
+Contacts or call OpenWA.
 
 #### Group-member coordinated release gate
 
@@ -180,6 +180,12 @@ Campaign create defaults `scheduleType` to `IMMEDIATE`, whose canonical `schedul
 `ONCE` requires a valid future ISO-8601 date-time; create or scheduling updates reject past times.
 A content-only PATCH preserves scheduling, while changing back to `IMMEDIATE` clears the timestamp.
 All timestamps are emitted as ISO-8601 UTC. Only `DRAFT` campaigns can be edited.
+
+Campaign PATCH accepts optional `expectedRevision`, and target replacement accepts optional
+`expectedTargetsRevision`. Saved-list metadata and membership mutations similarly accept optional
+`expectedRevision`. Authorized stale writes return typed HTTP 409 responses and never overwrite the
+newer aggregate state. Omitting the precondition remains backward-compatible, while Runtime still
+uses an internal compare-and-swap fence against races during one request.
 
 Target replacement rejects duplicates and more than 1,000 IDs, validates the complete set before
 writing, and returns the complete canonical list ordered by group name then ID. Existing inactive,

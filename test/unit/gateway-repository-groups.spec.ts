@@ -27,7 +27,7 @@ describe('GatewayRepository.listGroups', () => {
     expect(result).toEqual({ data: [], total: 0 });
     expect(transaction).toHaveBeenCalledOnce();
     expect(clientQuery).toHaveBeenCalledTimes(3);
-    expect(clientQuery.mock.calls[0]?.[0]).toBe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+    expect(clientQuery.mock.calls[0]?.[0]).toBe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
     expect(clientQuery.mock.calls[1]?.[0]).toContain('ORDER BY name ASC, id ASC');
     expect(clientQuery.mock.calls[1]?.[0]).toContain('participants_count >= $7::integer');
     expect(clientQuery.mock.calls[1]?.[0]).toContain('participants_count <= $8::integer');

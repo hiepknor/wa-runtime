@@ -84,6 +84,12 @@ export class CampaignService {
       throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_NOT_EDITABLE',
         'Only DRAFT campaigns can be edited');
     }
+    if (dto.expectedRevision !== undefined && dto.expectedRevision !== current.revision) {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_REVISION_CONFLICT',
+        'Campaign changed after it was loaded', {
+          expectedRevision: dto.expectedRevision, currentRevision: current.revision,
+        });
+    }
     const schedulingTouched = dto.scheduleType !== undefined || dto.scheduledAt !== undefined;
     const schedule = schedulingTouched
       ? this.resolveSchedule(
@@ -95,8 +101,15 @@ export class CampaignService {
       name: dto.name === undefined ? current.name : this.nonBlank(dto.name, 'name'),
       text: dto.text === undefined ? current.text : this.nonBlank(dto.text, 'text'),
       ...schedule,
-    });
+    }, current.revision);
     if (!updated) {
+      const latest = await this.repository.find(id);
+      if (latest?.status === 'DRAFT') {
+        throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_REVISION_CONFLICT',
+          'Campaign changed while the update was being applied', {
+            expectedRevision: current.revision, currentRevision: latest.revision,
+          });
+      }
       throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_NOT_EDITABLE',
         'Campaign is no longer editable');
     }
@@ -104,15 +117,21 @@ export class CampaignService {
   }
 
   async listTargets(id: string) {
-    await this.get(id);
-    return { data: await this.repository.listTargets(id) };
+    const campaign = await this.get(id);
+    return { data: await this.repository.listTargets(id), targetsRevision: campaign.targetsRevision };
   }
 
-  async replaceTargets(id: string, groupIds: string[]) {
+  async replaceTargets(id: string, groupIds: string[], expectedTargetsRevision?: number) {
     const campaign = await this.get(id);
     if (campaign.status !== 'DRAFT') {
       throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_NOT_EDITABLE',
         'Only DRAFT campaign targets can be edited');
+    }
+    if (expectedTargetsRevision !== undefined && expectedTargetsRevision !== campaign.targetsRevision) {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_TARGETS_REVISION_CONFLICT',
+        'Campaign targets changed after they were loaded', {
+          expectedTargetsRevision, currentTargetsRevision: campaign.targetsRevision,
+        });
     }
     if (groupIds.length > 1000) {
       throw new CampaignError(HttpStatus.UNPROCESSABLE_ENTITY, 'CAMPAIGN_TARGET_LIMIT_EXCEEDED',
@@ -122,13 +141,19 @@ export class CampaignService {
       throw new CampaignError(HttpStatus.UNPROCESSABLE_ENTITY, 'CAMPAIGN_TARGET_DUPLICATE',
         'Duplicate group target IDs are not allowed');
     }
-    const result = await this.repository.replaceTargets(id, groupIds);
+    const result = await this.repository.replaceTargets(id, groupIds, campaign.targetsRevision);
     if (!result.campaignFound) {
       throw new CampaignError(HttpStatus.NOT_FOUND, 'CAMPAIGN_NOT_FOUND', 'Campaign not found');
     }
     if (!result.campaignEditable) {
       throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_NOT_EDITABLE',
         'Campaign is no longer editable');
+    }
+    if (result.revisionConflict) {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_TARGETS_REVISION_CONFLICT',
+        'Campaign targets changed while the replacement was being applied', {
+          expectedTargetsRevision: campaign.targetsRevision,
+        });
     }
     if (result.mismatchedGroupIds.length) {
       throw new CampaignError(HttpStatus.UNPROCESSABLE_ENTITY, 'CAMPAIGN_TARGET_SESSION_MISMATCH',
@@ -140,7 +165,7 @@ export class CampaignService {
         'One or more groups are not present in the durable group read model',
         { invalidTargetCount: result.missingGroupIds.length });
     }
-    return { data: result.targets };
+    return { data: result.targets, targetsRevision: result.targetsRevision };
   }
 
   async preflight(id: string, dto: CampaignPreflightRequestDto) {

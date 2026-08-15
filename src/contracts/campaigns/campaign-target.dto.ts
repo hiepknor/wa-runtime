@@ -1,8 +1,17 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsArray, IsString, Matches } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsArray, IsInt, IsOptional, IsString, Matches, Min } from 'class-validator';
 import { GroupSendCapabilityDto } from '../groups/group.dto';
 
 export class ReplaceCampaignTargetsDto {
+  @ApiPropertyOptional({
+    type: 'integer', minimum: 0,
+    description: 'Target-set revision observed by the editor. A stale value returns HTTP 409.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  expectedTargetsRevision?: number;
+
   @ApiProperty({
     type: [String],
     maxItems: 1000,
@@ -33,4 +42,10 @@ export class CampaignTargetDto {
 export class CampaignTargetListDto {
   @ApiProperty({ type: [CampaignTargetDto] })
   data!: CampaignTargetDto[];
+
+  @ApiProperty({
+    type: 'integer', minimum: 0,
+    description: 'Canonical target-set revision represented by this complete response.',
+  })
+  targetsRevision!: number;
 }

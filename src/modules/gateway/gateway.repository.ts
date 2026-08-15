@@ -663,7 +663,7 @@ export class GatewayRepository {
     const statuses = query.capabilityStatus ?? null;
     const freshness = query.capabilityFreshness ?? null;
     return this.database.transaction(async client => {
-      await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+      await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
       const values = [
         query.sessionId,
         activeFilter,
@@ -707,9 +707,11 @@ export class GatewayRepository {
     });
   }
 
-  async findGroup(sessionId: string, groupId: string): Promise<GroupDto | null> {
+  async findGroup(sessionId: string, groupId: string, activeOnly = true): Promise<GroupDto | null> {
     const result = await this.database.query<GroupRow>(
-      'SELECT * FROM gateway_groups WHERE session_id = $1 AND id = $2 AND is_active = true', [sessionId, groupId]);
+      `SELECT * FROM gateway_groups WHERE session_id = $1 AND id = $2${activeOnly ? ' AND is_active = true' : ''}`,
+      [sessionId, groupId],
+    );
     return result.rows[0] ? mapGroup(result.rows[0]) : null;
   }
 
@@ -725,7 +727,7 @@ export class GatewayRepository {
       ? `%${normalizedQuery.replace(/[\\%_]/g, '\\$&')}%`
       : null;
     return this.database.transaction(async client => {
-      await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+      await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
       const rows = await client.query<MemberRow>(
         `SELECT participant_id, phone_number,
            CASE WHEN $6::boolean AND shadow_projection_revision > 0
@@ -760,9 +762,9 @@ export class GatewayRepository {
       const count = await client.query<{ count: string; dataset_revision: string }>(
         `SELECT count(*)::text AS count,
            CASE WHEN $4::boolean THEN COALESCE((
-             SELECT max(all_members.shadow_projection_revision)
-             FROM group_members all_members
-             WHERE all_members.session_id = $1 AND all_members.group_id = $2
+             SELECT groups.member_dataset_revision
+             FROM gateway_groups groups
+             WHERE groups.session_id = $1 AND groups.id = $2
            ), 0) ELSE 0 END::text AS dataset_revision
          FROM group_members
          WHERE session_id = $1 AND group_id = $2

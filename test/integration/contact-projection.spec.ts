@@ -946,7 +946,7 @@ describe('durable contact projection', () => {
     )).total).toBe(0);
     const page = await shadow.listMembers(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, 10, 0);
     expect(page.data.map(member => member.displayName)).toEqual(['Alpha', 'Zulu']);
-    expect(page.datasetRevision).toBe(11);
+    expect(page.datasetRevision).toBeGreaterThan(0);
     expect(page.data[0]).toMatchObject({
       participantId: 'b@lid',
       identityType: null,
@@ -954,6 +954,23 @@ describe('durable contact projection', () => {
       displayNameSource: 'OPENWA_PUSH_NAME',
       projectionRevision: 11,
     });
+
+    const initialDatasetRevision = page.datasetRevision;
+    await pool.query(
+      `UPDATE group_members SET shadow_display_name = 'Aardvark', shadow_sort_value = 'aardvark'
+       WHERE session_id = $1 AND group_id = $2 AND participant_id = 'a@lid'`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+    const updated = await shadow.listMembers(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, 10, 0);
+    expect(updated.datasetRevision).toBeGreaterThan(initialDatasetRevision);
+
+    await pool.query(
+      `DELETE FROM group_members
+       WHERE session_id = $1 AND group_id = $2 AND participant_id = 'b@lid'`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID],
+    );
+    const deleted = await shadow.listMembers(INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, 10, 0);
+    expect(deleted.datasetRevision).toBeGreaterThan(updated.datasetRevision);
   });
 
   it('keeps inbound observation completion independent from membership fan-out', async () => {

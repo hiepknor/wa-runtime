@@ -200,6 +200,33 @@ describe('saved group lists HTTP API', () => {
     expect(conflict.body.fieldErrors.name).toBeDefined();
   });
 
+  it('rejects stale saved-list metadata and membership revisions', async () => {
+    const created = await createList({ groupIds: [] });
+    const id = created.body.id as string;
+    const updated = await jsonRequest(`/group-lists/${id}`, {
+      method: 'PATCH', body: JSON.stringify({ expectedRevision: 1, description: 'Current' }),
+    });
+    expect(updated.body).toMatchObject({ description: 'Current', revision: 2 });
+
+    const staleMetadata = await jsonRequest(`/group-lists/${id}`, {
+      method: 'PATCH', body: JSON.stringify({ expectedRevision: 1, name: 'Stale' }),
+    });
+    expect(staleMetadata.response.status).toBe(409);
+    expect(staleMetadata.body.code).toBe('GROUP_LIST_REVISION_CONFLICT');
+
+    const replaced = await jsonRequest(`/group-lists/${id}/groups`, {
+      method: 'PUT',
+      body: JSON.stringify({ expectedRevision: 2, groupIds: [INTEGRATION_GROUP_ID] }),
+    });
+    expect(replaced.body.list.revision).toBe(3);
+    const staleMembership = await jsonRequest(`/group-lists/${id}/groups`, {
+      method: 'PUT', body: JSON.stringify({ expectedRevision: 2, groupIds: [] }),
+    });
+    expect(staleMembership.response.status).toBe(409);
+    expect(staleMembership.body.code).toBe('GROUP_LIST_REVISION_CONFLICT');
+    expect((await jsonRequest(`/group-lists/${id}/groups`)).body.data).toHaveLength(1);
+  });
+
   it('atomically replaces complete membership and returns current group metadata in canonical order', async () => {
     await pool.query(
       `INSERT INTO gateway_groups

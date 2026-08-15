@@ -1,12 +1,21 @@
-import { Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
-import { ApiOkResponse, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import { Controller, Get, Param, ParseUUIDPipe, Post, Query, UseFilters } from '@nestjs/common';
+import {
+  ApiBadRequestResponse, ApiConflictResponse, ApiNotFoundResponse, ApiOkResponse, ApiOperation,
+  ApiSecurity, ApiTags,
+} from '@nestjs/swagger';
 import { CampaignDeliveryListDto } from '../../contracts/campaigns/campaign-delivery.dto';
 import { CampaignRunDto } from '../../contracts/campaigns/campaign-run.dto';
 import { PaginationQueryDto } from '../../contracts/common/pagination.dto';
+import { RuntimeErrorDto } from '../../contracts/common/runtime-error.dto';
+import { CampaignHttpExceptionFilter } from './campaign-http-exception.filter';
 import { CampaignRunService } from './campaign-run.service';
 
 @ApiTags('campaign-runs')
 @ApiSecurity('runtime-key')
+@ApiBadRequestResponse({ type: RuntimeErrorDto })
+@ApiNotFoundResponse({ type: RuntimeErrorDto })
+@ApiConflictResponse({ type: RuntimeErrorDto })
+@UseFilters(CampaignHttpExceptionFilter)
 @Controller('campaign-runs')
 export class CampaignRunController {
   constructor(private readonly runs: CampaignRunService) {}

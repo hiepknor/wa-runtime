@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 interface Parameter {
   name: string;
-  schema?: { type?: string; format?: string; minimum?: number; maximum?: number };
+  schema?: { type?: string; format?: string; minimum?: number; maximum?: number; maxLength?: number };
 }
 
 const contract = JSON.parse(readFileSync(
@@ -23,6 +23,10 @@ describe('group OpenAPI contract', () => {
     expect(parameters.get('maxParticipants')?.schema).toMatchObject({
       type: 'integer', format: 'int32', minimum: 0, maximum: 2_147_483_647,
     });
+    expect(parameters.get('query')?.schema).toMatchObject({ type: 'string', maxLength: 200 });
     expect(operation?.responses).toHaveProperty('400');
+    expect(contract.paths['/api/v1/groups/{id}']?.get?.responses).toHaveProperty('404');
+    expect(contract.paths['/api/v1/groups/{id}/members']?.get?.responses).toHaveProperty('400');
+    expect(contract.paths['/api/v1/groups/{id}/members']?.get?.responses).toHaveProperty('404');
   });
 });

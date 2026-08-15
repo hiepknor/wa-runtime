@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
-  ArrayNotEmpty, IsArray, IsBoolean, IsEnum, IsInt, IsOptional, IsString, IsUUID, Max, Min,
+  ArrayNotEmpty, IsArray, IsBoolean, IsEnum, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min,
 } from 'class-validator';
 import { PaginationQueryDto } from '../common/pagination.dto';
 
@@ -41,11 +41,13 @@ export class GroupQueryDto extends PaginationQueryDto {
   sessionId!: string;
 
   @ApiPropertyOptional({
+    maxLength: 200,
     description: 'Case-insensitive literal substring search across group name, group ID, and description. Whitespace is trimmed; an empty value disables search.',
   })
   @IsOptional()
   @Transform(({ value }: { value: unknown }) => typeof value === 'string' ? value.trim() : value)
   @IsString()
+  @MaxLength(200)
   query?: string;
 
   @ApiPropertyOptional({
@@ -116,11 +118,13 @@ export class GroupMemberQueryDto extends PaginationQueryDto {
   sessionId!: string;
 
   @ApiPropertyOptional({
+    maxLength: 200,
     description: 'Case-insensitive literal substring search across display name, phone number, and participant ID',
   })
   @IsOptional()
   @Transform(({ value }: { value: unknown }) => typeof value === 'string' ? value.trim() : value)
   @IsString()
+  @MaxLength(200)
   query?: string;
 }
 
