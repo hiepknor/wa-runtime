@@ -157,6 +157,11 @@ export class ContactRepository {
            AND generation_state.generation <> COALESCE((
              SELECT max(published.generation) FROM contact_snapshot_generations published
              WHERE published.session_id = $1 AND published.state = 'PUBLISHED'
+           ), -1)
+           AND generation_state.generation <> COALESCE((
+             SELECT resolved.source_generation FROM contact_resolution_runs resolved
+             WHERE resolved.session_id = $1 AND resolved.status = 'COMPLETED'
+             ORDER BY resolved.completed_at DESC, resolved.id DESC LIMIT 1
            ), -1)`,
         [sessionId, this.snapshotRetentionDays],
       );

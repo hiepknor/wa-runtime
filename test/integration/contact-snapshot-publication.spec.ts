@@ -232,4 +232,45 @@ describe('contact snapshot publication', () => {
       { generation: String(third!.generation), state: 'RECEIVING' },
     ]);
   });
+
+  it('preserves the generation owned by the latest resolution and cascades derived runs on deletion', async () => {
+    const resolved = await repository.beginObservedSnapshot(INTEGRATION_SESSION_ID);
+    await repository.completeObservedSnapshot(
+      INTEGRATION_SESSION_ID, resolved!.generation, resolved!.leaseToken, 0, 86_400_000,
+    );
+    const run = await pool.query<{ id: string }>(
+      `INSERT INTO contact_resolution_runs
+         (session_id, source_generation, evidence_cutoff_at, status, completed_at)
+       VALUES ($1, $2, now(), 'COMPLETED', now()) RETURNING id`,
+      [INTEGRATION_SESSION_ID, resolved!.generation],
+    );
+    const latest = await repository.beginObservedSnapshot(INTEGRATION_SESSION_ID);
+    await repository.completeObservedSnapshot(
+      INTEGRATION_SESSION_ID, latest!.generation, latest!.leaseToken, 0, 86_400_000,
+    );
+    await pool.query(
+      `UPDATE contact_snapshot_generations SET created_at = now() - interval '31 days'
+       WHERE session_id = $1`,
+      [INTEGRATION_SESSION_ID],
+    );
+
+    const receiving = await repository.beginObservedSnapshot(INTEGRATION_SESSION_ID);
+    const retained = await pool.query<{ generation: string }>(
+      `SELECT generation::text FROM contact_snapshot_generations
+       WHERE session_id = $1 ORDER BY generation`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(retained.rows).toEqual([
+      { generation: String(resolved!.generation) },
+      { generation: String(latest!.generation) },
+      { generation: String(receiving!.generation) },
+    ]);
+
+    await pool.query(
+      `DELETE FROM contact_snapshot_generations WHERE session_id = $1 AND generation = $2`,
+      [INTEGRATION_SESSION_ID, resolved!.generation],
+    );
+    const derived = await pool.query('SELECT 1 FROM contact_resolution_runs WHERE id = $1', [run.rows[0]!.id]);
+    expect(derived.rowCount).toBe(0);
+  });
 });
