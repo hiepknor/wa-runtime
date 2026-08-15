@@ -56,36 +56,39 @@ describe('campaign lifecycle reconciliation', () => {
       .toBe(1);
   });
 
-  it('detects duplicate LIVE runs and leaves them for explicit operator resolution', async () => {
+  it('enforces one LIVE run per campaign at the database boundary', async () => {
     const campaign = await pool.query<{ id: string }>(
       `INSERT INTO campaigns (session_id, name, payload)
        VALUES ($1, 'Duplicate lifecycle', '{"text":"hello"}') RETURNING id`,
       [INTEGRATION_SESSION_ID],
     );
-    for (const key of ['legacy-one', 'legacy-two']) {
-      await pool.query(
-        `INSERT INTO campaign_runs
-           (campaign_id, session_id, idempotency_key, execution_mode, payload_snapshot, scheduled_at)
-         VALUES ($1, $2, $3, 'LIVE', '{"text":"hello"}', now())`,
-        [campaign.rows[0]!.id, INTEGRATION_SESSION_ID, key],
-      );
-    }
+    const insert = (key: string) => pool.query(
+      `INSERT INTO campaign_runs
+         (campaign_id, session_id, idempotency_key, execution_mode, payload_snapshot, scheduled_at)
+       VALUES ($1, $2, $3, 'LIVE', '{"text":"hello"}', now())`,
+      [campaign.rows[0]!.id, INTEGRATION_SESSION_ID, key],
+    );
+    await insert('first-live');
+    await expect(insert('second-live')).rejects.toMatchObject({
+      code: '23505', constraint: 'uq_campaign_runs_single_live_launch',
+    });
     const client = await pool.connect();
     try {
       expect(await auditCampaignLifecycle(client)).toEqual({
-        duplicateLiveCampaigns: 1, lifecycleDrift: 1,
+        duplicateLiveCampaigns: 0, lifecycleDrift: 1,
       });
       expect(await applyCampaignLifecycleReconciliation(client)).toEqual({
-        applied: false,
-        updated: 0,
-        before: { duplicateLiveCampaigns: 1, lifecycleDrift: 1 },
-        after: { duplicateLiveCampaigns: 1, lifecycleDrift: 1 },
+        applied: true,
+        updated: 1,
+        before: { duplicateLiveCampaigns: 0, lifecycleDrift: 1 },
+        after: { duplicateLiveCampaigns: 0, lifecycleDrift: 0 },
       });
     } finally {
       client.release();
     }
-    expect((await pool.query('SELECT 1 FROM campaign_runs WHERE campaign_id = $1', [campaign.rows[0]!.id])).rowCount)
-      .toBe(2);
+    expect((await pool.query(
+      'SELECT 1 FROM campaign_runs WHERE campaign_id = $1', [campaign.rows[0]!.id],
+    )).rowCount).toBe(1);
   });
 
   it('preserves both valid campaign states for a BLOCKED LIVE run', async () => {

@@ -765,16 +765,13 @@ describe('campaign draft contract HTTP API', () => {
     await insertCampaign('Active drift', 'ACTIVE');
     await insertLive(await insertCampaign('Paused drift', 'PAUSED'), 'drift-paused', 'RUNNING');
     await insertLive(await insertCampaign('Archived drift', 'ARCHIVED'), 'drift-archived', 'RUNNING');
-    const duplicate = await insertCampaign('Duplicate live', 'ACTIVE');
-    await insertLive(duplicate, 'duplicate-one', 'RUNNING');
-    await insertLive(duplicate, 'duplicate-two', 'PREPARING');
 
     expect(await runRepository.auditLifecycle()).toEqual({
       draftWithLive: 1,
       activeWithoutNonTerminalLive: 1,
       pausedWithoutPausedOrBlockedLive: 1,
       archivedWithNonTerminalLive: 1,
-      multipleLive: 1,
+      multipleLive: 0,
     });
   });
 
