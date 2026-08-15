@@ -247,14 +247,23 @@ export class GatewayRepository {
   async upsertSession(session: OpenWASession, syncFence?: SyncWriteFence): Promise<SessionDto> {
     const sql = `INSERT INTO gateway_sessions
          (id, name, status, phone, push_name, connected_at, last_active_at, engine_loaded,
-         last_error, restriction, gateway_created_at, gateway_updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12)
+         last_error, restriction, gateway_created_at, gateway_updated_at,
+         status_observed_at, restriction_observed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$12,$12)
        ON CONFLICT (id) DO UPDATE SET
-         name = EXCLUDED.name, status = EXCLUDED.status, phone = EXCLUDED.phone,
+         name = EXCLUDED.name,
+         status = CASE WHEN EXCLUDED.status_observed_at > gateway_sessions.status_observed_at
+           THEN EXCLUDED.status ELSE gateway_sessions.status END,
+         phone = EXCLUDED.phone,
          push_name = EXCLUDED.push_name, connected_at = EXCLUDED.connected_at,
          last_active_at = EXCLUDED.last_active_at, engine_loaded = EXCLUDED.engine_loaded,
-         last_error = EXCLUDED.last_error, restriction = EXCLUDED.restriction,
-         gateway_updated_at = EXCLUDED.gateway_updated_at,
+         last_error = EXCLUDED.last_error,
+         restriction = CASE WHEN EXCLUDED.restriction_observed_at > gateway_sessions.restriction_observed_at
+           THEN EXCLUDED.restriction ELSE gateway_sessions.restriction END,
+         status_observed_at = GREATEST(gateway_sessions.status_observed_at, EXCLUDED.status_observed_at),
+         restriction_observed_at = GREATEST(gateway_sessions.restriction_observed_at,
+           EXCLUDED.restriction_observed_at),
+         gateway_updated_at = GREATEST(gateway_sessions.gateway_updated_at, EXCLUDED.gateway_updated_at),
          synced_at = now(), updated_at = now()
        RETURNING *`;
     const values = [session.id, session.name, session.status, session.phone ?? null, session.pushName ?? null,

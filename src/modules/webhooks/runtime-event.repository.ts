@@ -48,22 +48,24 @@ export class RuntimeEventRepository {
       }
 
       if (event.eventType === 'session.status.changed') {
-        invalidateSessionCache = true;
-        await client.query(
-          `UPDATE gateway_sessions SET status = $2, gateway_updated_at = GREATEST(gateway_updated_at, $3),
-             synced_at = now(), updated_at = now() WHERE id = $1`,
+        const updated = await client.query(
+          `UPDATE gateway_sessions SET status = $2, status_observed_at = $3,
+             gateway_updated_at = GREATEST(gateway_updated_at, $3), synced_at = now(), updated_at = now()
+           WHERE id = $1 AND status_observed_at < $3`,
           [event.sessionId, event.payload.status, event.occurredAt],
         );
+        invalidateSessionCache = updated.rowCount === 1;
       }
 
       if (event.eventType === 'session.restriction.changed') {
-        invalidateSessionCache = true;
         const restriction = event.payload.active === true ? event.payload : null;
-        await client.query(
-          `UPDATE gateway_sessions SET restriction = $2::jsonb, gateway_updated_at = GREATEST(gateway_updated_at, $3),
-             synced_at = now(), updated_at = now() WHERE id = $1`,
+        const updated = await client.query(
+          `UPDATE gateway_sessions SET restriction = $2::jsonb, restriction_observed_at = $3,
+             gateway_updated_at = GREATEST(gateway_updated_at, $3), synced_at = now(), updated_at = now()
+           WHERE id = $1 AND restriction_observed_at < $3`,
           [event.sessionId, restriction === null ? null : JSON.stringify(restriction), event.occurredAt],
         );
+        invalidateSessionCache = updated.rowCount === 1;
       }
 
 

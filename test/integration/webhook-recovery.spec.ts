@@ -189,6 +189,92 @@ describe('durable webhook processing', () => {
     expect(await webhooks.markProcessed(envelope.idempotencyKey, current!.leaseToken)).toBe(true);
   });
 
+  it('keeps newer session status and restriction observations when events arrive out of order', async () => {
+    await seedSendableGroup(pool);
+    const invalidate = vi.fn();
+    const runtimeEvents = new RuntimeEventRepository(
+      database,
+      { invalidate } as unknown as SessionStateCacheService,
+      new GatewayGroupIntentRepository(database),
+    );
+    const newer = new Date('2026-08-12T00:00:00.000Z');
+    const older = new Date('2026-08-11T00:00:00.000Z');
+
+    await runtimeEvents.store({
+      eventId: 'new-status', sourceEventType: 'session.status', eventType: 'session.status.changed', eventVersion: 1,
+      sessionId: INTEGRATION_SESSION_ID, occurredAt: newer, payload: { status: 'ready' },
+    });
+    await runtimeEvents.store({
+      eventId: 'old-status', sourceEventType: 'session.status', eventType: 'session.status.changed', eventVersion: 1,
+      sessionId: INTEGRATION_SESSION_ID, occurredAt: older, payload: { status: 'disconnected' },
+    });
+    await runtimeEvents.store({
+      eventId: 'new-restriction', sourceEventType: 'session.restriction',
+      eventType: 'session.restriction.changed', eventVersion: 1,
+      sessionId: INTEGRATION_SESSION_ID, occurredAt: newer,
+      payload: { active: true, kind: 'RATE_LIMIT', code: 'newer' },
+    });
+    await runtimeEvents.store({
+      eventId: 'old-restriction', sourceEventType: 'session.restriction',
+      eventType: 'session.restriction.changed', eventVersion: 1,
+      sessionId: INTEGRATION_SESSION_ID, occurredAt: older, payload: { active: false },
+    });
+    const gateway = new GatewayRepository(database, new ContactRepository(database));
+    await gateway.upsertSession({
+      id: INTEGRATION_SESSION_ID,
+      name: 'Older snapshot',
+      status: 'disconnected',
+      engineLoaded: false,
+      restriction: null,
+      createdAt: older.toISOString(),
+      updatedAt: older.toISOString(),
+    });
+
+    const state = await pool.query<{
+      status: string; restriction: Record<string, unknown>;
+      status_observed_at: Date; restriction_observed_at: Date;
+    }>(
+      `SELECT status, restriction, status_observed_at, restriction_observed_at
+       FROM gateway_sessions WHERE id = $1`,
+      [INTEGRATION_SESSION_ID],
+    );
+    expect(state.rows[0]).toMatchObject({
+      status: 'ready',
+      restriction: { active: true, kind: 'RATE_LIMIT', code: 'newer' },
+      status_observed_at: newer,
+      restriction_observed_at: newer,
+    });
+    expect(invalidate).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses first-observation ownership for distinct session events with equal timestamps', async () => {
+    await seedSendableGroup(pool);
+    const invalidate = vi.fn();
+    const runtimeEvents = new RuntimeEventRepository(
+      database,
+      { invalidate } as unknown as SessionStateCacheService,
+      new GatewayGroupIntentRepository(database),
+    );
+    const occurredAt = new Date('2026-08-12T00:00:00.000Z');
+
+    await runtimeEvents.store({
+      eventId: 'equal-status-first', sourceEventType: 'session.status',
+      eventType: 'session.status.changed', eventVersion: 1,
+      sessionId: INTEGRATION_SESSION_ID, occurredAt, payload: { status: 'ready' },
+    });
+    await runtimeEvents.store({
+      eventId: 'equal-status-second', sourceEventType: 'session.status',
+      eventType: 'session.status.changed', eventVersion: 1,
+      sessionId: INTEGRATION_SESSION_ID, occurredAt, payload: { status: 'disconnected' },
+    });
+
+    const state = await pool.query<{ status: string; status_observed_at: Date }>(
+      'SELECT status, status_observed_at FROM gateway_sessions WHERE id = $1', [INTEGRATION_SESSION_ID],
+    );
+    expect(state.rows[0]).toEqual({ status: 'ready', status_observed_at: occurredAt });
+    expect(invalidate).toHaveBeenCalledTimes(1);
+  });
+
   it('coalesces duplicate and burst group events into one targeted intent', async () => {
     await seedSendableGroup(pool);
     const intents = new GatewayGroupIntentRepository(database);
