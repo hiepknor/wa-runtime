@@ -1,6 +1,6 @@
 # Saved Group Lists contract handoff
 
-- Status: `COORDINATED_STAGING_PASS / OBSERVATION_PENDING / RELEASE_B_GATED`
+- Status: `RELEASE_B_STAGING_PASS / PRODUCTION_GATED`
 - Date: 2026-08-15
 - Runtime ADR: `f92edef`
 - Runtime implementation: `b762739`
@@ -94,11 +94,22 @@ selected target outside the current page, displayed the completed DRY_RUN and pr
 preflight with consistent two-target counters. The local Studio quality gate passed again at the
 recorded commit, and the Studio worktree remained clean after verification.
 
-The smoke found that campaign preflight returns HTTP 201 although OpenAPI declares HTTP 200. Studio's
-2xx handling worked, but the implementation/contract mismatch must be resolved and the affected smoke
-repeated before production.
+Runtime commit `e48aa9e` closed the preflight HTTP mismatch by explicitly returning the already
+documented HTTP 200. Behavioral and contract tests passed, staging and Studio local smoke passed, and
+the authoritative artifact remained byte-identical at the recorded SHA-256.
 
-Production remains blocked pending the HTTP-status follow-up and a clean lifecycle observation window.
-Release B's partial unique index remains blocked until Release A lifecycle observations stay clean.
-Migration 035 is additive and may remain applied if the application is rolled back to the prior Runtime
-revision.
+The approved reduced observation gate then completed three consecutive successful scheduler audit
+ticks at `2026-08-15T15:32:00.301Z`, `2026-08-15T15:33:00.302Z` and
+`2026-08-15T15:34:00.303Z`. Every tick and its paired manual audit reported zero duplicate LIVE
+campaigns, zero lifecycle drift, zero consecutive failures and no timeout.
+
+Release B commit `c4210f8` added migration `036_single_live_campaign_launch.sql` without changing
+migration 035. A verified PostgreSQL 17 backup preceded the quiesced staging migration. Staging is
+healthy on `wa-runtime:c4210f8`, migration 036 and `uq_campaign_runs_single_live_launch` are present,
+and a rollback-only probe proved that a second LIVE row receives `23505` at the expected index. The
+post-migration audit remained `0/0`, live sends remained disabled and no production environment was
+changed.
+
+Production remains gated on the normal pinned release, backup, final audit and quiesced migration
+procedure. After migration 036, rollback must not use a Runtime older than Release A; retain the
+database invariant and forward-fix compatible application code.
