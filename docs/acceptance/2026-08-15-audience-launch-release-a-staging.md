@@ -41,11 +41,10 @@ does not contain `uq_campaign_runs_single_live_launch` in Release A.
 ## Remaining gates
 
 1. Regenerate and verify WA Studio against the recorded OpenAPI artifact.
-2. Resolve the staging OpenWA version mismatch: Runtime pins reviewed release `0.16.0`, but the
-   connected deployment reports `0.18.0`.
-3. Run coordinated authoring and run-snapshot smoke after that mismatch is resolved.
-4. Observe lifecycle audit over an agreed window with `multipleLive=0` and no recurring drift.
-5. Implement Release B as a new migration adding the partial unique index; do not modify migration 035.
-6. Do not enable production or live sends as part of this record.
+2. Run coordinated authoring and run-snapshot smoke. The OpenWA 0.18.0 mismatch was resolved by the
+   reviewed Runtime upgrade at commit `48ad3a0`.
+3. Observe lifecycle audit over an agreed window with `multipleLive=0` and no recurring drift.
+4. Implement Release B as a new migration adding the partial unique index; do not modify migration 035.
+5. Do not enable production or live sends as part of this record.
 
 Release B and production remain gated. No reconciliation write was needed during this rollout.

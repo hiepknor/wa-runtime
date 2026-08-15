@@ -1,6 +1,6 @@
 # Saved Group Lists contract handoff
 
-- Status: `RUNTIME_RELEASE_A_STAGING_PASS / STUDIO_PENDING / COORDINATED_STAGING_BLOCKED`
+- Status: `RUNTIME_RELEASE_A_STAGING_PASS / STUDIO_PENDING / COORDINATED_STAGING_PENDING`
 - Date: 2026-08-15
 - Runtime ADR: `f92edef`
 - Runtime implementation: `b762739`
@@ -61,16 +61,15 @@ A pre-migration logical PostgreSQL backup completed successfully.
 - the scheduled lifecycle audit completed with zero consecutive failures;
 - no lifecycle drift, scheduler failure/timeout or fatal application event appeared in rollout logs.
 
-The Runtime pin remains `OPENWA_RELEASE_TAG=0.16.0`, while the connected OpenWA deployment reports
-`0.18.0`. Readiness does not validate this upstream version. OpenWA-dependent coordinated smoke is
-therefore blocked until the upstream 0.18 contract is reviewed and the Runtime pin is deliberately
-updated, or the Gateway is restored to the reviewed 0.16 release.
+The OpenWA 0.18.0 contract was subsequently reviewed at Runtime commit `48ad3a0`. Staging now pins and
+reports 0.18.0, and a controlled incremental sync completed without validation or reconciliation
+failure. The prior upstream version-mismatch blocker is closed.
 
 ## Coordinated release gate
 
 WA Studio must copy the authoritative artifact byte-for-byte, regenerate its client, record its commit
-here and pass its Groups/Saved lists/Campaign target integration suite. After the OpenWA version blocker
-is resolved, coordinated staging must verify create/edit/archive, multi-page selection, add/replace
+here and pass its Groups/Saved lists/Campaign target integration suite. Coordinated staging must verify
+create/edit/archive, multi-page selection, add/replace
 staged campaign targets, campaign and run snapshot independence after list rename/archive, allowlist
 isolation and expected run side effects.
 
