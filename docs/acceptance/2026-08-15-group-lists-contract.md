@@ -5,7 +5,8 @@
 - Runtime ADR: `f92edef`
 - Runtime implementation: `b762739`
 - Runtime tests: `e412ba5`
-- Runtime delivery range: `f92edef^..e412ba5`
+- Runtime archived-mutation refinement: `798b306`
+- Runtime delivery range: `f92edef^..798b306`
 - Authoritative artifact: `contracts/runtime/v1/openapi.json`
 - OpenAPI SHA-256: `ce54abc0b8f1184b99d1d25e1266f0e7b27c66ce4bb72e03669594eebcaf2b4e`
 - WA Studio commit: pending
