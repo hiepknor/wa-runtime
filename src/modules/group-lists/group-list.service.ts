@@ -75,7 +75,7 @@ export class GroupListService {
   }
 
   async update(id: string, dto: UpdateGroupListDto) {
-    const current = await this.get(id);
+    const current = await this.getForMutation(id);
     const name = dto.name === undefined ? current.name : this.normalizeName(dto.name);
     const description = dto.description === undefined
       ? current.description
@@ -87,7 +87,7 @@ export class GroupListService {
   }
 
   async archive(id: string): Promise<void> {
-    await this.get(id);
+    await this.getForMutation(id);
     const archived = await this.repository.archive(id);
     if (!archived) this.notFound();
   }
@@ -99,7 +99,7 @@ export class GroupListService {
   }
 
   async replaceGroups(id: string, groupIds: string[]) {
-    await this.get(id);
+    await this.getForMutation(id);
     this.validateGroupIds(groupIds);
     const result = await this.repository.replaceGroups(id, [...groupIds].sort());
     this.throwGroupValidation(result);
@@ -156,6 +156,16 @@ export class GroupListService {
         undefined, { name: ['Must be unique within the session.'] });
     }
     throw error;
+  }
+
+  private async getForMutation(id: string) {
+    const list = await this.repository.find(id, true);
+    if (!list || !this.sessions.isAllowed(list.sessionId)) this.notFound();
+    if (list.archivedAt) {
+      throw new GroupListError(HttpStatus.CONFLICT, 'GROUP_LIST_ARCHIVED',
+        'Archived saved group lists cannot be changed');
+    }
+    return list;
   }
 
   private notFound(): never {

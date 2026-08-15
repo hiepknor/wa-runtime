@@ -309,6 +309,15 @@ describe('saved group lists HTTP API', () => {
     expect(list.body.code).toBe('GROUP_LIST_NOT_FOUND');
     expect(membership.response.status).toBe(404);
 
+    const archivedMutation = await jsonRequest(`/group-lists/${listId}/groups`, {
+      method: 'PUT', body: JSON.stringify({ groupIds: [] }),
+    });
+    expect(archivedMutation.response.status).toBe(409);
+    expect(archivedMutation.body.code).toBe('GROUP_LIST_ARCHIVED');
+    const repeatedArchive = await jsonRequest(`/group-lists/${listId}`, { method: 'DELETE' });
+    expect(repeatedArchive.response.status).toBe(409);
+    expect(repeatedArchive.body.code).toBe('GROUP_LIST_ARCHIVED');
+
     const browse = await jsonRequest(`/group-lists?sessionId=${INTEGRATION_SESSION_ID}`);
     expect(browse.body.meta.total).toBe(0);
     const targetCount = await pool.query<{ count: string }>(

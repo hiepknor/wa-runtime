@@ -106,9 +106,9 @@ export class GroupListRepository {
     });
   }
 
-  async find(id: string): Promise<SavedGroupListDto | null> {
+  async find(id: string, includeArchived = false): Promise<SavedGroupListDto | null> {
     const result = await this.database.query<GroupListRow>(
-      `${listSelect} WHERE gl.id = $1 AND gl.archived_at IS NULL`,
+      `${listSelect} WHERE gl.id = $1${includeArchived ? '' : ' AND gl.archived_at IS NULL'}`,
       [id],
     );
     return result.rows[0] ? mapList(result.rows[0]) : null;
