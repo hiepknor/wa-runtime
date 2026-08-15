@@ -1,6 +1,7 @@
 import { ArgumentsHost, Catch, type ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
 import type { Response } from 'express';
 import type { RuntimeErrorDto } from '../../contracts/common/runtime-error.dto';
+import { runtimeErrorFromHttpException } from '../../core/http/runtime-http-exception.filter';
 
 const participantFields = ['minParticipants', 'maxParticipants'] as const;
 
@@ -30,14 +31,19 @@ export class GroupHttpExceptionFilter implements ExceptionFilter {
     }
     const queryInvalid = messages.some(message => /\bquery\b/u.test(message));
     const status = exception.getStatus();
-    const body: RuntimeErrorDto = {
-      code: invalidParticipantFields.length > 0
+    const specializedCode = invalidParticipantFields.length > 0
         ? 'GROUP_FILTER_PARTICIPANTS_INVALID'
         : queryInvalid
           ? 'GROUP_QUERY_INVALID'
           : status === HttpStatus.NOT_FOUND && messages[0] === 'Group not found'
             ? 'GROUP_NOT_FOUND'
-            : status === HttpStatus.BAD_REQUEST ? 'VALIDATION_ERROR' : `HTTP_${status}`,
+            : null;
+    if (!specializedCode) {
+      response.status(status).json(runtimeErrorFromHttpException(exception));
+      return;
+    }
+    const body: RuntimeErrorDto = {
+      code: specializedCode,
       message: invalidParticipantFields.length > 0
         ? 'Participant count filters are invalid.'
         : (messages[0] ?? exception.message),

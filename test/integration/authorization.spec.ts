@@ -48,6 +48,27 @@ describe('HTTP session authorization', () => {
     });
     expect(response.status).toBe(404);
     expect(response.headers.get('x-request-id')).toBe('protected-route-request');
+    expect(await response.json()).toMatchObject({ code: 'RESOURCE_NOT_FOUND', details: {} });
+  });
+
+  it('normalizes authentication and validation failures to RuntimeErrorDto', async () => {
+    const unauthorized = await fetch(`${baseUrl}/sessions`);
+    expect(unauthorized.status).toBe(401);
+    expect(await unauthorized.json()).toEqual({
+      code: 'UNAUTHORIZED',
+      message: 'Missing or invalid X-Runtime-Key',
+      details: {},
+    });
+
+    const invalid = await fetch(`${baseUrl}/messages?sessionId=${INTEGRATION_SESSION_ID}&limit=0`, {
+      headers: runtimeHeaders,
+    });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      fieldErrors: { limit: expect.any(Array) },
+      details: {},
+    });
   });
 
   it('rejects a validly signed webhook for a disallowed session', async () => {

@@ -1,6 +1,7 @@
 import { ArgumentsHost, Catch, type ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
 import type { Response } from 'express';
 import type { RuntimeErrorDto } from '../../contracts/common/runtime-error.dto';
+import { runtimeErrorFromHttpException } from '../../core/http/runtime-http-exception.filter';
 
 @Catch(HttpException)
 export class GroupListHttpExceptionFilter implements ExceptionFilter {
@@ -29,8 +30,7 @@ export class GroupListHttpExceptionFilter implements ExceptionFilter {
       && messages.some(message => message.includes('sessionId'));
     const nameInvalid = status === HttpStatus.BAD_REQUEST
       && messages.some(message => message.includes('name'));
-    const body: RuntimeErrorDto = {
-      code: queryInvalid
+    const specializedCode = queryInvalid
         ? 'GROUP_LIST_QUERY_INVALID'
         : groupIdsInvalid
           ? 'GROUP_LIST_GROUP_INVALID'
@@ -38,7 +38,13 @@ export class GroupListHttpExceptionFilter implements ExceptionFilter {
             ? 'GROUP_LIST_SESSION_INVALID'
             : nameInvalid
               ? 'GROUP_LIST_NAME_INVALID'
-              : status === HttpStatus.BAD_REQUEST ? 'VALIDATION_ERROR' : `HTTP_${status}`,
+              : null;
+    if (!specializedCode) {
+      response.status(status).json(runtimeErrorFromHttpException(exception));
+      return;
+    }
+    const body: RuntimeErrorDto = {
+      code: specializedCode,
       message: messages[0] ?? exception.message,
       ...(status === HttpStatus.BAD_REQUEST ? { fieldErrors } : {}),
       details: {},

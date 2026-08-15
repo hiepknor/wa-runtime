@@ -1,6 +1,7 @@
 import { ArgumentsHost, Catch, type ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
 import type { Response } from 'express';
 import type { RuntimeErrorDto } from '../../contracts/common/runtime-error.dto';
+import { runtimeErrorFromHttpException } from '../../core/http/runtime-http-exception.filter';
 
 @Catch(HttpException)
 export class CampaignHttpExceptionFilter implements ExceptionFilter {
@@ -23,20 +24,11 @@ export class CampaignHttpExceptionFilter implements ExceptionFilter {
         code: campaignValidation.code,
         message: messages[0] ?? exception.message,
         fieldErrors: { [campaignValidation.field]: messages },
+        details: {},
       } satisfies RuntimeErrorDto);
       return;
     }
-    const fieldErrors: Record<string, string[]> = {};
-    for (const message of messages) {
-      const field = message.split(' ')[0] || 'request';
-      (fieldErrors[field] ??= []).push(message);
-    }
-    const body: RuntimeErrorDto = {
-      code: status === HttpStatus.BAD_REQUEST ? 'VALIDATION_ERROR' : `HTTP_${status}`,
-      message: messages[0] ?? exception.message,
-      ...(status === HttpStatus.BAD_REQUEST ? { fieldErrors } : {}),
-    };
-    response.status(status).json(body);
+    response.status(status).json(runtimeErrorFromHttpException(exception));
   }
 
   private campaignValidationError(messages: string[]): { code: string; field: string } | null {
