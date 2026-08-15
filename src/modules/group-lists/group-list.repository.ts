@@ -294,6 +294,7 @@ export class GroupListRepository {
 
   async lockMembershipSnapshot(client: PoolClient, id: string): Promise<{
     id: string;
+    name: string;
     sessionId: string;
     revision: number;
     membershipRevision: number;
@@ -301,11 +302,12 @@ export class GroupListRepository {
   } | null> {
     const list = await client.query<{
       id: string;
+      name: string;
       session_id: string;
       revision: string;
       membership_revision: string;
     }>(
-      `SELECT id, session_id, revision::text, membership_revision::text
+      `SELECT id, name, session_id, revision::text, membership_revision::text
        FROM group_lists WHERE id = $1 AND archived_at IS NULL FOR SHARE`,
       [id],
     );
@@ -317,6 +319,7 @@ export class GroupListRepository {
     );
     return {
       id: row.id,
+      name: row.name,
       sessionId: row.session_id,
       revision: Number(row.revision),
       membershipRevision: Number(row.membership_revision),

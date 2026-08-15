@@ -22,6 +22,7 @@ interface CampaignRow {
   revision: string | number;
   targets_revision: string | number;
   target_source_group_list_id: string | null;
+  target_source_group_list_name_snapshot: string | null;
   target_source_membership_revision: string | number | null;
   target_source_applied_at: Date | null;
   create_request_hash?: string | null;
@@ -74,10 +75,12 @@ const mapTarget = (row: TargetRow): CampaignTargetDto => ({
 });
 
 const mapTargetSource = (row: CampaignRow): CampaignTargetSourceDto | null =>
-  row.target_source_group_list_id && row.target_source_membership_revision && row.target_source_applied_at
+  row.target_source_group_list_id && row.target_source_group_list_name_snapshot
+    && row.target_source_membership_revision && row.target_source_applied_at
     ? {
         type: 'GROUP_LIST',
         groupListId: row.target_source_group_list_id,
+        groupListNameSnapshot: row.target_source_group_list_name_snapshot,
         membershipRevision: Number(row.target_source_membership_revision),
         appliedAt: row.target_source_applied_at,
       }
@@ -321,6 +324,7 @@ export class CampaignRepository {
         const revision = await client.query<{ targets_revision: string }>(
           `UPDATE campaigns SET targets_revision = targets_revision + 1,
              target_source_group_list_id = NULL,
+             target_source_group_list_name_snapshot = NULL,
              target_source_membership_revision = NULL,
              target_source_applied_at = NULL,
              updated_at = now()
@@ -425,11 +429,12 @@ export class CampaignRepository {
         }>(
           `UPDATE campaigns SET targets_revision = targets_revision + 1,
              target_source_group_list_id = $2,
-             target_source_membership_revision = $3,
+             target_source_group_list_name_snapshot = $3,
+             target_source_membership_revision = $4,
              target_source_applied_at = now(), updated_at = now()
            WHERE id = $1
            RETURNING targets_revision::text, target_source_applied_at`,
-          [input.campaignId, source.id, source.membershipRevision],
+          [input.campaignId, source.id, source.name, source.membershipRevision],
         );
         targetsRevision = Number(updated.rows[0]!.targets_revision);
         appliedAt = updated.rows[0]!.target_source_applied_at;
@@ -445,6 +450,7 @@ export class CampaignRepository {
         targetsRevision,
         source: {
           type: 'GROUP_LIST', groupListId: source.id,
+          groupListNameSnapshot: source.name,
           membershipRevision: source.membershipRevision, appliedAt,
         },
         campaignFound: true,

@@ -30,6 +30,12 @@ legacy and shadow coverage by identity/name/phone source. These events never con
 name or phone value. Alert when projection failures are non-zero or oldest lag remains above the
 rollout threshold; inspect PostgreSQL-owned work rather than replaying OpenWA events manually.
 
+Campaign lifecycle auditing emits `campaign.lifecycle.drift_detected` only when drift exists. Its
+fields are aggregate counts: `draftWithLive`, `activeWithoutNonTerminalLive`,
+`pausedWithoutPausedOrBlockedLive`, `archivedWithNonTerminalLive` and `multipleLive`. It contains no
+campaign/run IDs or target data. Treat any `multipleLive` value above zero as a blocker for the
+single-LIVE unique-index rollout rather than trying to reconcile it automatically.
+
 Useful commands:
 
 ```bash

@@ -53,8 +53,10 @@ describe('campaign OpenAPI contract', () => {
     expect(apply.responses).toHaveProperty('200');
     expect(apply.responses).not.toHaveProperty('201');
     expect(contract.components.schemas.CampaignTargetSourceDto?.required).toEqual([
-      'type', 'groupListId', 'membershipRevision', 'appliedAt',
+      'type', 'groupListId', 'groupListNameSnapshot', 'membershipRevision', 'appliedAt',
     ]);
+    expect(contract.components.schemas.CampaignTargetSourceDto?.properties?.groupListNameSnapshot)
+      .toMatchObject({ type: 'string' });
     expect(contract.components.schemas.CampaignRunDto?.required).toContain('targetSource');
     expect(contract.components.schemas.RuntimeErrorDto?.required).toEqual(['code', 'message']);
     expect(contract.components.schemas.UpdateCampaignDto?.properties?.expectedRevision).toMatchObject({

@@ -79,6 +79,11 @@ is bounded at 1,000 groups. Campaigns may copy one exact membership revision thr
 transaction; the materialized target set and its provenance then remain unchanged when the list is
 renamed, edited or archived.
 
+Campaign target `source` is deliberately binary current-state provenance: non-null means the target
+set exactly matches that saved-list membership revision; null means a custom snapshot. Historical
+derivation is not inferred from this field. Source names are snapshotted so audit presentation never
+depends on a later list rename or archive.
+
 Business state is committed before queue work is published. If Redis is unavailable after a commit,
 the scheduler retries publication from the durable row. Webhooks, message jobs and sync runs use
 leases so crashed work is recovered according to its side-effect semantics.

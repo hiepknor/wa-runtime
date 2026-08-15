@@ -34,9 +34,14 @@ idempotency keys, and the Campaign status enum has no implemented transition own
 - Operators wanting a similar future send create or clone another Campaign; cloning is a separate
   future authoring feature.
 - Campaign status is a coarse plan lifecycle; CampaignRun remains the detailed execution authority.
-- Before applying the unique index in an existing environment, operators must verify that no
-  campaign already has multiple LIVE runs. Migration intentionally fails rather than choosing or
-  deleting historical runs automatically.
+- Rollout uses two releases. Release A deploys application locking, explicit existing-LIVE checks,
+  typed conflict handling and lifecycle audit while remaining rollback-compatible with the prior
+  database. Release B adds the partial unique index only after every process runs compatible code
+  and the audit reports no duplicates or lifecycle drift.
+- Before Release B, operators must verify that no campaign already has multiple LIVE runs. Migration
+  intentionally fails rather than choosing or deleting historical runs automatically.
+- After Release B applies the unique index, versions older than Release A are database-incompatible;
+  incidents use a compatible forward-fix rather than an application-only rollback.
 
 ## Required verification
 
@@ -45,5 +50,5 @@ idempotency keys, and the Campaign status enum has no implemented transition own
 - replay of the winning idempotency key returns that run;
 - pause/resume/terminal transitions keep Campaign and its LIVE run consistent;
 - DRAFT edits and target replacement become unavailable after LIVE launch.
-- rollout preflight reports zero rows for:
+- Release B rollout preflight reports zero rows for:
   `SELECT campaign_id FROM campaign_runs WHERE execution_mode = 'LIVE' GROUP BY campaign_id HAVING count(*) > 1`.

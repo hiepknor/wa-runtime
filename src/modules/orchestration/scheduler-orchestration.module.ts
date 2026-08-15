@@ -6,6 +6,7 @@ import { GatewayModule } from '../gateway/gateway.module';
 import { MessagesModule } from '../messages/messages.module';
 import { WebhooksModule } from '../webhooks/webhooks.module';
 import { CampaignDispatchTick } from './campaign-dispatch.tick';
+import { CampaignLifecycleAuditTick } from './campaign-lifecycle-audit.tick';
 import { DataRetentionTick } from './data-retention.tick';
 import { GatewayDispatchTick } from './gateway-dispatch.tick';
 import { MessageDispatchTick } from './message-dispatch.tick';
@@ -21,6 +22,7 @@ import { ContactsModule } from '../contacts/contacts.module';
     WebhookDispatchTick,
     GatewayDispatchTick,
     CampaignDispatchTick,
+    CampaignLifecycleAuditTick,
     DataRetentionTick,
     SchedulerRunnerService,
     GatewayWorkListenerService,

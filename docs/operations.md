@@ -52,6 +52,21 @@ A production release should follow this order:
 
 Do not deploy from an uncommitted working tree or a floating branch such as `main`.
 
+### Single-LIVE rollout gate
+
+The campaign single-LIVE database invariant is a two-release change. Release A deploys the repository
+launch guard, aggregate scheduler audit and reconciliation commands, but deliberately does not add the
+unique index. Run `npm run campaign:lifecycle:audit`; if it reports only unambiguous campaign-status
+drift, quiesce launches and run `npm run campaign:lifecycle:reconcile`. The apply command takes
+write-blocking locks on `campaigns` and `campaign_runs` for its short transaction so its duplicate audit
+and repair use one protected state. Duplicate LIVE runs are an incident and are never auto-selected,
+deleted or rewritten.
+
+Observe Release A long enough to establish that `multipleLive` stays zero and lifecycle drift does not
+recur. Only then may Release B add the reviewed partial unique index. After that migration succeeds,
+do not roll back to a Runtime revision that does not handle the constraint; forward-fix the application
+while retaining the database invariant.
+
 ## Health and observability
 
 Public probes:
@@ -82,6 +97,11 @@ Regularly inspect repeated worker failures, runs stuck in `PREPARING`, unexpecte
 deliveries, dead or increasingly old webhook events, expired processing leases, session
 restrictions, capability refresh failures, database storage pressure and Redis `noeviction` write
 failures.
+
+The scheduler audits campaign/run lifecycle consistency every 60 seconds. A
+`campaign.lifecycle.drift_detected` event contains aggregate category counts only. Any non-zero
+`multipleLive` blocks the Release B unique-index migration and requires incident review; never add
+campaign or run identifiers to this periodic event.
 
 After [ADR 001](adr/001-postgresql-owned-durable-work-execution.md) is implemented, also alert on
 lost-ownership transitions, exhausted durable retry budgets, sync epoch rejections, expired

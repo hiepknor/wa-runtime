@@ -198,7 +198,11 @@ Saved-list application is a single Runtime transaction: it locks the DRAFT campa
 checks session and optional revisions, copies the complete membership, and returns target data,
 `targetsRevision`, and nullable source provenance as one atomic result. Manual target replacement clears
 provenance. A source edit or archive never propagates into an already materialized campaign target
-set, and runs snapshot the source list ID and membership revision for audit.
+set, and runs snapshot the source list ID, list name and membership revision for audit. Provenance is
+binary current-state metadata: a non-null source identifies the exact saved-list membership snapshot
+that produced the current targets, while a null source means the targets are custom. It is not a
+history of every list previously applied. The snapshotted list name remains stable after a later rename
+or archive.
 Sources outside the configured session allowlist follow not-found semantics and do not reveal their
 existence; an authorized source owned by another session returns a typed session-mismatch error.
 
@@ -220,9 +224,12 @@ schedule cannot be launched LIVE. Pausing and successfully resuming the LIVE run
 preparation failure archives it. Idempotent replay of the winning launch key remains available after
 the campaign leaves DRAFT.
 
-Before migration 036 is applied to an environment with historical run data, deployment must confirm
-that no campaign has more than one existing LIVE run. Runtime does not discard or silently select a
-legacy run to satisfy the new invariant.
+The single-LIVE invariant uses a two-release rollout. Release A deploys the application launch guard,
+aggregate lifecycle audit and operator reconciliation command without the unique index. Operators must
+prove that no campaign has duplicate LIVE runs and reconcile only unambiguous status drift. Release B
+then adds the database unique index. Runtime never discards or silently selects a legacy run to satisfy
+the invariant, and after Release B an older Runtime that does not understand the constraint is not a
+supported rollback target.
 
 ### Low-level message jobs
 

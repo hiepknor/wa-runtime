@@ -27,6 +27,11 @@ semantics, but it cannot atomically prove which saved-list membership revision w
 7. Target-list responses return data, its `targetsRevision`, and nullable source provenance from the
    same database snapshot.
 8. Archived lists remain valid provenance but cannot be newly applied.
+9. Nullable Campaign `source` is current-state provenance, not historical lineage: non-null means
+   the effective target set exactly matches the recorded membership revision; manual replacement
+   clears it and produces a custom snapshot.
+10. Campaign and run provenance snapshot the source list name for presentation and audit. Later
+    rename/archive operations do not rewrite that name snapshot.
 
 ## Consequences
 

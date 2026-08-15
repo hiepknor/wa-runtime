@@ -46,6 +46,11 @@ export class CampaignTargetSourceDto {
   @ApiProperty({ format: 'uuid' })
   groupListId!: string;
 
+  @ApiProperty({
+    description: 'Saved-list name captured when this exact membership revision was applied.',
+  })
+  groupListNameSnapshot!: string;
+
   @ApiProperty({ type: 'integer', minimum: 1 })
   membershipRevision!: number;
 

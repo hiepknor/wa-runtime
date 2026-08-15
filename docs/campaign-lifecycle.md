@@ -70,6 +70,11 @@ for campaign revision, provenance and target data. Editing, renaming or archivin
 does not propagate. Manual target replacement clears provenance. A run snapshots the provenance for
 audit but never resolves the mutable saved list during preflight or delivery.
 
+The source is deliberately binary current-state provenance rather than a change history. Non-null
+provenance means the current target set exactly matches the recorded list membership revision; null
+means the set is custom. Campaigns and runs snapshot the list name as presentation metadata, so later
+list rename or archive cannot rewrite audit output.
+
 ## Preflight
 
 Preflight policy version 2 evaluates five checks. Version 2 treats invalidated capability snapshots
@@ -129,8 +134,9 @@ Repeating the same key and mode returns the existing run. Reusing the key with a
 returns HTTP 409.
 
 A campaign is one live send plan. While `DRAFT`, it may create multiple DRY_RUN snapshots without a
-status change. The first LIVE launch atomically changes the campaign to `ACTIVE`; a database unique
-index permits at most one LIVE run for that campaign. New launches may send optional expected
+status change. The first LIVE launch atomically changes the campaign to `ACTIVE`. Release A enforces at
+most one LIVE run in the repository transaction and audits historical drift; after that gate is clean,
+Release B adds the database unique index as the final invariant. New launches may send optional expected
 campaign/target revisions, and stale values return HTTP 409. A LIVE `ONCE` launch whose scheduled
 instant has passed is rejected. Idempotent replay of the winning key is checked before lifecycle
 rejection and therefore remains safe after launch.
@@ -212,3 +218,19 @@ PostgreSQL contains enough state to resume after process or Redis interruption:
 
 Operators should restart services normally and inspect run progress before attempting any manual
 database change.
+
+Before the Release B single-LIVE index, inspect aggregate lifecycle drift with:
+
+```bash
+npm run campaign:lifecycle:audit
+```
+
+The command returns non-zero while drift or duplicate LIVE runs remain. After Release A is running and
+launches are quiesced, unambiguous campaign-status drift can be repaired transactionally with:
+
+```bash
+npm run campaign:lifecycle:reconcile
+```
+
+Reconciliation never resolves duplicate LIVE runs automatically. Their immutable run records require
+operator investigation and an explicit incident decision before the unique index may be deployed.

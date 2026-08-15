@@ -3690,6 +3690,10 @@
             "type": "string",
             "format": "uuid"
           },
+          "groupListNameSnapshot": {
+            "type": "string",
+            "description": "Saved-list name captured when this exact membership revision was applied."
+          },
           "membershipRevision": {
             "type": "integer",
             "minimum": 1
@@ -3702,6 +3706,7 @@
         "required": [
           "type",
           "groupListId",
+          "groupListNameSnapshot",
           "membershipRevision",
           "appliedAt"
         ]

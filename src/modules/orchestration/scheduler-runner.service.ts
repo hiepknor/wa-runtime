@@ -4,6 +4,7 @@ import { withCorrelationContext } from '../../core/observability/correlation-con
 import { RUNTIME_HEARTBEAT_INTERVAL_MS } from '../../core/queue/runtime-heartbeat';
 import { QueueService } from '../../core/queue/queue.service';
 import { CampaignDispatchTick } from './campaign-dispatch.tick';
+import { CampaignLifecycleAuditTick } from './campaign-lifecycle-audit.tick';
 import { DataRetentionTick } from './data-retention.tick';
 import { GatewayDispatchTick } from './gateway-dispatch.tick';
 import { IsolatedSchedulerTick } from './isolated-scheduler-tick';
@@ -26,6 +27,7 @@ export class SchedulerRunnerService {
     private readonly webhooks: WebhookDispatchTick,
     private readonly gateway: GatewayDispatchTick,
     private readonly campaigns: CampaignDispatchTick,
+    private readonly campaignLifecycleAudit: CampaignLifecycleAuditTick,
     private readonly retention: DataRetentionTick,
     private readonly queues: QueueService,
     private readonly gatewayListener: GatewayWorkListenerService,
@@ -45,6 +47,7 @@ export class SchedulerRunnerService {
       this.tick('webhooks', 1_000, 30_000, () => this.webhooks.run()),
       gatewayTick,
       this.tick('campaigns', 1_000, 30_000, () => this.campaigns.run()),
+      this.tick('campaign-lifecycle-audit', 60_000, 30_000, () => this.campaignLifecycleAudit.run()),
       this.tick(
         'retention',
         this.config.RUNTIME_RETENTION_INTERVAL_MS,

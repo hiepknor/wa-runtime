@@ -22,6 +22,7 @@ interface CampaignRunRow {
   campaign_revision: string | number;
   targets_revision: string | number;
   target_source_group_list_id: string | null;
+  target_source_group_list_name_snapshot: string | null;
   target_source_membership_revision: string | number | null;
   target_source_applied_at: Date | null;
   preflight_report: CampaignPreflightDto | null;
@@ -53,6 +54,14 @@ export interface ClaimedCampaignPreparation {
 export type CampaignPreparationResult = 'PREPARING' | 'FAILED' | 'LOST_OWNERSHIP';
 export type CampaignPreflightApplyResult = 'APPLIED' | 'STALE_INPUT' | 'LOST_OWNERSHIP';
 export type CampaignResumeResult = CampaignRunDto | 'STALE_INPUT' | null;
+
+export interface CampaignLifecycleDrift {
+  draftWithLive: number;
+  activeWithoutNonTerminalLive: number;
+  pausedWithoutPausedOrBlockedLive: number;
+  archivedWithNonTerminalLive: number;
+  multipleLive: number;
+}
 
 interface PreflightTargetRow {
   group_id: string;
@@ -109,11 +118,13 @@ const mapRun = (row: CampaignRunRow): CampaignRunDto => ({
   statusReason: row.status_reason,
   text: row.payload_snapshot.text,
   targetSource: row.target_source_group_list_id
+    && row.target_source_group_list_name_snapshot
     && row.target_source_membership_revision
     && row.target_source_applied_at
     ? {
         type: 'GROUP_LIST',
         groupListId: row.target_source_group_list_id,
+        groupListNameSnapshot: row.target_source_group_list_name_snapshot,
         membershipRevision: Number(row.target_source_membership_revision),
         appliedAt: row.target_source_applied_at,
       }
@@ -187,10 +198,12 @@ export class CampaignRunRepository {
         revision: string | number;
         targets_revision: string | number;
         target_source_group_list_id: string | null;
+        target_source_group_list_name_snapshot: string | null;
         target_source_membership_revision: string | number | null;
         target_source_applied_at: Date | null;
       }>(`SELECT id, session_id, payload, schedule_type, scheduled_at, status, revision, targets_revision
-             , target_source_group_list_id, target_source_membership_revision, target_source_applied_at
+             , target_source_group_list_id, target_source_group_list_name_snapshot,
+               target_source_membership_revision, target_source_applied_at
            FROM campaigns WHERE id = $1 FOR UPDATE`, [input.campaignId]);
       const campaign = campaignResult.rows[0];
       const empty = {
@@ -211,6 +224,16 @@ export class CampaignRunRepository {
           campaignFound: true,
           idempotencyConflict: run.execution_mode !== input.executionMode,
         };
+      }
+
+      const existingLive = await client.query(
+        `SELECT 1 FROM campaign_runs
+         WHERE campaign_id = $1 AND execution_mode = 'LIVE'
+         LIMIT 1`,
+        [campaign.id],
+      );
+      if (existingLive.rowCount) {
+        return { ...empty, campaignFound: true, campaignNotLaunchable: true };
       }
 
       const currentCampaignRevision = Number(campaign.revision);
@@ -239,12 +262,14 @@ export class CampaignRunRepository {
          `INSERT INTO campaign_runs
            (campaign_id, session_id, idempotency_key, execution_mode, payload_snapshot, scheduled_at,
             campaign_revision, targets_revision, target_source_group_list_id,
-            target_source_membership_revision, target_source_applied_at)
-         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11)
-         ON CONFLICT (campaign_id, idempotency_key) DO NOTHING RETURNING id`,
+            target_source_group_list_name_snapshot, target_source_membership_revision,
+            target_source_applied_at)
+         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12)
+         ON CONFLICT DO NOTHING RETURNING id`,
         [campaign.id, campaign.session_id, input.idempotencyKey, input.executionMode,
           JSON.stringify(campaign.payload), scheduledAt, campaign.revision, campaign.targets_revision,
-          campaign.target_source_group_list_id, campaign.target_source_membership_revision,
+          campaign.target_source_group_list_id, campaign.target_source_group_list_name_snapshot,
+          campaign.target_source_membership_revision,
           campaign.target_source_applied_at],
       );
       if (!inserted.rows[0]) {
@@ -252,7 +277,10 @@ export class CampaignRunRepository {
           `${runSelect} WHERE cr.campaign_id = $1 AND cr.idempotency_key = $2`,
           [campaign.id, input.idempotencyKey],
         );
-        const run = replay.rows[0]!;
+        const run = replay.rows[0];
+        if (!run) {
+          return { ...empty, campaignFound: true, campaignNotLaunchable: true };
+        }
         return {
           ...empty,
           run: mapRun(run),
@@ -316,6 +344,43 @@ export class CampaignRunRepository {
        ORDER BY preparation_next_attempt_at, created_at LIMIT $1`, [limit],
     );
     return result.rows;
+  }
+
+  async auditLifecycle(): Promise<CampaignLifecycleDrift> {
+    const result = await this.database.query<{
+      draft_with_live: string;
+      active_without_non_terminal_live: string;
+      paused_without_paused_or_blocked_live: string;
+      archived_with_non_terminal_live: string;
+      multiple_live: string;
+    }>(
+      `WITH live AS (
+         SELECT campaign_id, count(*) AS live_count,
+           bool_or(status IN ('PREPARING','BLOCKED','SCHEDULED','RUNNING','PAUSED')) AS has_non_terminal,
+           bool_or(status IN ('PAUSED','BLOCKED')) AS has_paused_or_blocked
+         FROM campaign_runs WHERE execution_mode = 'LIVE' GROUP BY campaign_id
+       )
+       SELECT
+         count(*) FILTER (WHERE c.status = 'DRAFT' AND coalesce(l.live_count, 0) > 0)::text
+           AS draft_with_live,
+         count(*) FILTER (WHERE c.status = 'ACTIVE' AND NOT coalesce(l.has_non_terminal, false))::text
+           AS active_without_non_terminal_live,
+         count(*) FILTER (WHERE c.status = 'PAUSED'
+           AND NOT coalesce(l.has_paused_or_blocked, false))::text
+           AS paused_without_paused_or_blocked_live,
+         count(*) FILTER (WHERE c.status = 'ARCHIVED' AND coalesce(l.has_non_terminal, false))::text
+           AS archived_with_non_terminal_live,
+         count(*) FILTER (WHERE coalesce(l.live_count, 0) > 1)::text AS multiple_live
+       FROM campaigns c LEFT JOIN live l ON l.campaign_id = c.id`,
+    );
+    const row = result.rows[0]!;
+    return {
+      draftWithLive: Number(row.draft_with_live),
+      activeWithoutNonTerminalLive: Number(row.active_without_non_terminal_live),
+      pausedWithoutPausedOrBlockedLive: Number(row.paused_without_paused_or_blocked_live),
+      archivedWithNonTerminalLive: Number(row.archived_with_non_terminal_live),
+      multipleLive: Number(row.multiple_live),
+    };
   }
 
   async claimPreparation(runId: string): Promise<ClaimedCampaignPreparation | null> {

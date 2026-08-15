@@ -43,6 +43,7 @@ describe('campaign draft contract HTTP API', () => {
       report: Record<string, any>,
       targets: Record<string, any>[],
     ): Promise<unknown>;
+    auditLifecycle(): Promise<Record<string, number>>;
   };
   const auth = { 'x-runtime-key': process.env.RUNTIME_API_KEY! };
 
@@ -310,7 +311,8 @@ describe('campaign draft contract HTTP API', () => {
     expect(applied.body).toMatchObject({
       targetsRevision: 1,
       source: {
-        type: 'GROUP_LIST', groupListId: list.body.id, membershipRevision: 1,
+        type: 'GROUP_LIST', groupListId: list.body.id,
+        groupListNameSnapshot: 'Reusable audience', membershipRevision: 1,
       },
     });
     expect(applied.body.data).toHaveLength(2);
@@ -361,11 +363,51 @@ describe('campaign draft contract HTTP API', () => {
     });
     expect(run.body.targetSource).toMatchObject({ groupListId: list.body.id, membershipRevision: 2 });
 
+    const renamed = await jsonRequest(`/group-lists/${list.body.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ expectedRevision: 2, name: 'Renamed audience' }),
+    });
+    expect(renamed.body.name).toBe('Renamed audience');
+    expect((await jsonRequest(`/campaigns/${campaignId}/targets`)).body.source)
+      .toMatchObject({ groupListNameSnapshot: 'Reusable audience', membershipRevision: 2 });
+    const archiveResponse = await fetch(
+      `${baseUrl}/group-lists/${list.body.id as string}?expectedRevision=3`,
+      { method: 'DELETE', headers: auth },
+    );
+    expect(archiveResponse.status).toBe(204);
+    expect((await jsonRequest(`/campaigns/${campaignId}/runs`)).body.data[0].targetSource)
+      .toMatchObject({ groupListNameSnapshot: 'Reusable audience', membershipRevision: 2 });
+
     const manual = await jsonRequest(`/campaigns/${campaignId}/targets`, {
       method: 'PUT',
       body: JSON.stringify({ expectedTargetsRevision: 2, groupIds: ['second@g.us'] }),
     });
     expect(manual.body).toMatchObject({ targetsRevision: 3, source: null });
+  });
+
+  it('rejects every new run when legacy data already contains a LIVE launch', async () => {
+    const campaign = await createCampaign();
+    const campaignId = campaign.body.id as string;
+    await pool.query(
+      `INSERT INTO campaign_runs
+         (campaign_id, session_id, idempotency_key, execution_mode, payload_snapshot, scheduled_at)
+       VALUES ($1, $2, 'legacy-live', 'LIVE', '{"text":"hello"}', now())`,
+      [campaignId, INTEGRATION_SESSION_ID],
+    );
+
+    for (const executionMode of ['LIVE', 'DRY_RUN']) {
+      const result = await jsonRequest(`/campaigns/${campaignId}/runs`, {
+        method: 'POST',
+        headers: { 'idempotency-key': randomUUID() },
+        body: JSON.stringify({ executionMode }),
+      });
+      expect(result.response.status).toBe(409);
+      expect(result.body.code).toBe('CAMPAIGN_RUN_LAUNCH_CONFLICT');
+    }
+    const count = await pool.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM campaign_runs WHERE campaign_id = $1', [campaignId],
+    );
+    expect(count.rows[0]?.count).toBe('1');
   });
 
   it('rejects archived and cross-session saved-list sources without changing campaign targets', async () => {
@@ -700,6 +742,38 @@ describe('campaign draft contract HTTP API', () => {
     );
     expect(attempt.rows[0]).toEqual({ preparation_attempt_count: 0, preparation_lease_token: null });
     expect(await runRepository.claimPreparation(runId)).not.toBeNull();
+  });
+
+  it('reports aggregate Campaign/LIVE lifecycle drift without exposing identifiers', async () => {
+    const insertCampaign = async (name: string, status: string) => {
+      const result = await pool.query<{ id: string }>(
+        `INSERT INTO campaigns (session_id, name, payload, status)
+         VALUES ($1, $2, '{"text":"hello"}', $3::campaign_status) RETURNING id`,
+        [INTEGRATION_SESSION_ID, name, status],
+      );
+      return result.rows[0]!.id;
+    };
+    const insertLive = (campaignId: string, key: string, status: string) => pool.query(
+      `INSERT INTO campaign_runs
+         (campaign_id, session_id, idempotency_key, execution_mode, payload_snapshot, scheduled_at, status)
+       VALUES ($1, $2, $3, 'LIVE', '{"text":"hello"}', now(), $4::campaign_run_status)`,
+      [campaignId, INTEGRATION_SESSION_ID, key, status],
+    );
+    await insertLive(await insertCampaign('Draft drift', 'DRAFT'), 'drift-draft', 'PREPARING');
+    await insertCampaign('Active drift', 'ACTIVE');
+    await insertLive(await insertCampaign('Paused drift', 'PAUSED'), 'drift-paused', 'RUNNING');
+    await insertLive(await insertCampaign('Archived drift', 'ARCHIVED'), 'drift-archived', 'RUNNING');
+    const duplicate = await insertCampaign('Duplicate live', 'ACTIVE');
+    await insertLive(duplicate, 'duplicate-one', 'RUNNING');
+    await insertLive(duplicate, 'duplicate-two', 'PREPARING');
+
+    expect(await runRepository.auditLifecycle()).toEqual({
+      draftWithLive: 1,
+      activeWithoutNonTerminalLive: 1,
+      pausedWithoutPausedOrBlockedLive: 1,
+      archivedWithNonTerminalLive: 1,
+      multipleLive: 1,
+    });
   });
 
   it('prepares, pauses, resumes, and cancels a dry-run without calling the send adapter', async () => {
