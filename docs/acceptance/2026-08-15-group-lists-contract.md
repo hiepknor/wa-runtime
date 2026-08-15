@@ -1,6 +1,6 @@
 # Saved Group Lists contract handoff
 
-- Status: `RUNTIME_RELEASE_A_STAGING_PASS / STUDIO_PENDING / COORDINATED_STAGING_PENDING`
+- Status: `RUNTIME_RELEASE_A_STAGING_PASS / STUDIO_READY / COORDINATED_STAGING_PENDING`
 - Date: 2026-08-15
 - Runtime ADR: `f92edef`
 - Runtime implementation: `b762739`
@@ -11,7 +11,8 @@
 - Runtime delivery range: `f92edef^..0cddc89`
 - Authoritative artifact: `contracts/runtime/v1/openapi.json`
 - OpenAPI SHA-256: `4b932b05213252c624b9d0cb359d696d30db9e90d23e1b91421286076ccec760`
-- WA Studio commit: pending
+- WA Studio baseline: `25a57fbef3a8b45ff00a1ec2ce7240c660ead0a2`
+- WA Studio migration commit: `ba1038ad5d1a86e312f616debf05fa44f5257e4b`
 
 ## Contract decision
 
@@ -65,11 +66,23 @@ The OpenWA 0.18.0 contract was subsequently reviewed at Runtime commit `48ad3a0`
 reports 0.18.0, and a controlled incremental sync completed without validation or reconciliation
 failure. The prior upstream version-mismatch blocker is closed.
 
+## WA Studio verification
+
+WA Studio confirmed that its copied Runtime artifact is byte-identical with SHA-256
+`4b932b05213252c624b9d0cb359d696d30db9e90d23e1b91421286076ccec760`. At migration commit
+`ba1038ad5d1a86e312f616debf05fa44f5257e4b`, Studio reported:
+
+- 33 test files and 263 tests passed;
+- TypeScript production build passed;
+- Rust formatting and Clippy passed;
+- contract generation ran twice and was byte-stable;
+- the Studio worktree was clean;
+- no push, deployment, release tag, LIVE send or real message occurred.
+
 ## Coordinated release gate
 
-WA Studio must copy the authoritative artifact byte-for-byte, regenerate its client, record its commit
-here and pass its Groups/Saved lists/Campaign target integration suite. Coordinated staging must verify
-create/edit/archive, multi-page selection, add/replace
+Runtime and Studio contract readiness is complete. Coordinated staging must verify create/edit/archive,
+multi-page selection, add/replace
 staged campaign targets, campaign and run snapshot independence after list rename/archive, allowlist
 isolation and expected run side effects.
 
