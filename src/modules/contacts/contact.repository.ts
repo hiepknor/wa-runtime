@@ -8,171 +8,59 @@ import { DatabaseService } from '../../core/database/database.service';
 import { contactNameProjectionSql, memberNameProjectionSql } from './contact-name-resolution.sql';
 import { ContactSnapshotConflictError } from './contact-snapshot.errors';
 import { ContactEvidenceWriter } from './contact-evidence.writer';
-
-interface GroupMemberContactInput {
-  participant_id: string;
-  identity_type: 'LID' | 'PHONE_JID' | 'OTHER_JID';
-  identity_value: string;
-  phone: string | null;
-  participant_name: string | null;
-  candidate_contact_id: string;
-}
-
-const inputRelation = `jsonb_to_recordset($3::jsonb) AS member(
-  participant_id text, identity_type text, identity_value text, phone text,
-  participant_name text, candidate_contact_id uuid
-)`;
+import { ContactSnapshotLifecycleRepository } from './contact-snapshot-lifecycle.repository';
+import { ContactObservationRepository } from './contact-observation.repository';
+import { ContactSyncQueryRepository } from './contact-sync-query.repository';
 
 const contactProjection = contactNameProjectionSql({
   contactName: 'contact_source.name_value',
   pushName: 'push_source.name_value',
-});
-const observedContactProjection = contactNameProjectionSql({
-  contactName: 'contact_source.name_value',
-  pushName: 'name_write.name_value',
 });
 const memberProjection = memberNameProjectionSql({
   contactName: 'contact.effective_display_name',
   contactSource: 'contact.display_name_source',
   participantName: 'member.participant_display_name',
 });
-const observedMemberProjection = memberNameProjectionSql({
-  contactName: 'contact_write.effective_display_name',
-  contactSource: 'contact_write.display_name_source',
-  participantName: 'member.participant_display_name',
-});
-const resolvedMemberProjection = memberNameProjectionSql({
-  contactName: 'resolved.effective_display_name',
-  contactSource: 'resolved.contact_name_source',
-  participantName: 'resolved.participant_name',
-});
-
 @Injectable()
 export class ContactRepository {
+  private readonly snapshotLifecycle: ContactSnapshotLifecycleRepository;
+  private readonly observations: ContactObservationRepository;
+  private readonly queries: ContactSyncQueryRepository;
+
   constructor(
     private readonly database: DatabaseService,
     private readonly snapshotStagingEnabled = false,
-    private readonly snapshotRetentionDays = 30,
-    private readonly evidenceWriter = new ContactEvidenceWriter(false),
+    snapshotRetentionDays = 30,
+    evidenceWriter = new ContactEvidenceWriter(false),
     private readonly legacyMemberFanoutEnabled = true,
-  ) {}
+  ) {
+    this.snapshotLifecycle = new ContactSnapshotLifecycleRepository(
+      database,
+      snapshotStagingEnabled,
+      snapshotRetentionDays,
+      evidenceWriter,
+    );
+    this.observations = new ContactObservationRepository(
+      database,
+      evidenceWriter,
+      legacyMemberFanoutEnabled,
+    );
+    this.queries = new ContactSyncQueryRepository(database);
+  }
 
   async listPeriodicSessionIds(allowedSessionIds: string[], limit: number): Promise<string[]> {
-    const result = await this.database.query<{ id: string }>(
-      `SELECT session.id FROM gateway_sessions session
-       LEFT JOIN contact_sync_state state ON state.session_id = session.id
-       WHERE session.id = ANY($1::text[]) AND session.status = 'ready' AND session.engine_loaded = true
-         AND (state.session_id IS NULL OR state.next_attempt_at <= now())
-         AND (state.lease_token IS NULL OR state.lease_expires_at < now())
-       ORDER BY state.next_attempt_at NULLS FIRST, session.id LIMIT $2`,
-      [allowedSessionIds, limit],
-    );
-    return result.rows.map(row => row.id);
+    return this.queries.listPeriodicSessionIds(allowedSessionIds, limit);
   }
 
   async getCoverageMetrics(sessionId: string): Promise<Record<string, number>> {
-    const result = await this.database.query<Record<string, string>>(
-      `SELECT
-         count(*)::text AS member_records,
-         count(*) FILTER (WHERE member.contact_id IS NOT NULL)::text AS linked_records,
-         count(*) FILTER (WHERE member.display_name IS NOT NULL)::text AS named_records,
-         count(*) FILTER (WHERE identifier.identity_type = 'LID')::text AS lid_records,
-         count(*) FILTER (WHERE identifier.identity_type = 'LID'
-           AND member.display_name IS NOT NULL)::text AS named_lid_records,
-         count(*) FILTER (WHERE identifier.identity_type = 'PHONE_JID')::text AS phone_jid_records,
-         count(*) FILTER (WHERE identifier.identity_type = 'PHONE_JID'
-           AND member.display_name IS NOT NULL)::text AS named_phone_jid_records,
-         count(*) FILTER (WHERE member.display_name_source = 'OPENWA_CONTACT_NAME')::text AS contact_name_records,
-         count(*) FILTER (WHERE member.display_name_source = 'GROUP_PARTICIPANT_NAME')::text AS participant_name_records,
-         count(*) FILTER (WHERE member.display_name_source = 'OPENWA_PUSH_NAME')::text AS push_name_records,
-         count(*) FILTER (WHERE member.shadow_projection_revision > 0)::text AS shadow_projected_records,
-         count(*) FILTER (WHERE member.shadow_display_name IS NOT NULL)::text AS shadow_named_records,
-         count(*) FILTER (WHERE member.shadow_resolved_phone_number IS NOT NULL)::text
-           AS shadow_resolved_phone_records,
-         count(*) FILTER (WHERE member.shadow_display_name_source = 'RESOLVED_ALIAS_PUSH_NAME')::text
-           AS shadow_alias_push_records
-       FROM group_members member
-       LEFT JOIN contact_identifiers identifier
-         ON identifier.session_id = member.session_id AND identifier.contact_id = member.contact_id
-        AND identifier.identity_type = CASE
-          WHEN member.participant_id LIKE '%@lid' THEN 'LID'
-          WHEN member.participant_id LIKE '%@c.us' OR member.participant_id LIKE '%@s.whatsapp.net'
-            THEN 'PHONE_JID'
-          ELSE 'OTHER_JID'
-        END
-        AND identifier.identity_value = CASE
-          WHEN member.participant_id LIKE '%@s.whatsapp.net'
-            THEN regexp_replace(member.participant_id, '@s\\.whatsapp\\.net$', '@c.us')
-          ELSE member.participant_id
-        END
-       WHERE member.session_id = $1`,
-      [sessionId],
-    );
-    return Object.fromEntries(
-      Object.entries(result.rows[0] ?? {}).map(([key, value]) => [key, Number(value)]),
-    );
+    return this.queries.getCoverageMetrics(sessionId);
   }
 
   async beginObservedSnapshot(sessionId: string, force = true): Promise<{
     generation: number;
     leaseToken: string;
   } | null> {
-    const claimSql = `INSERT INTO contact_sync_state
-         (session_id, sync_generation, last_started_at, last_error_code, lease_token, lease_expires_at)
-       VALUES ($1, 1, now(), NULL, gen_random_uuid(), now() + interval '10 minutes')
-       ON CONFLICT (session_id) DO UPDATE SET
-         sync_generation = contact_sync_state.sync_generation + 1,
-         last_started_at = now(), last_error_code = NULL,
-         attempt_count = contact_sync_state.attempt_count + 1,
-         lease_token = gen_random_uuid(), lease_expires_at = now() + interval '10 minutes', updated_at = now()
-       WHERE (contact_sync_state.lease_token IS NULL OR contact_sync_state.lease_expires_at < now())
-         AND ($2 OR contact_sync_state.next_attempt_at <= now())
-       RETURNING sync_generation, lease_token`;
-    if (!this.snapshotStagingEnabled) {
-      const result = await this.database.query<{ sync_generation: string; lease_token: string }>(
-        claimSql,
-        [sessionId, force],
-      );
-      const row = result.rows[0];
-      return row ? { generation: Number(row.sync_generation), leaseToken: row.lease_token } : null;
-    }
-    return this.database.transaction(async client => {
-      const result = await client.query<{ sync_generation: string; lease_token: string }>(
-        claimSql,
-        [sessionId, force],
-      );
-      const row = result.rows[0];
-      if (!row) return null;
-      await client.query(
-        `UPDATE contact_snapshot_generations
-         SET state = 'FAILED', failed_at = now(), error_code = 'LEASE_EXPIRED', updated_at = now()
-         WHERE session_id = $1 AND state = 'RECEIVING' AND generation < $2`,
-        [sessionId, row.sync_generation],
-      );
-      await client.query(
-        `DELETE FROM contact_snapshot_generations generation_state
-         WHERE generation_state.session_id = $1
-           AND generation_state.state IN ('PUBLISHED', 'FAILED')
-           AND generation_state.created_at < now() - $2 * interval '1 day'
-           AND generation_state.generation <> COALESCE((
-             SELECT max(published.generation) FROM contact_snapshot_generations published
-             WHERE published.session_id = $1 AND published.state = 'PUBLISHED'
-           ), -1)
-           AND generation_state.generation <> COALESCE((
-             SELECT resolved.source_generation FROM contact_resolution_runs resolved
-             WHERE resolved.session_id = $1 AND resolved.status = 'COMPLETED'
-             ORDER BY resolved.completed_at DESC, resolved.id DESC LIMIT 1
-           ), -1)`,
-        [sessionId, this.snapshotRetentionDays],
-      );
-      await client.query(
-        `INSERT INTO contact_snapshot_generations
-           (session_id, generation, state, lease_token)
-         VALUES ($1, $2, 'RECEIVING', $3)`,
-        [sessionId, row.sync_generation, row.lease_token],
-      );
-      return { generation: Number(row.sync_generation), leaseToken: row.lease_token };
-    });
+    return this.snapshotLifecycle.begin(sessionId, force);
   }
 
   async ingestObservedPage(
@@ -600,70 +488,11 @@ export class ContactRepository {
     records: number,
     intervalMs: number,
   ): Promise<void> {
-    const completionSql = `UPDATE contact_sync_state SET last_completed_at = now(), last_successful_record_count = $3,
-         last_error_code = NULL, attempt_count = 0,
-         next_attempt_at = now() + $5 * interval '1 millisecond',
-         lease_token = NULL, lease_expires_at = NULL, updated_at = now()
-       WHERE session_id = $1 AND sync_generation = $2 AND lease_token = $4
-         AND lease_expires_at > now()`;
-    const values = [sessionId, generation, records, leaseToken, intervalMs];
-    if (!this.snapshotStagingEnabled) {
-      const result = await this.database.query(completionSql, values);
-      if (result.rowCount !== 1) throw new Error('Contact snapshot lost write ownership');
-      return;
-    }
-    await this.database.transaction(async client => {
-      const ownership = await client.query(
-        `SELECT 1 FROM contact_sync_state
-         WHERE session_id = $1 AND sync_generation = $2 AND lease_token = $3
-           AND lease_expires_at > now()
-         FOR UPDATE`,
-        [sessionId, generation, leaseToken],
-      );
-      if (ownership.rowCount !== 1) throw new Error('Contact snapshot lost write ownership');
-      await this.evidenceWriter.publishSnapshot(client, sessionId, generation);
-      const generationResult = await client.query(
-        `UPDATE contact_snapshot_generations generation_state
-         SET state = 'PUBLISHED',
-           upstream_record_count = $3,
-           staged_identity_count = (
-             SELECT count(*) FROM contact_snapshot_observations observation
-             WHERE observation.session_id = $1 AND observation.generation = $2
-           ),
-           published_at = now(), updated_at = now()
-         WHERE generation_state.session_id = $1 AND generation_state.generation = $2
-           AND generation_state.state = 'RECEIVING' AND generation_state.lease_token = $4`,
-        values.slice(0, 4),
-      );
-      if (generationResult.rowCount !== 1) throw new Error('Contact snapshot lost publication ownership');
-      const completion = await client.query(completionSql, values);
-      if (completion.rowCount !== 1) throw new Error('Contact snapshot lost write ownership');
-    });
+    return this.snapshotLifecycle.complete(sessionId, generation, leaseToken, records, intervalMs);
   }
 
   async failObservedSnapshot(sessionId: string, generation: number, leaseToken: string, code: string): Promise<void> {
-    const failureSql = `WITH evidence_cleanup AS (
-         DELETE FROM contact_identity_evidence WHERE session_id = $1 AND sync_generation = $2
-       )
-       UPDATE contact_sync_state SET last_error_code = $4,
-         next_attempt_at = now() + LEAST(3600, 60 * power(2, LEAST(attempt_count, 6))) * interval '1 second',
-         lease_token = NULL, lease_expires_at = NULL, updated_at = now()
-       WHERE session_id = $1 AND sync_generation = $2 AND lease_token = $3`;
-    const values = [sessionId, generation, leaseToken, code];
-    if (!this.snapshotStagingEnabled) {
-      await this.database.query(failureSql, values);
-      return;
-    }
-    await this.database.transaction(async client => {
-      await client.query(
-        `UPDATE contact_snapshot_generations
-         SET state = 'FAILED', failed_at = now(), error_code = $4, updated_at = now()
-         WHERE session_id = $1 AND generation = $2 AND lease_token = $3
-           AND state = 'RECEIVING'`,
-        values,
-      );
-      await client.query(failureSql, values);
-    });
+    return this.snapshotLifecycle.fail(sessionId, generation, leaseToken, code);
   }
 
   async observeMessageSender(
@@ -673,92 +502,13 @@ export class ContactRepository {
     observedAt: Date,
     observationKey: string,
   ): Promise<boolean> {
-    const identity = normalizeContactIdentity(rawIdentity);
-    if (identity.type !== 'LID' && identity.type !== 'PHONE_JID') return false;
-    const pushName = normalizeContactName(rawPushName, identity);
-    if (!pushName) return false;
-    const candidateContactId = randomUUID();
-    return this.database.transaction(async client => {
-      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [sessionId]);
-      await client.query(
-        `WITH existing AS MATERIALIZED (
-           SELECT contact_id FROM contact_identifiers
-           WHERE session_id = $1 AND identity_type = $2 AND identity_value = $3
-         ), created AS (
-           INSERT INTO contacts (session_id, id)
-           SELECT $1, $4 WHERE NOT EXISTS (SELECT 1 FROM existing)
-           ON CONFLICT DO NOTHING
-         )
-         INSERT INTO contact_identifiers
-           (session_id, contact_id, identity_type, identity_value, mapping_source)
-         SELECT $1, COALESCE((SELECT contact_id FROM existing), $4), $2, $3, 'MESSAGE_IDENTITY'
-         ON CONFLICT (session_id, identity_type, identity_value) DO UPDATE SET
-           last_observed_at = now(), updated_at = now()`,
-        [sessionId, identity.type, identity.value, candidateContactId],
-      );
-      await this.evidenceWriter.observeMessageSender(
-        client,
-        sessionId,
-        {
-          identity_type: identity.type,
-          identity_value: identity.value,
-          phone: identity.phone,
-        },
-        pushName,
-        observedAt,
-        observationKey,
-      );
-      const result = await client.query<{ accepted: boolean }>(
-        `WITH resolved AS MATERIALIZED (
-           SELECT contact_id FROM contact_identifiers
-           WHERE session_id = $1 AND identity_type = $2 AND identity_value = $3
-         ), name_write AS (
-           INSERT INTO contact_names
-             (session_id, contact_id, name_source, name_value,
-              source_observed_at, source_observation_key)
-           SELECT $1, contact_id, 'OPENWA_PUSH_NAME', $4, $5, $6 FROM resolved
-           ON CONFLICT (session_id, contact_id, name_source) DO UPDATE SET
-             name_value = EXCLUDED.name_value,
-             source_observed_at = EXCLUDED.source_observed_at,
-             source_observation_key = EXCLUDED.source_observation_key,
-             last_observed_at = now(), updated_at = now()
-           WHERE (contact_names.source_observed_at, contact_names.source_observation_key)
-             < (EXCLUDED.source_observed_at, EXCLUDED.source_observation_key)
-           RETURNING contact_id, name_value
-         ), effective AS MATERIALIZED (
-           SELECT name_write.contact_id,
-             ${observedContactProjection.name} AS name_value,
-             ${observedContactProjection.source} AS name_source
-           FROM name_write
-           LEFT JOIN contact_names contact_source ON contact_source.session_id = $1
-             AND contact_source.contact_id = name_write.contact_id
-             AND contact_source.name_source = 'OPENWA_CONTACT_NAME'
-         ), contact_write AS (
-           UPDATE contacts contact SET
-             effective_display_name = effective.name_value,
-             display_name_source = effective.name_source,
-             last_observed_at = now(), updated_at = now()
-           FROM effective WHERE contact.session_id = $1 AND contact.id = effective.contact_id
-           RETURNING contact.id, contact.effective_display_name, contact.display_name_source
-         )
-         , member_write AS (
-           UPDATE group_members member SET display_name = ${observedMemberProjection.name},
-             display_name_source = ${observedMemberProjection.source},
-             display_name_updated_at = CASE WHEN ${observedMemberProjection.name} IS NULL
-               THEN NULL ELSE now() END,
-             updated_at = now()
-           FROM contact_write WHERE member.session_id = $1 AND member.contact_id = contact_write.id
-             AND $7::boolean
-             AND (member.display_name, member.display_name_source)
-               IS DISTINCT FROM (${observedMemberProjection.name}, ${observedMemberProjection.source})
-           RETURNING member.contact_id
-         )
-         SELECT EXISTS (SELECT 1 FROM name_write) AS accepted`,
-        [sessionId, identity.type, identity.value, pushName, observedAt, observationKey,
-          this.legacyMemberFanoutEnabled],
-      );
-      return result.rows[0]?.accepted ?? false;
-    });
+    return this.observations.observeMessageSender(
+      sessionId,
+      rawIdentity,
+      rawPushName,
+      observedAt,
+      observationKey,
+    );
   }
 
   async seedGroupMembers(
@@ -767,118 +517,6 @@ export class ContactRepository {
     groupId: string,
     participants: OpenWAGroupParticipant[],
   ): Promise<void> {
-    if (participants.length === 0) return;
-    const candidates = new Map<string, string>();
-    const inputs: GroupMemberContactInput[] = participants.map(participant => {
-      const identity = normalizeContactIdentity(participant.id);
-      const identityKey = `${identity.type}\0${identity.value}`;
-      const candidateContactId = candidates.get(identityKey) ?? randomUUID();
-      candidates.set(identityKey, candidateContactId);
-      return {
-        participant_id: participant.id,
-        identity_type: identity.type,
-        identity_value: identity.value,
-        phone: identity.phone,
-        participant_name: normalizeContactName(participant.name, identity),
-        candidate_contact_id: candidateContactId,
-      };
-    });
-    const values = [sessionId, groupId, JSON.stringify(inputs)];
-
-    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [sessionId]);
-    await this.evidenceWriter.observeGroupMembers(client, sessionId, groupId, inputs);
-    await client.query(
-      `WITH input AS MATERIALIZED (SELECT * FROM ${inputRelation} WHERE $2::text IS NOT NULL),
-       missing AS MATERIALIZED (
-         SELECT DISTINCT ON (input.identity_type, input.identity_value) input.*
-         FROM input
-         LEFT JOIN contact_identifiers identifier
-           ON identifier.session_id = $1 AND identifier.identity_type = input.identity_type
-          AND identifier.identity_value = input.identity_value
-         WHERE identifier.contact_id IS NULL
-         ORDER BY input.identity_type, input.identity_value, input.participant_id
-       ), created AS (
-         INSERT INTO contacts (session_id, id)
-         SELECT $1, missing.candidate_contact_id FROM missing
-         ON CONFLICT DO NOTHING
-       )
-         INSERT INTO contact_identifiers
-           (session_id, contact_id, identity_type, identity_value, mapping_source)
-         SELECT $1, missing.candidate_contact_id, missing.identity_type,
-           missing.identity_value, 'GROUP_PARTICIPANT'
-         FROM missing
-         ON CONFLICT (session_id, identity_type, identity_value) DO UPDATE SET
-           last_observed_at = now(), updated_at = now()`,
-      values,
-    );
-
-    await client.query(
-      `WITH input AS MATERIALIZED (SELECT * FROM ${inputRelation} WHERE $2::text IS NOT NULL),
-       touched AS (
-         UPDATE contact_identifiers identifier
-         SET last_observed_at = now(), updated_at = now()
-         FROM input
-         WHERE identifier.session_id = $1 AND identifier.identity_type = input.identity_type
-           AND identifier.identity_value = input.identity_value
-         RETURNING identifier.contact_id
-       )
-       INSERT INTO contact_identifiers
-         (session_id, contact_id, identity_type, identity_value, mapping_source)
-       SELECT DISTINCT $1, identifier.contact_id, 'PHONE', input.phone, 'GROUP_PARTICIPANT'
-       FROM input
-       JOIN contact_identifiers identifier
-         ON identifier.session_id = $1 AND identifier.identity_type = input.identity_type
-        AND identifier.identity_value = input.identity_value
-       WHERE input.identity_type = 'PHONE_JID' AND input.phone IS NOT NULL
-       ON CONFLICT (session_id, identity_type, identity_value) DO UPDATE SET
-         last_observed_at = now(), updated_at = now()`,
-      values,
-    );
-
-    await client.query(
-      `WITH input AS MATERIALIZED (SELECT * FROM ${inputRelation}),
-       resolved AS MATERIALIZED (
-         SELECT input.*, identifier.contact_id, contact.effective_display_name,
-           contact.display_name_source AS contact_name_source,
-           evidence_identity.id AS evidence_identity_id
-         FROM input
-         JOIN contact_identifiers identifier
-           ON identifier.session_id = $1 AND identifier.identity_type = input.identity_type
-          AND identifier.identity_value = input.identity_value
-         JOIN contacts contact ON contact.session_id = $1 AND contact.id = identifier.contact_id
-         LEFT JOIN observed_contact_identities evidence_identity
-           ON evidence_identity.session_id = $1
-          AND evidence_identity.identity_type = input.identity_type
-          AND evidence_identity.identity_value = input.identity_value
-       )
-       UPDATE group_members member
-       SET contact_id = resolved.contact_id,
-           evidence_identity_id = resolved.evidence_identity_id,
-           identity_type = resolved.identity_type,
-           resolved_phone_number = CASE WHEN resolved.identity_type = 'PHONE_JID'
-             THEN resolved.phone ELSE NULL END,
-           participant_display_name = resolved.participant_name,
-           display_name = CASE WHEN $4::boolean
-             THEN ${resolvedMemberProjection.name} ELSE member.display_name END,
-           display_name_source = CASE WHEN $4::boolean
-             THEN ${resolvedMemberProjection.source} ELSE member.display_name_source END,
-           display_name_updated_at = CASE WHEN NOT $4::boolean THEN member.display_name_updated_at
-             WHEN ${resolvedMemberProjection.name} IS NULL THEN NULL ELSE now() END,
-           updated_at = now()
-       FROM resolved
-       WHERE member.session_id = $1 AND member.group_id = $2
-         AND member.participant_id = resolved.participant_id
-         AND (member.contact_id, member.evidence_identity_id, member.identity_type,
-              member.resolved_phone_number, member.participant_display_name,
-              member.display_name, member.display_name_source)
-           IS DISTINCT FROM
-           (resolved.contact_id, resolved.evidence_identity_id, resolved.identity_type,
-            CASE WHEN resolved.identity_type = 'PHONE_JID' THEN resolved.phone ELSE NULL END,
-            resolved.participant_name,
-            CASE WHEN $4::boolean THEN ${resolvedMemberProjection.name} ELSE member.display_name END,
-            CASE WHEN $4::boolean THEN ${resolvedMemberProjection.source}
-              ELSE member.display_name_source END)`,
-      [...values, this.legacyMemberFanoutEnabled],
-    );
+    return this.observations.seedGroupMembers(client, sessionId, groupId, participants);
   }
 }
