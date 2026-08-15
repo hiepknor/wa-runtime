@@ -7,6 +7,7 @@ import { RequestContextMiddleware } from '../core/observability/request-context.
 import { OpenWAModule } from '../integrations/openwa/openwa.module';
 import { CampaignsModule } from '../modules/campaigns/campaigns.module';
 import { GatewayModule } from '../modules/gateway/gateway.module';
+import { GroupListsModule } from '../modules/group-lists/group-lists.module';
 import { HealthModule } from '../modules/health/health.module';
 import { InboxModule } from '../modules/inbox/inbox.module';
 import { MessagesModule } from '../modules/messages/messages.module';
@@ -18,6 +19,7 @@ import { WebhooksModule } from '../modules/webhooks/webhooks.module';
     QueueModule,
     OpenWAModule,
     GatewayModule,
+    GroupListsModule,
     CampaignsModule,
     HealthModule,
     InboxModule,
