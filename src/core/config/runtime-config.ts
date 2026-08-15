@@ -56,6 +56,7 @@ const schema = z
     CONTACT_SNAPSHOT_SYNC_ENABLED: booleanFromEnv(false),
     CONTACT_SNAPSHOT_STAGING_ENABLED: booleanFromEnv(false),
     CONTACT_SNAPSHOT_RETENTION_DAYS: z.coerce.number().int().min(7).max(365).default(30),
+    CONTACT_MESSAGE_OBSERVATION_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(30),
     CONTACT_EVIDENCE_DUAL_WRITE_ENABLED: booleanFromEnv(false),
     CONTACT_RESOLUTION_SHADOW_ENABLED: booleanFromEnv(false),
     CONTACT_RESOLUTION_MAX_RUNS_PER_TICK: z.coerce.number().int().min(1).max(20).default(2),

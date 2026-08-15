@@ -88,6 +88,7 @@ describe('data retention', () => {
 
     expect(result).toEqual({
       campaignRuns: 1, messageJobs: 1, runtimeEvents: 1, webhookEvents: 1, syncRuns: 1,
+      contactObservations: 0,
       batches: 1, capacityExhausted: false,
     });
     await expectCount('message_jobs', 1);
@@ -161,6 +162,44 @@ describe('data retention', () => {
 
     expect(result).toMatchObject({ runtimeEvents: 200, batches: 2, capacityExhausted: true });
     await expectCount('runtime_events', 50);
+  });
+
+  it('compacts old push-name history only after derived contact work is idle', async () => {
+    const old = new Date(Date.now() - 40 * 86_400_000);
+    const identity = await pool.query<{ id: string }>(
+      `INSERT INTO observed_contact_identities (session_id, identity_type, identity_value)
+       VALUES ($1, 'LID', 'retention-probe@lid') RETURNING id`,
+      [INTEGRATION_SESSION_ID],
+    );
+    await pool.query(
+      `INSERT INTO contact_observations
+         (session_id, identity_id, observation_source, observation_scope, name_value,
+          source_observed_at, source_observation_key, created_at)
+       VALUES ($1, $2, 'OPENWA_PUSH_NAME', 'IDENTITY', 'Older name', $3, 'old-name', $3),
+              ($1, $2, 'OPENWA_PUSH_NAME', 'IDENTITY', 'Current name', now(), 'new-name', now())`,
+      [INTEGRATION_SESSION_ID, identity.rows[0]!.id, old],
+    );
+    await pool.query(
+      `INSERT INTO contact_projection_work (session_id, identity_id, status)
+       VALUES ($1, $2, 'PENDING')`,
+      [INTEGRATION_SESSION_ID, identity.rows[0]!.id],
+    );
+
+    const guarded = await new DataRetentionTick(database).cleanup();
+    expect(guarded.contactObservations).toBe(0);
+    await pool.query(
+      `UPDATE contact_projection_work SET status = 'IDLE' WHERE session_id = $1 AND identity_id = $2`,
+      [INTEGRATION_SESSION_ID, identity.rows[0]!.id],
+    );
+
+    const compacted = await new DataRetentionTick(database).cleanup();
+    expect(compacted.contactObservations).toBe(1);
+    const retained = await pool.query<{ name_value: string }>(
+      `SELECT name_value FROM contact_observations
+       WHERE session_id = $1 AND identity_id = $2`,
+      [INTEGRATION_SESSION_ID, identity.rows[0]!.id],
+    );
+    expect(retained.rows).toEqual([{ name_value: 'Current name' }]);
   });
 
   async function expectCount(table: string, expected: number): Promise<void> {

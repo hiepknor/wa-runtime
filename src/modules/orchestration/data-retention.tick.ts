@@ -9,6 +9,7 @@ export interface RetentionResult {
   runtimeEvents: number;
   webhookEvents: number;
   syncRuns: number;
+  contactObservations: number;
   batches: number;
   capacityExhausted: boolean;
 }
@@ -31,7 +32,7 @@ export class DataRetentionTick {
     const started = performance.now();
     const result = await this.cleanup();
     const deleted = result.campaignRuns + result.messageJobs + result.runtimeEvents
-      + result.webhookEvents + result.syncRuns;
+      + result.webhookEvents + result.syncRuns + result.contactObservations;
     this.logger.log({
       event: 'data.retention.completed', deleted, durationMs: Math.round(performance.now() - started), ...result,
     });
@@ -42,11 +43,15 @@ export class DataRetentionTick {
     const operationalCutoff = new Date(now.valueOf() - this.config.RUNTIME_RETENTION_DAYS * 86_400_000);
     const eventCutoff = new Date(now.valueOf() - this.config.RUNTIME_EVENT_RETENTION_DAYS * 86_400_000);
     const webhookCutoff = new Date(now.valueOf() - this.config.RUNTIME_RAW_WEBHOOK_RETENTION_DAYS * 86_400_000);
+    const contactObservationCutoff = new Date(
+      now.valueOf() - this.config.CONTACT_MESSAGE_OBSERVATION_RETENTION_DAYS * 86_400_000,
+    );
     const limit = options.batchSize ?? this.config.RUNTIME_RETENTION_BATCH_SIZE;
     const maxBatches = options.maxBatches ?? this.config.RUNTIME_RETENTION_MAX_BATCHES_PER_RUN;
     const deadline = performance.now() + (options.timeBudgetMs ?? this.config.RUNTIME_RETENTION_TIME_BUDGET_MS);
     const total: RetentionResult = {
       campaignRuns: 0, messageJobs: 0, runtimeEvents: 0, webhookEvents: 0, syncRuns: 0,
+      contactObservations: 0,
       batches: 0, capacityExhausted: false,
     };
     let drained = false;
@@ -62,6 +67,11 @@ export class DataRetentionTick {
         runtimeEvents: await this.deleteRuntimeEvents(client, eventCutoff, limit),
         webhookEvents: await this.deleteWebhookEvents(client, webhookCutoff, limit),
         syncRuns: await this.deleteSyncRuns(client, operationalCutoff, limit),
+        contactObservations: await this.deleteRedundantContactObservations(
+          client,
+          contactObservationCutoff,
+          limit,
+        ),
       }));
       total.batches += 1;
       total.campaignRuns += current.campaignRuns;
@@ -69,6 +79,7 @@ export class DataRetentionTick {
       total.runtimeEvents += current.runtimeEvents;
       total.webhookEvents += current.webhookEvents;
       total.syncRuns += current.syncRuns;
+      total.contactObservations += current.contactObservations;
       if (Object.values(current).every(count => count < limit)) {
         drained = true;
         break;
@@ -139,6 +150,51 @@ export class DataRetentionTick {
          ORDER BY completed_at, id LIMIT $2 FOR UPDATE SKIP LOCKED
        )
        DELETE FROM sync_runs sr USING candidates c WHERE sr.id = c.id`,
+      [cutoff, limit],
+    ));
+  }
+
+  private async deleteRedundantContactObservations(
+    client: PoolClient,
+    cutoff: Date,
+    limit: number,
+  ): Promise<number> {
+    return this.count(await client.query(
+      `WITH candidates AS (
+         SELECT observation.session_id, observation.id
+         FROM contact_observations observation
+         WHERE observation.source_generation IS NULL
+           AND observation.observation_source = 'OPENWA_PUSH_NAME'
+           AND observation.created_at < $1
+           AND EXISTS (
+             SELECT 1 FROM contact_observations newer
+             WHERE newer.session_id = observation.session_id
+               AND newer.identity_id = observation.identity_id
+               AND newer.observation_source = observation.observation_source
+               AND newer.source_generation IS NULL
+               AND (newer.source_observed_at, newer.source_observation_key, newer.id)
+                 > (observation.source_observed_at, observation.source_observation_key, observation.id)
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM contact_resolution_runs resolution
+             WHERE resolution.session_id = observation.session_id
+               AND resolution.status IN ('PENDING', 'RUNNING', 'RETRY')
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM contact_projection_work work
+             WHERE work.session_id = observation.session_id
+               AND work.status IN ('PENDING', 'RUNNING', 'RETRY')
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM resolved_contact_clusters cluster
+             WHERE cluster.session_id = observation.session_id
+               AND cluster.contact_name_observation_id = observation.id
+           )
+         ORDER BY observation.created_at, observation.id
+         LIMIT $2 FOR UPDATE OF observation SKIP LOCKED
+       )
+       DELETE FROM contact_observations observation USING candidates
+       WHERE observation.session_id = candidates.session_id AND observation.id = candidates.id`,
       [cutoff, limit],
     ));
   }
