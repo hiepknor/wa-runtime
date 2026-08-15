@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../../core/database/database.service';
-import { SessionStateCacheService } from '../gateway/session-state-cache.service';
 import { GatewayGroupIntentRepository } from '../gateway/gateway-group-intent.repository';
 import type { RuntimeEvent } from './webhook-normalizer';
 import { runtimeConfig } from '../../core/config/runtime-config';
@@ -11,12 +10,10 @@ export class RuntimeEventRepository {
   private readonly config = runtimeConfig();
   constructor(
     private readonly database: DatabaseService,
-    private readonly sessionStates: SessionStateCacheService,
     private readonly groupIntents: GatewayGroupIntentRepository,
   ) {}
 
   async store(event: RuntimeEvent): Promise<void> {
-    let invalidateSessionCache = false;
     await this.database.transaction(async client => {
       const inserted = await client.query(
         `INSERT INTO runtime_events
@@ -48,24 +45,22 @@ export class RuntimeEventRepository {
       }
 
       if (event.eventType === 'session.status.changed') {
-        const updated = await client.query(
+        await client.query(
           `UPDATE gateway_sessions SET status = $2, status_observed_at = $3,
              gateway_updated_at = GREATEST(gateway_updated_at, $3), synced_at = now(), updated_at = now()
            WHERE id = $1 AND status_observed_at < $3`,
           [event.sessionId, event.payload.status, event.occurredAt],
         );
-        invalidateSessionCache = updated.rowCount === 1;
       }
 
       if (event.eventType === 'session.restriction.changed') {
         const restriction = event.payload.active === true ? event.payload : null;
-        const updated = await client.query(
+        await client.query(
           `UPDATE gateway_sessions SET restriction = $2::jsonb, restriction_observed_at = $3,
              gateway_updated_at = GREATEST(gateway_updated_at, $3), synced_at = now(), updated_at = now()
            WHERE id = $1 AND restriction_observed_at < $3`,
           [event.sessionId, restriction === null ? null : JSON.stringify(restriction), event.occurredAt],
         );
-        invalidateSessionCache = updated.rowCount === 1;
       }
 
 
@@ -98,6 +93,5 @@ export class RuntimeEventRepository {
         }
       }
     });
-    if (invalidateSessionCache) await this.sessionStates.invalidate(event.sessionId);
   }
 }

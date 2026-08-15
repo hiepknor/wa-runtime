@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
 import { DatabaseService } from '../../src/core/database/database.service';
-import type { SessionStateCacheService } from '../../src/modules/gateway/session-state-cache.service';
 import type { MessageJobRepository } from '../../src/modules/messages/message-job.repository';
 import { RuntimeEventRepository } from '../../src/modules/webhooks/runtime-event.repository';
 import { GatewayGroupIntentRepository } from '../../src/modules/gateway/gateway-group-intent.repository';
@@ -44,7 +43,6 @@ describe('durable webhook processing', () => {
     };
     const runtimeEvents = new RuntimeEventRepository(
       database,
-      { invalidate: vi.fn() } as unknown as SessionStateCacheService,
       new GatewayGroupIntentRepository(database),
     );
     const processor = new WebhookProcessorService(
@@ -101,7 +99,6 @@ describe('durable webhook processing', () => {
     };
     const runtimeEvents = new RuntimeEventRepository(
       database,
-      { invalidate: vi.fn() } as unknown as SessionStateCacheService,
       new GatewayGroupIntentRepository(database),
     );
     const processor = new WebhookProcessorService(
@@ -191,10 +188,8 @@ describe('durable webhook processing', () => {
 
   it('keeps newer session status and restriction observations when events arrive out of order', async () => {
     await seedSendableGroup(pool);
-    const invalidate = vi.fn();
     const runtimeEvents = new RuntimeEventRepository(
       database,
-      { invalidate } as unknown as SessionStateCacheService,
       new GatewayGroupIntentRepository(database),
     );
     const newer = new Date('2026-08-12T00:00:00.000Z');
@@ -244,15 +239,12 @@ describe('durable webhook processing', () => {
       status_observed_at: newer,
       restriction_observed_at: newer,
     });
-    expect(invalidate).toHaveBeenCalledTimes(2);
   });
 
   it('uses first-observation ownership for distinct session events with equal timestamps', async () => {
     await seedSendableGroup(pool);
-    const invalidate = vi.fn();
     const runtimeEvents = new RuntimeEventRepository(
       database,
-      { invalidate } as unknown as SessionStateCacheService,
       new GatewayGroupIntentRepository(database),
     );
     const occurredAt = new Date('2026-08-12T00:00:00.000Z');
@@ -272,7 +264,6 @@ describe('durable webhook processing', () => {
       'SELECT status, status_observed_at FROM gateway_sessions WHERE id = $1', [INTEGRATION_SESSION_ID],
     );
     expect(state.rows[0]).toEqual({ status: 'ready', status_observed_at: occurredAt });
-    expect(invalidate).toHaveBeenCalledTimes(1);
   });
 
   it('coalesces duplicate and burst group events into one targeted intent', async () => {
@@ -280,7 +271,6 @@ describe('durable webhook processing', () => {
     const intents = new GatewayGroupIntentRepository(database);
     const runtimeEvents = new RuntimeEventRepository(
       database,
-      { invalidate: vi.fn() } as unknown as SessionStateCacheService,
       intents,
     );
     const processor = new WebhookProcessorService(
@@ -341,7 +331,6 @@ describe('durable webhook processing', () => {
     const intents = new GatewayGroupIntentRepository(database);
     const runtimeEvents = new RuntimeEventRepository(
       database,
-      { invalidate: vi.fn() } as unknown as SessionStateCacheService,
       intents,
     );
     await runtimeEvents.store({
@@ -394,7 +383,6 @@ describe('durable webhook processing', () => {
     const intents = new GatewayGroupIntentRepository(database);
     const runtimeEvents = new RuntimeEventRepository(
       database,
-      { invalidate: vi.fn() } as unknown as SessionStateCacheService,
       intents,
     );
     await runtimeEvents.store({

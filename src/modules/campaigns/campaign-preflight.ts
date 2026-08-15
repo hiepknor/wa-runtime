@@ -6,13 +6,18 @@ import {
   type CampaignPreflightDto,
 } from '../../contracts/campaigns/campaign-preflight.dto';
 import type { CampaignTargetDto } from '../../contracts/campaigns/campaign-target.dto';
-import type { CachedSessionState } from '../gateway/session-state-cache.service';
+
+export interface CampaignPreflightSessionState {
+  status: string;
+  engineLoaded: boolean;
+  restricted: boolean;
+}
 
 export function evaluateCampaignPreflight(input: {
   executionMode: CampaignExecutionMode;
   text: string;
   targets: CampaignTargetDto[];
-  session: CachedSessionState;
+  session: CampaignPreflightSessionState;
   liveSendsEnabled: boolean;
   campaignRevision: number;
   targetsRevision: number;
