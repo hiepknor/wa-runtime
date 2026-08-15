@@ -9,6 +9,15 @@ export interface RetentionResult {
   runtimeEvents: number;
   webhookEvents: number;
   syncRuns: number;
+  batches: number;
+  capacityExhausted: boolean;
+}
+
+interface RetentionOptions {
+  batchSize?: number;
+  maxBatches?: number;
+  timeBudgetMs?: number;
+  now?: Date;
 }
 
 @Injectable()
@@ -19,21 +28,54 @@ export class DataRetentionTick {
   constructor(private readonly database: DatabaseService) {}
 
   async run(): Promise<void> {
+    const started = performance.now();
     const result = await this.cleanup();
-    const deleted = Object.values(result).reduce((total, count) => total + count, 0);
-    if (deleted > 0) this.logger.log({ event: 'data.retention.completed', deleted, ...result });
+    const deleted = result.campaignRuns + result.messageJobs + result.runtimeEvents
+      + result.webhookEvents + result.syncRuns;
+    this.logger.log({
+      event: 'data.retention.completed', deleted, durationMs: Math.round(performance.now() - started), ...result,
+    });
   }
 
-  async cleanup(): Promise<RetentionResult> {
-    const cutoff = new Date(Date.now() - this.config.RUNTIME_RETENTION_DAYS * 86_400_000);
-    const limit = this.config.RUNTIME_RETENTION_BATCH_SIZE;
-    return this.database.transaction(async client => ({
-      campaignRuns: await this.deleteCampaignRuns(client, cutoff, limit),
-      messageJobs: await this.deleteMessageJobs(client, cutoff, limit),
-      runtimeEvents: await this.deleteRuntimeEvents(client, cutoff, limit),
-      webhookEvents: await this.deleteWebhookEvents(client, cutoff, limit),
-      syncRuns: await this.deleteSyncRuns(client, cutoff, limit),
-    }));
+  async cleanup(options: RetentionOptions = {}): Promise<RetentionResult> {
+    const now = options.now ?? new Date();
+    const operationalCutoff = new Date(now.valueOf() - this.config.RUNTIME_RETENTION_DAYS * 86_400_000);
+    const eventCutoff = new Date(now.valueOf() - this.config.RUNTIME_EVENT_RETENTION_DAYS * 86_400_000);
+    const webhookCutoff = new Date(now.valueOf() - this.config.RUNTIME_RAW_WEBHOOK_RETENTION_DAYS * 86_400_000);
+    const limit = options.batchSize ?? this.config.RUNTIME_RETENTION_BATCH_SIZE;
+    const maxBatches = options.maxBatches ?? this.config.RUNTIME_RETENTION_MAX_BATCHES_PER_RUN;
+    const deadline = performance.now() + (options.timeBudgetMs ?? this.config.RUNTIME_RETENTION_TIME_BUDGET_MS);
+    const total: RetentionResult = {
+      campaignRuns: 0, messageJobs: 0, runtimeEvents: 0, webhookEvents: 0, syncRuns: 0,
+      batches: 0, capacityExhausted: false,
+    };
+    let drained = false;
+
+    for (let batch = 0; batch < maxBatches; batch += 1) {
+      if (performance.now() >= deadline) {
+        total.capacityExhausted = true;
+        break;
+      }
+      const current = await this.database.transaction(async client => ({
+        campaignRuns: await this.deleteCampaignRuns(client, operationalCutoff, limit),
+        messageJobs: await this.deleteMessageJobs(client, operationalCutoff, limit),
+        runtimeEvents: await this.deleteRuntimeEvents(client, eventCutoff, limit),
+        webhookEvents: await this.deleteWebhookEvents(client, webhookCutoff, limit),
+        syncRuns: await this.deleteSyncRuns(client, operationalCutoff, limit),
+      }));
+      total.batches += 1;
+      total.campaignRuns += current.campaignRuns;
+      total.messageJobs += current.messageJobs;
+      total.runtimeEvents += current.runtimeEvents;
+      total.webhookEvents += current.webhookEvents;
+      total.syncRuns += current.syncRuns;
+      if (Object.values(current).every(count => count < limit)) {
+        drained = true;
+        break;
+      }
+    }
+    if (!drained && total.batches === maxBatches) total.capacityExhausted = true;
+    return total;
   }
 
   private async deleteCampaignRuns(client: PoolClient, cutoff: Date, limit: number): Promise<number> {

@@ -28,7 +28,12 @@ An operator must resolve that ambiguity or create a new intent.
 The implementation serializes outbound work with a token-owned PostgreSQL lease per session. A
 waiting worker refreshes its message processing lease, and only the current session-lease owner may
 start the OpenWA request or release the lease. Lease loss cannot make an unproven OpenWA result safe
-to retry, so post-request transport failures still become `UNKNOWN`.
+to retry. After the outbound POST starts, HTTP 408, HTTP 5xx, transport failures and invalid success
+responses become `UNKNOWN`; only explicit non-timeout HTTP 4xx responses prove rejection.
+
+Session status and restriction projections are independently event-time fenced. A strictly older or
+equal-time distinct event cannot overwrite the accepted observation, and a session snapshot follows
+the same field-level ownership rule.
 
 ## Retry and ownership
 
@@ -96,5 +101,7 @@ check immediately before calling OpenWA.
 Message idempotency is scoped. The Runtime stores a canonical request hash with each key. Repeating
 the same scope, key and request returns the existing job; reusing the key for a different request is
 a conflict. Campaign message jobs use a run-specific scope so client keys cannot collide with
-campaign delivery keys. Terminal records are removed by configured retention, so idempotency is
-guaranteed only while the original record remains within that retention window.
+campaign delivery keys. Terminal records are removed by configured operational retention, so
+idempotency is guaranteed only while the original record remains within that retention window. Raw
+webhook envelopes and normalized events use shorter, independent lifetimes and multi-batch bounded
+draining as defined by [ADR 012](adr/012-event-ownership-and-bounded-storage.md).

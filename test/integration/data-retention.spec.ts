@@ -86,13 +86,81 @@ describe('data retention', () => {
 
     const result = await new DataRetentionTick(database).cleanup();
 
-    expect(result).toEqual({ campaignRuns: 1, messageJobs: 1, runtimeEvents: 1, webhookEvents: 1, syncRuns: 1 });
+    expect(result).toEqual({
+      campaignRuns: 1, messageJobs: 1, runtimeEvents: 1, webhookEvents: 1, syncRuns: 1,
+      batches: 1, capacityExhausted: false,
+    });
     await expectCount('message_jobs', 1);
     await expectCount('runtime_events', 1);
     await expectCount('inbound_messages', 0);
     await expectCount('webhook_events', 1);
     await expectCount('sync_runs', 1);
     await expectCount('campaign_runs', 1);
+  });
+
+  it('drains more than one delete batch without one long transaction', async () => {
+    const old = new Date(Date.now() - 100 * 86_400_000);
+    await pool.query(
+      `INSERT INTO runtime_events
+         (event_id, source_event_type, event_type, session_id, occurred_at, payload, created_at)
+       SELECT 'old-batch-' || value, 'message', 'message.received', $1, $2, '{}', $2
+       FROM generate_series(1, 250) value`,
+      [INTEGRATION_SESSION_ID, old],
+    );
+
+    const result = await new DataRetentionTick(database).cleanup({ batchSize: 100, maxBatches: 10 });
+
+    expect(result).toMatchObject({ runtimeEvents: 250, batches: 3, capacityExhausted: false });
+    await expectCount('runtime_events', 0);
+  });
+
+  it('uses shorter raw-webhook and normalized-event lifetimes than operational history', async () => {
+    const tenDaysOld = new Date(Date.now() - 10 * 86_400_000);
+    const fortyDaysOld = new Date(Date.now() - 40 * 86_400_000);
+    await pool.query(
+      `INSERT INTO runtime_events
+         (event_id, source_event_type, event_type, session_id, occurred_at, payload, created_at)
+       VALUES ('ten-day-event','message','message.received',$1,$2,'{}',$2),
+              ('forty-day-event','message','message.received',$1,$3,'{}',$3)`,
+      [INTEGRATION_SESSION_ID, tenDaysOld, fortyDaysOld],
+    );
+    await pool.query(
+      `INSERT INTO webhook_events
+         (idempotency_key, event_type, payload, processing_state, processed_at, received_at)
+       VALUES ('ten-day-webhook','message','{}','PROCESSED',$1,$1)`,
+      [tenDaysOld],
+    );
+    await pool.query(
+      `INSERT INTO message_jobs
+         (idempotency_scope, idempotency_key, request_hash, session_id, recipient_id, payload,
+          scheduled_at, status, dry_run, updated_at)
+       VALUES ('runtime-api','forty-day-job',$1,$2,$3,'{"text":"old"}',now(),'FAILED',false,$4)`,
+      ['a'.repeat(64), INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, fortyDaysOld],
+    );
+
+    const result = await new DataRetentionTick(database).cleanup();
+
+    expect(result).toMatchObject({ webhookEvents: 1, runtimeEvents: 1, messageJobs: 0 });
+    expect((await pool.query('SELECT event_id FROM runtime_events')).rows).toEqual([
+      { event_id: 'ten-day-event' },
+    ]);
+    await expectCount('message_jobs', 1);
+  });
+
+  it('reports remaining capacity pressure when the configured batch cap is reached', async () => {
+    const old = new Date(Date.now() - 100 * 86_400_000);
+    await pool.query(
+      `INSERT INTO runtime_events
+         (event_id, source_event_type, event_type, session_id, occurred_at, payload, created_at)
+       SELECT 'capped-batch-' || value, 'message', 'message.received', $1, $2, '{}', $2
+       FROM generate_series(1, 250) value`,
+      [INTEGRATION_SESSION_ID, old],
+    );
+
+    const result = await new DataRetentionTick(database).cleanup({ batchSize: 100, maxBatches: 2 });
+
+    expect(result).toMatchObject({ runtimeEvents: 200, batches: 2, capacityExhausted: true });
+    await expectCount('runtime_events', 50);
   });
 
   async function expectCount(table: string, expected: number): Promise<void> {

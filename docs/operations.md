@@ -127,11 +127,19 @@ for [ADR 001](adr/001-postgresql-owned-durable-work-execution.md) passes. For a
 sessions and non-send queues but does not increase that session's send rate. Keep the maximum at or
 below 60 seconds so the session and message processing leases remain bounded.
 
-Terminal rows are retained for `RUNTIME_RETENTION_DAYS` (90 by default). The scheduler runs cleanup
-every `RUNTIME_RETENTION_INTERVAL_MS` and deletes at most `RUNTIME_RETENTION_BATCH_SIZE` rows from
-each data family per pass. Seven days is the enforced minimum. Choose the period from audit,
-incident-response and storage requirements; it is also the effective historical idempotency window.
-Backups remain governed by their own retention policy and are not deleted by this job.
+Terminal operational rows are retained for `RUNTIME_RETENTION_DAYS` (90 days by default), normalized
+events and their projections for `RUNTIME_EVENT_RETENTION_DAYS` (30 days), and raw webhook envelopes
+for `RUNTIME_RAW_WEBHOOK_RETENTION_DAYS` (7 days). Operational retention is the effective historical
+idempotency window. Backups remain governed by their own retention policy.
+
+The scheduler runs cleanup every `RUNTIME_RETENTION_INTERVAL_MS`. Each transaction deletes at most
+`RUNTIME_RETENTION_BATCH_SIZE` rows per family, then the tick repeats until all families drain below
+one batch, `RUNTIME_RETENTION_MAX_BATCHES_PER_RUN` is reached, or
+`RUNTIME_RETENTION_TIME_BUDGET_MS` expires. Keep the time budget below the five-minute scheduler tick
+timeout. Page on `capacityExhausted` in two consecutive completion logs: configured cleanup capacity
+may not be keeping up with ingest. Monitor inserted/deleted rows and disk utilization; use 70/80/90
+percent as warning/escalation/critical thresholds. The partitioning trigger and Contacts evidence
+exception are defined in [ADR 012](adr/012-event-ownership-and-bounded-storage.md).
 
 ## Backup and restore
 
