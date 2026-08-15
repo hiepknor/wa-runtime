@@ -45,6 +45,7 @@ These creation endpoints require an `Idempotency-Key` header:
 
 - `POST /message-jobs`;
 - `POST /campaigns`;
+- `POST /group-lists`;
 - `POST /campaigns/{id}/runs`.
 
 Keys describe one operator intent and should be stable across HTTP retry, timeout and client
@@ -55,6 +56,9 @@ recipient, schedule or execution mode also returns HTTP 409.
 Campaign-create keys are UUIDs, are bound to the canonical trimmed payload and schedule, and return
 the original draft with HTTP 200 on an exact replay. Reusing a key for another payload returns HTTP
 409 `CAMPAIGN_IDEMPOTENCY_CONFLICT`.
+Group-list-create keys are UUIDs bound to the canonical session, trimmed metadata and sorted initial
+membership. Exact replay returns the original list with HTTP 200; another payload returns HTTP 409
+`GROUP_LIST_IDEMPOTENCY_CONFLICT`.
 
 ## Endpoint groups
 
@@ -115,6 +119,41 @@ Studio client in the release has regenerated its Runtime client, reads members e
 `GET /groups/{id}/members`, and passes pagination/search integration tests. The release record must
 link the corresponding WA Studio change. If those conditions cannot be met, hold this Runtime
 release and use an API v2 or a time-bounded compatibility contract instead.
+
+### Saved group lists
+
+```text
+GET    /group-lists?sessionId={sessionId}&query={search}&limit=50&offset=0
+POST   /group-lists
+GET    /group-lists/{id}
+PATCH  /group-lists/{id}
+DELETE /group-lists/{id}
+GET    /group-lists/{id}/groups
+PUT    /group-lists/{id}/groups
+```
+
+Saved group lists are session-scoped, static selections of at most 1,000 unique synchronized group
+IDs. They are operator-owned resources, not fields on the OpenWA-derived group read model. Search is
+a trimmed, case-insensitive literal substring match on list name and description with escaped SQL
+wildcards. Active results use `updatedAt DESC, id ASC`; predicates run before pagination and
+`meta.total` counts the filtered active dataset.
+
+Create accepts optional initial membership and is atomic and idempotent. Complete membership reads
+are intentionally bounded rather than paginated so a client can stage one unambiguous snapshot.
+Replacement validates the whole set before writing, rejects duplicate, missing and cross-session
+IDs, and increments `revision` only when membership changes. Current group name, active state,
+participant count and send capability are returned for presentation; inactive, denied and unknown
+groups remain valid members.
+
+`DELETE` soft-archives a list. Archive and later list edits never alter campaign targets. Applying a
+list to a campaign is a client authoring operation that copies IDs into the staged selection; the
+existing campaign target replacement remains the only campaign persistence operation. Runtime does
+not persist campaign-to-list provenance or live binding in v1.
+
+Saved-list validation uses stable `GROUP_LIST_*` codes, including `GROUP_LIST_SESSION_INVALID`,
+`GROUP_LIST_NAME_INVALID`, `GROUP_LIST_QUERY_INVALID`, `GROUP_LIST_GROUP_INVALID`, duplicate/limit,
+missing-group, session-mismatch, name-conflict and idempotency errors. Clients must not parse the
+human-readable message or expect invalid group IDs to be echoed in error details.
 
 ### Campaign definitions
 

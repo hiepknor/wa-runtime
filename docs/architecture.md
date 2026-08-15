@@ -63,6 +63,7 @@ PostgreSQL is the source of truth. It stores:
 - gateway sessions, groups, members and inbound group messages;
 - sync runs and group capabilities;
 - campaigns, target selections, immutable run snapshots and per-group deliveries.
+- session-scoped saved group lists and their static memberships.
 
 Group browsing is served directly from `gateway_groups`. Optional literal substring search across
 name, ID and description uses PostgreSQL trigram indexes; capability, freshness and active filters
@@ -70,6 +71,12 @@ and inclusive participant-count bounds are applied in the same database predicat
 page and count queries. Unknown participant counts are excluded only when a count bound is present.
 Capability freshness is authoritative when `capability_invalidated_at` is null (current) or non-null
 (stale). Group members are not joined into list queries.
+
+Saved group lists are user-managed aggregates stored separately from `gateway_groups`. Composite
+foreign keys bind every membership to the list session and durable group identity. List metadata and
+membership writes do not call OpenWA, enqueue work or mutate campaign targets. A complete membership
+is bounded at 1,000 groups; clients copy those IDs into a staged campaign target snapshot and persist
+that snapshot through the existing campaign API.
 
 Business state is committed before queue work is published. If Redis is unavailable after a commit,
 the scheduler retries publication from the durable row. Webhooks, message jobs and sync runs use
@@ -123,7 +130,7 @@ src/
   contracts/             public request/response DTOs
   core/                  auth, config, database, queue, observability and OpenAPI setup
   integrations/openwa/   upstream anti-corruption adapter
-  modules/               campaigns, gateway, health, inbox, messages, webhooks and orchestration
+  modules/               campaigns, gateway, group-lists, health, inbox, messages, webhooks and orchestration
 ```
 
 Dependencies flow inward from entrypoints and the composition root:
@@ -135,7 +142,7 @@ entrypoints -> app.module -> modules -> core / integrations
 
 `core` never imports a feature module. OpenWA integration never imports client-facing DTOs or
 feature controllers. Feature-to-feature dependencies use exported Nest providers; currently
-Campaigns and Webhooks depend on Gateway, while Campaigns also depends on Messages. Public DTOs stay
+Campaigns, Group Lists and Webhooks depend on Gateway, while Campaigns also depends on Messages. Public DTOs stay
 centralized so all supported clients generate from one contract rather than module-internal types.
 
 Every process writes JSON logs. The API creates or preserves a bounded `X-Request-ID`; BullMQ
