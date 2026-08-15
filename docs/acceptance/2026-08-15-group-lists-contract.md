@@ -1,6 +1,6 @@
 # Saved Group Lists contract handoff
 
-- Status: `RUNTIME_RELEASE_A_STAGING_PASS / STUDIO_READY / COORDINATED_STAGING_PENDING`
+- Status: `COORDINATED_STAGING_PASS / OBSERVATION_PENDING / RELEASE_B_GATED`
 - Date: 2026-08-15
 - Runtime ADR: `f92edef`
 - Runtime implementation: `b762739`
@@ -81,12 +81,24 @@ WA Studio confirmed that its copied Runtime artifact is byte-identical with SHA-
 
 ## Coordinated release gate
 
-Runtime and Studio contract readiness is complete. Coordinated staging must verify create/edit/archive,
-multi-page selection, add/replace
-staged campaign targets, campaign and run snapshot independence after list rename/archive, allowlist
-isolation and expected run side effects.
+Runtime and Studio contract readiness is complete. Coordinated staging ran at
+`2026-08-15T15:07:26Z` with Studio commit
+`ba1038ad5d1a86e312f616debf05fa44f5257e4b` local and Runtime staging on
+`wa-runtime:48ad3a0`. The smoke covered idempotent create, search, archive, atomic membership
+replacement, multi-page selection over 574 groups, applying an exact membership revision, campaign
+and run snapshot independence after list rename/archive, allowlist isolation and a completed
+two-target DRY_RUN. There were no LIVE runs, real-send delivery states or lifecycle drift.
 
-Production remains blocked until the Studio commit and successful coordinated staging evidence are
-recorded. Release B's partial unique index remains blocked until Release A lifecycle observations stay
-clean. Migration 035 is additive and may remain applied if the application is rolled back to the prior
-Runtime revision.
+Studio displayed the retained campaign and its materialized saved-list provenance, preserved a
+selected target outside the current page, displayed the completed DRY_RUN and produced a fresh WARN
+preflight with consistent two-target counters. The local Studio quality gate passed again at the
+recorded commit, and the Studio worktree remained clean after verification.
+
+The smoke found that campaign preflight returns HTTP 201 although OpenAPI declares HTTP 200. Studio's
+2xx handling worked, but the implementation/contract mismatch must be resolved and the affected smoke
+repeated before production.
+
+Production remains blocked pending the HTTP-status follow-up and a clean lifecycle observation window.
+Release B's partial unique index remains blocked until Release A lifecycle observations stay clean.
+Migration 035 is additive and may remain applied if the application is rolled back to the prior Runtime
+revision.
