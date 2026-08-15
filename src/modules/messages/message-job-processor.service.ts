@@ -11,6 +11,12 @@ import { MessageJobNoLongerProcessingError, OutboundSessionLeaseService } from '
 
 const randomDelay = (min: number, max: number) => min + Math.floor(Math.random() * (max - min + 1));
 
+const isDefinitiveUpstreamRejection = (error: unknown): boolean =>
+  error instanceof OpenWAHttpError
+  && error.status >= 400
+  && error.status < 500
+  && error.status !== 408;
+
 @Injectable()
 export class MessageJobProcessorService {
   private readonly config = runtimeConfig();
@@ -63,7 +69,12 @@ export class MessageJobProcessorService {
       );
     } catch (error) {
       if (error instanceof MessageJobNoLongerProcessingError) return { skipped: true };
-      const status: MessageJobStatus = error instanceof OpenWAHttpError || !upstreamStarted ? 'FAILED' : 'UNKNOWN';
+      // Once the POST starts, only an explicit client-error response proves that OpenWA rejected
+      // the request. A timeout, malformed success response or 5xx may have happened after WhatsApp
+      // accepted the message, so retrying it would risk a duplicate send.
+      const status: MessageJobStatus = !upstreamStarted || isDefinitiveUpstreamRejection(error)
+        ? 'FAILED'
+        : 'UNKNOWN';
       const description = error instanceof Error ? error.message : String(error);
       await this.update(job.id, status, { error: description });
       if (error instanceof OpenWAHttpError && job.recipientId.endsWith('@g.us')) {

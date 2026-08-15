@@ -154,6 +154,8 @@ export default async function setup(): Promise<() => Promise<void>> {
           await new Promise(resolveDelay => setTimeout(resolveDelay, 5));
           if (body.text === 'simulate-403') return json(response, 403, { message: 'permission denied' });
           if (body.text === 'simulate-404') return json(response, 404, { message: 'group not found' });
+          if (body.text === 'simulate-500') return json(response, 500, { message: 'upstream failure' });
+          if (body.text === 'simulate-408') return json(response, 408, { message: 'request timed out' });
           if (body.text === 'simulate-network-drop') {
             request.socket.destroy();
             return;

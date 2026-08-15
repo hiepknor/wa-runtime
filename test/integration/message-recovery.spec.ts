@@ -158,4 +158,25 @@ describe('message durability and delivery', () => {
     );
     expect(attempts.rows).toEqual([{ outcome: 'UNKNOWN' }]);
   });
+
+  it.each([
+    ['an upstream 5xx', 'simulate-500'],
+    ['an upstream request timeout', 'simulate-408'],
+  ])('records UNKNOWN for %s after dispatch starts', async (_case, text) => {
+    const created = await create(`ambiguous-${text}`, text, false);
+    await messages.claimDue(10);
+    const gateway = new GatewayRepository(database, new ContactRepository(database));
+    const processor = new MessageJobProcessorService(
+      database, messages,
+      new MessageSendPolicyService(gateway, new SessionScopeService()),
+      new OpenWAClient(), gateway, outboundSessions,
+    );
+
+    await expect(processor.process({ messageJobId: created.job.id })).rejects.toBeInstanceOf(OpenWAHttpError);
+    expect(await messages.find(created.job.id)).toMatchObject({ status: 'UNKNOWN' });
+    const attempts = await pool.query<{ outcome: string }>(
+      'SELECT outcome FROM message_attempts WHERE message_job_id = $1', [created.job.id],
+    );
+    expect(attempts.rows).toEqual([{ outcome: 'UNKNOWN' }]);
+  });
 });
