@@ -1,5 +1,6 @@
 import {
-  Body, Controller, Get, Headers, HttpCode, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res, UseFilters,
+  Body, Controller, Get, Headers, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res,
+  UseFilters,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse, ApiConflictResponse, ApiCreatedResponse, ApiHeader, ApiNotFoundResponse,
@@ -106,6 +107,7 @@ export class CampaignController {
   }
 
   @Post(':id/preflight')
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Evaluate a campaign without creating a run' })
   @ApiOkResponse({ type: CampaignPreflightDto })
   preflight(

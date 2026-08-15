@@ -52,6 +52,9 @@ describe('campaign OpenAPI contract', () => {
     const apply = contract.paths['/api/v1/campaigns/{id}/targets/apply-group-list']?.post as Record<string, any>;
     expect(apply.responses).toHaveProperty('200');
     expect(apply.responses).not.toHaveProperty('201');
+    const preflight = contract.paths['/api/v1/campaigns/{id}/preflight']?.post as Record<string, any>;
+    expect(preflight.responses).toHaveProperty('200');
+    expect(preflight.responses).not.toHaveProperty('201');
     expect(contract.components.schemas.CampaignTargetSourceDto?.required).toEqual([
       'type', 'groupListId', 'groupListNameSnapshot', 'membershipRevision', 'appliedAt',
     ]);

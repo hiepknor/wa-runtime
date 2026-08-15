@@ -530,6 +530,8 @@ describe('campaign draft contract HTTP API', () => {
     const live = await jsonRequest(`/campaigns/${id}/preflight`, {
       method: 'POST', body: JSON.stringify({ executionMode: 'LIVE' }),
     });
+    expect(dryRun.response.status).toBe(200);
+    expect(live.response.status).toBe(200);
     expect(dryRun.body).toMatchObject({
       status: 'WARN', policyVersion: 2, executionMode: 'DRY_RUN', campaignRevision: 1,
       targetsRevision: 1, totalTargets: 3, allowedTargets: 1, deniedTargets: 1, unknownTargets: 1,
