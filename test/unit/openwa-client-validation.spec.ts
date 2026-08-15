@@ -10,7 +10,7 @@ vi.mock('../../src/core/config/runtime-config', () => ({
   runtimeConfig: () => ({
     OPENWA_BASE_URL: 'http://openwa.test',
     OPENWA_API_KEY: 'test-key',
-    OPENWA_RELEASE_TAG: '0.16.0',
+    OPENWA_RELEASE_TAG: '0.18.0',
   }),
 }));
 
@@ -29,6 +29,23 @@ describe('OpenWAClient response validation', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it('accepts only the reviewed OpenWA 0.18.0 release', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        status: 'ok', timestamp: '2026-08-15T00:00:00Z', version: '0.18.0',
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        status: 'ok', timestamp: '2026-08-15T00:00:00Z', version: '0.18.1',
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    const openwa = new OpenWAClient();
+
+    await expect(openwa.assertCompatibleRelease()).resolves.toBeUndefined();
+    await expect(openwa.assertCompatibleRelease()).rejects.toThrow(
+      'OpenWA release mismatch: expected 0.18.0, received 0.18.1',
+    );
   });
 
   it('accepts a valid session and discards fields outside the integration contract', async () => {

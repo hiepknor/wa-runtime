@@ -21,6 +21,7 @@
     "migrate:prod": "node dist/scripts/migrate.js",
     "contract:generate": "npm run build --silent && node dist/scripts/generate-runtime-contract.js",
     "contract:check": "npm run contract:generate && git diff --exit-code -- contracts/runtime/v1/openapi.json",
+    "contract:openwa:import": "tsx scripts/import-openwa-contract.ts",
     "load-test:dry-run": "tsx scripts/load-test-dry-run.ts",
     "campaign:fixture:reset": "tsx scripts/reset-campaign-staging-fixture.ts",
     "campaign:lifecycle:audit": "tsx scripts/reconcile-campaign-live-status.ts",

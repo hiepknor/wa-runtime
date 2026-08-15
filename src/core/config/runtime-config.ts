@@ -18,7 +18,7 @@ const schema = z
       .transform(value => value === undefined ? undefined : value === 'true'),
     OPENWA_BASE_URL: z.string().url(),
     OPENWA_API_KEY: z.string().min(1),
-    OPENWA_RELEASE_TAG: z.string().min(1).default('0.16.0'),
+    OPENWA_RELEASE_TAG: z.string().min(1).default('0.18.0'),
     OPENWA_WEBHOOK_SECRET: z.string().min(32),
     OPENWA_WEBHOOK_RECONCILIATION_ENABLED: booleanFromEnv(false),
     OPENWA_WEBHOOK_CALLBACK_URL: z.url().optional(),

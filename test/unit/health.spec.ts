@@ -7,7 +7,7 @@ import { HealthController } from '../../src/modules/health/health.controller';
 vi.mock('../../src/core/config/runtime-config', () => ({
   runtimeConfig: () => ({
     ALLOW_LIVE_SENDS: false,
-    OPENWA_RELEASE_TAG: '0.16.0',
+    OPENWA_RELEASE_TAG: '0.18.0',
     OPENWA_ALLOWED_SESSION_IDS: ['00000000-0000-4000-8000-000000000001'],
   }),
 }));

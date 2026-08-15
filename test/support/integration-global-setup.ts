@@ -123,7 +123,7 @@ export default async function setup(): Promise<() => Promise<void>> {
         });
       }
       if (request.method === 'GET' && path === '/api/health') {
-        return json(response, 200, { status: 'ok', timestamp: new Date().toISOString(), version: '0.16.0' });
+        return json(response, 200, { status: 'ok', timestamp: new Date().toISOString(), version: '0.18.0' });
       }
       if (request.method === 'GET' && path === `/api/sessions/${SESSION_ID}`) {
         return json(response, 200, {
@@ -180,7 +180,7 @@ export default async function setup(): Promise<() => Promise<void>> {
       ENABLE_RUNTIME_DOCS: 'false',
       OPENWA_BASE_URL: `http://127.0.0.1:${address.port}`,
       OPENWA_API_KEY: 'integration-openwa-key',
-      OPENWA_RELEASE_TAG: '0.16.0',
+      OPENWA_RELEASE_TAG: '0.18.0',
       OPENWA_WEBHOOK_SECRET: 'integration-webhook-secret-0000000000000',
       OPENWA_ALLOWED_SESSION_IDS: SESSION_ID,
       ALLOW_LIVE_SENDS: 'true',

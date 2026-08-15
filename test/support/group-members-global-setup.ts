@@ -88,7 +88,7 @@ export default async function setup(): Promise<() => Promise<void>> {
       ENABLE_RUNTIME_DOCS: 'false',
       OPENWA_BASE_URL: 'http://127.0.0.1:1',
       OPENWA_API_KEY: 'integration-openwa-key',
-      OPENWA_RELEASE_TAG: '0.16.0',
+      OPENWA_RELEASE_TAG: '0.18.0',
       OPENWA_WEBHOOK_SECRET: 'integration-webhook-secret-0000000000000',
       OPENWA_ALLOWED_SESSION_IDS: '00000000-0000-4000-8000-000000000001',
       ALLOW_LIVE_SENDS: 'false',
