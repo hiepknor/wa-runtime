@@ -41,9 +41,11 @@ different audit value and do not need one shared lifetime.
    never a candidate.
 7. Table partitioning is not introduced in this change. It becomes the next storage migration when
    delete throughput, vacuum cost or projected disk headroom fails the operational thresholds below.
-8. Contact observations are not compacted by generic retention. They are provenance inputs to
-   versioned resolution. A later Contacts-specific compactor must first preserve winning observation
-   references and prove time-cutoff reconstruction equivalence.
+8. Snapshot-backed Contact observations follow snapshot-generation ownership. Message push-name
+   observations are compacted only when older than their dedicated retention, a newer observation
+   for the same session-scoped identity exists, and no resolution/projection work for that session is
+   active. The newest observation is retained indefinitely; snapshot/contact-name provenance is not
+   handled by generic retention.
 
 ## Operational thresholds
 

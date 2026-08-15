@@ -141,6 +141,16 @@ may not be keeping up with ingest. Monitor inserted/deleted rows and disk utiliz
 percent as warning/escalation/critical thresholds. The partitioning trigger and Contacts evidence
 exception are defined in [ADR 012](adr/012-event-ownership-and-bounded-storage.md).
 
+Contacts snapshot generations use `CONTACT_SNAPSHOT_RETENTION_DAYS`, preserving both the latest
+publication and the generation owned by the latest completed resolution. Derived resolution rows
+cascade with their generation. Redundant message push-name observations use
+`CONTACT_MESSAGE_OBSERVATION_RETENTION_DAYS`; cleanup always preserves the newest observation per
+session-scoped identity and pauses for any session with active resolution or projection work.
+Pending projection work for a session outside `OPENWA_ALLOWED_SESSION_IDS` is intentionally retained:
+removing it could leave stale projected names if that session is later re-allowlisted. Either
+re-allow the session and drain the work, or remove the durable session explicitly so foreign-key
+cascades delete its Contacts state; do not purge those rows as generic queue debris.
+
 ## Backup and restore
 
 Store backup scripts and archives outside the OpenWA project. A suitable separation is:
@@ -254,8 +264,9 @@ session as the first live validation.
 
 ## Session restrictions and group permission changes
 
-`session.restriction` webhooks are persisted on the session and invalidate the short Redis cache. A
-live run encountering an unsendable session pauses new materialization with
+`session.restriction` webhooks are persisted in the PostgreSQL session projection. Preflight and
+live-send policy read that durable state directly. A live run encountering an unsendable session
+pauses new materialization with
 `SESSION_NOT_SENDABLE`. Resolve the OpenWA/session condition, refresh state, then resume so preflight
 runs again.
 

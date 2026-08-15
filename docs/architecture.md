@@ -36,7 +36,7 @@ The same image runs three long-lived processes and one one-shot migration proces
 | `api` | HTTP API, validation, authentication, webhook ingress | PostgreSQL and queue enqueue |
 | `scheduler` | Claims due work, recovers stale queue state, activates/reconciles runs and cleans terminal history | PostgreSQL and BullMQ |
 | `worker` | Processes sends, syncs, campaign preparation and webhooks | PostgreSQL through repositories |
-| `migrate` | Applies ordered SQL migrations once | `schema_migrations` and schema |
+| `migrate` | Applies checksum-verified ordered SQL migrations under a global advisory lock | `schema_migrations` and schema |
 
 The API can restart without losing campaign work. The scheduler reconstructs pending work from
 PostgreSQL, and BullMQ job IDs make re-enqueueing safe.
@@ -103,11 +103,11 @@ Redis is transport and short-lived cache, not the business source of truth. Four
 - `gateway-sync`;
 - `campaign`.
 
-Redis also caches OpenWA session sendability for preflight for 10 seconds. Session-status and
-session-restriction webhooks invalidate that cache. Redis is configured with AOF and
+Campaign preflight and live-send policy read the durable PostgreSQL session projection directly;
+there is no second Redis copy of session sendability. Redis is configured with AOF and
 `maxmemory-policy=noeviction`. A token-owned PostgreSQL session lease serializes outbound sends, so
-Redis remains transport and cache rather than a correctness boundary. Losing Redis does not erase
-durable campaign state, but outbound processing pauses until transport is restored.
+Redis remains transport rather than a correctness boundary. Losing Redis does not erase durable
+campaign state, but outbound processing pauses until transport is restored.
 
 The scheduler removes terminal operational history, normalized events and raw webhook envelopes with
 separate configured lifetimes. A tick drains multiple indexed batches in independent transactions,

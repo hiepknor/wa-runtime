@@ -128,8 +128,8 @@ configured delay or the OpenWA request. A worker waiting for the session lease c
 its message processing lease. It verifies session-lease ownership immediately before the upstream
 request and releases the lease with a token-checked update.
 
-Redis may continue to transport message jobs and cache session state, but it will not own the
-serialization guarantee after this migration.
+Redis transports message jobs but does not cache session sendability or own the serialization
+guarantee. Preflight and live-send policy use the PostgreSQL session projection.
 
 ## Scheduler model
 

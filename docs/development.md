@@ -83,8 +83,10 @@ docker compose ps
 docker compose logs --tail=100 migrate api worker scheduler
 ```
 
-Migration files are applied in filename order and recorded in `schema_migrations`. Never edit a
-migration that has already been applied; add the next numbered migration.
+Migration files are applied in filename order under a PostgreSQL advisory lock and recorded in
+`schema_migrations` with a SHA-256 checksum. Legacy records receive their checksum on the first run
+of the hardened migrator; subsequent content drift fails closed. Never edit a migration that has
+already been applied; add the next numbered migration.
 
 ## Host-side npm commands
 
