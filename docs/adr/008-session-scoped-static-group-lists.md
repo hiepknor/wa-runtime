@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-15
 - Builds on: ADR 003 and the campaign target snapshot contract
+- Amended by: ADR 010, which replaces the client-side apply decision with an atomic Runtime operation
 
 ## Context
 
@@ -27,11 +28,10 @@ operator-owned lists, and editing a list must not silently change an existing ca
    campaign preflight policy decision.
 5. A list contains at most 1,000 unique groups from its own session. Complete membership replacement
    is atomic and increments the list revision only when the effective set changes.
-6. Applying a list to a campaign is a client-side authoring operation: WA Studio copies the selected
-   list membership into its staged campaign target selection. The existing campaign target
-   replacement remains the only persistence operation.
-7. Runtime does not persist a campaign-to-list source relation in this phase. Renaming, editing or
-   archiving a list never changes campaign targets already saved from it.
+6. The initial release applies a list as a client-side copy. ADR 010 supersedes this mechanism with
+   revision-bound atomic application in Runtime while retaining snapshot, rather than live-binding,
+   semantics.
+7. Renaming, editing or archiving a list never changes campaign targets already saved from it.
 8. Archiving is soft. Archived lists are not returned by normal list browsing and cannot be edited,
    but their stored membership and all campaign target snapshots remain intact.
 9. List creation is idempotent so a lost HTTP response cannot create duplicate reusable lists.
@@ -58,8 +58,8 @@ operator-owned lists, and editing a list must not silently change an existing ca
   dynamic evaluation would make membership change without an explicit operator action.
 - **Store list membership on `gateway_groups`:** couples operator state to an upstream read model and
   cannot represent membership in multiple lists cleanly.
-- **Persist list provenance on campaign targets now:** it does not change snapshot behavior and adds
-  contract and reconciliation complexity before an audit requirement exists.
+- **Persist list provenance on campaign targets in the initial release:** deferred at the time; ADR
+  010 later accepts it together with an atomic apply boundary and separate membership revision.
 - **A dedicated top-level product domain:** the UI concern is currently a group-management sub-view;
   the backend resource remains independent so it can be promoted later without a data migration.
 
