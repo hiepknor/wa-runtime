@@ -204,6 +204,11 @@ A campaign represents one live send plan. It can have multiple review-only DRY_R
 prevents a second LIVE run. LIVE pause/resume maps the campaign to `PAUSED`/`ACTIVE`; terminal LIVE
 completion, cancellation or exhausted preparation archives the plan.
 
+Operator deletion is an independent visibility tombstone. It never reuses the lifecycle
+`ARCHIVED` meaning and never removes run, delivery or message-job evidence inline. A `DRAFT` or
+`ARCHIVED` campaign becomes deletable only after all of its runs are terminal; content and target
+revision fences plus the Campaign row lock serialize deletion against editing and launch.
+
 ## Contract ownership
 
 ```text

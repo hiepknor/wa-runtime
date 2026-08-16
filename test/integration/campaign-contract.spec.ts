@@ -82,7 +82,10 @@ describe('campaign draft contract HTTP API', () => {
       ...(init.headers ?? {}),
     };
     const response = await fetch(`${baseUrl}${path}`, { ...init, headers });
-    return { response, body: await response.json() as Record<string, any> };
+    return {
+      response,
+      body: response.status === 204 ? {} : await response.json() as Record<string, any>,
+    };
   }
 
   async function createCampaign(
@@ -129,6 +132,226 @@ describe('campaign draft contract HTTP API', () => {
     expect(left.body.id).toBe(right.body.id);
     const count = await pool.query<{ count: string }>('SELECT count(*)::text AS count FROM campaigns');
     expect(count.rows[0]?.count).toBe('1');
+  });
+
+  it('soft-deletes a quiescent draft with revision fences and retires its create key', async () => {
+    const key = randomUUID();
+    const created = await createCampaign({}, key);
+    const campaignId = created.body.id as string;
+    await jsonRequest(`/campaigns/${campaignId}/targets`, {
+      method: 'PUT', body: JSON.stringify({ groupIds: [INTEGRATION_GROUP_ID] }),
+    });
+
+    const stale = await jsonRequest(
+      `/campaigns/${campaignId}?expectedRevision=2&expectedTargetsRevision=1`,
+      { method: 'DELETE' },
+    );
+    expect(stale.response.status).toBe(409);
+    expect(stale.body).toMatchObject({
+      code: 'CAMPAIGN_REVISION_CONFLICT',
+      details: { currentRevision: 1, currentTargetsRevision: 1 },
+    });
+
+    const deleted = await jsonRequest(
+      `/campaigns/${campaignId}?expectedRevision=1&expectedTargetsRevision=1`,
+      { method: 'DELETE' },
+    );
+    expect(deleted.response.status).toBe(204);
+    const repeated = await jsonRequest(
+      `/campaigns/${campaignId}?expectedRevision=1&expectedTargetsRevision=1`,
+      { method: 'DELETE' },
+    );
+    expect(repeated.response.status).toBe(204);
+
+    const hidden = await jsonRequest(`/campaigns/${campaignId}`);
+    expect(hidden.response.status).toBe(404);
+    expect(hidden.body.code).toBe('CAMPAIGN_NOT_FOUND');
+    const list = await jsonRequest(`/campaigns?sessionId=${INTEGRATION_SESSION_ID}`);
+    expect(list.body.data).toEqual([]);
+    const edit = await jsonRequest(`/campaigns/${campaignId}`, {
+      method: 'PATCH', body: JSON.stringify({ name: 'Must stay deleted' }),
+    });
+    expect(edit.response.status).toBe(404);
+    const targets = await jsonRequest(`/campaigns/${campaignId}/targets`);
+    expect(targets.response.status).toBe(404);
+    const replaceTargets = await jsonRequest(`/campaigns/${campaignId}/targets`, {
+      method: 'PUT', body: JSON.stringify({ expectedTargetsRevision: 1, groupIds: [] }),
+    });
+    expect(replaceTargets.response.status).toBe(404);
+    const applySource = await jsonRequest(`/campaigns/${campaignId}/targets/apply-group-list`, {
+      method: 'POST', body: JSON.stringify({ groupListId: randomUUID(), expectedTargetsRevision: 1 }),
+    });
+    expect(applySource.response.status).toBe(404);
+    const preflight = await jsonRequest(`/campaigns/${campaignId}/preflight`, {
+      method: 'POST', body: JSON.stringify({ executionMode: 'DRY_RUN' }),
+    });
+    expect(preflight.response.status).toBe(404);
+    const launch = await jsonRequest(`/campaigns/${campaignId}/runs`, {
+      method: 'POST', headers: { 'idempotency-key': randomUUID() },
+      body: JSON.stringify({ executionMode: 'DRY_RUN' }),
+    });
+    expect(launch.response.status).toBe(404);
+
+    const retained = await pool.query<{
+      deleted_at: Date | null; revision: string; targets: string;
+    }>(
+      `SELECT c.deleted_at, c.revision::text,
+         (SELECT count(*)::text FROM campaign_targets ct WHERE ct.campaign_id = c.id) AS targets
+       FROM campaigns c WHERE c.id = $1`,
+      [campaignId],
+    );
+    expect(retained.rows[0]?.deleted_at).toBeInstanceOf(Date);
+    expect(retained.rows[0]).toMatchObject({ revision: '2', targets: '1' });
+    await expect(pool.query("UPDATE campaigns SET status = 'ACTIVE' WHERE id = $1", [campaignId]))
+      .rejects.toMatchObject({ constraint: 'campaigns_deleted_state_check' });
+
+    const retiredReplay = await createCampaign({}, key);
+    expect(retiredReplay.response.status).toBe(409);
+    expect(retiredReplay.body.code).toBe('CAMPAIGN_IDEMPOTENCY_KEY_RETIRED');
+  });
+
+  it('requires every non-terminal dry-run to be cancelled but retains terminal run audit', async () => {
+    const created = await createCampaign();
+    const campaignId = created.body.id as string;
+    const run = await jsonRequest(`/campaigns/${campaignId}/runs`, {
+      method: 'POST', headers: { 'idempotency-key': randomUUID() },
+      body: JSON.stringify({ executionMode: 'DRY_RUN' }),
+    });
+    const runId = run.body.id as string;
+
+    const blocked = await jsonRequest(
+      `/campaigns/${campaignId}?expectedRevision=1&expectedTargetsRevision=0`,
+      { method: 'DELETE' },
+    );
+    expect(blocked.response.status).toBe(409);
+    expect(blocked.body.code).toBe('CAMPAIGN_DELETE_RUN_CONFLICT');
+
+    expect((await jsonRequest(`/campaign-runs/${runId}/cancel`, { method: 'POST' })).response.status).toBe(201);
+    expect((await jsonRequest(
+      `/campaigns/${campaignId}?expectedRevision=1&expectedTargetsRevision=0`,
+      { method: 'DELETE' },
+    )).response.status).toBe(204);
+    expect((await jsonRequest(`/campaign-runs/${runId}`)).response.status).toBe(200);
+    expect((await jsonRequest(`/campaigns/${campaignId}/runs`)).response.status).toBe(404);
+    const count = await pool.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM campaign_runs WHERE campaign_id = $1',
+      [campaignId],
+    );
+    expect(count.rows[0]?.count).toBe('1');
+  });
+
+  it('requires an ACTIVE campaign to cancel its LIVE run before deletion', async () => {
+    const created = await createCampaign();
+    const campaignId = created.body.id as string;
+    const run = await jsonRequest(`/campaigns/${campaignId}/runs`, {
+      method: 'POST', headers: { 'idempotency-key': randomUUID() },
+      body: JSON.stringify({ executionMode: 'LIVE' }),
+    });
+    const activeDelete = await jsonRequest(
+      `/campaigns/${campaignId}?expectedRevision=1&expectedTargetsRevision=0`,
+      { method: 'DELETE' },
+    );
+    expect(activeDelete.response.status).toBe(409);
+    expect(activeDelete.body).toMatchObject({
+      code: 'CAMPAIGN_DELETE_STATE_CONFLICT', details: { currentStatus: 'ACTIVE' },
+    });
+
+    await jsonRequest(`/campaign-runs/${run.body.id as string}/cancel`, { method: 'POST' });
+    expect((await jsonRequest(`/campaigns/${campaignId}`)).body.status).toBe('ARCHIVED');
+    expect((await jsonRequest(
+      `/campaigns/${campaignId}?expectedRevision=1&expectedTargetsRevision=0`,
+      { method: 'DELETE' },
+    )).response.status).toBe(204);
+  });
+
+  it('serializes deletion against LIVE launch so exactly one state transition wins', async () => {
+    const created = await createCampaign();
+    const campaignId = created.body.id as string;
+    const [deletion, launch] = await Promise.all([
+      jsonRequest(`/campaigns/${campaignId}?expectedRevision=1&expectedTargetsRevision=0`, {
+        method: 'DELETE',
+      }),
+      jsonRequest(`/campaigns/${campaignId}/runs`, {
+        method: 'POST', headers: { 'idempotency-key': randomUUID() },
+        body: JSON.stringify({ executionMode: 'LIVE' }),
+      }),
+    ]);
+    expect([
+      [204, 404],
+      [409, 201],
+    ]).toContainEqual([deletion.response.status, launch.response.status]);
+    const state = await pool.query<{ deleted: boolean; status: string; runs: string }>(
+      `SELECT c.deleted_at IS NOT NULL AS deleted, c.status::text,
+         (SELECT count(*)::text FROM campaign_runs cr WHERE cr.campaign_id = c.id) AS runs
+       FROM campaigns c WHERE c.id = $1`,
+      [campaignId],
+    );
+    if (deletion.response.status === 204) {
+      expect(state.rows[0]).toEqual({ deleted: true, status: 'DRAFT', runs: '0' });
+    } else {
+      expect(state.rows[0]).toEqual({ deleted: false, status: 'ACTIVE', runs: '1' });
+    }
+  });
+
+  it('serializes deletion against target replacement without a partial audience write', async () => {
+    const created = await createCampaign();
+    const campaignId = created.body.id as string;
+    const [deletion, replacement] = await Promise.all([
+      jsonRequest(`/campaigns/${campaignId}?expectedRevision=1&expectedTargetsRevision=0`, {
+        method: 'DELETE',
+      }),
+      jsonRequest(`/campaigns/${campaignId}/targets`, {
+        method: 'PUT',
+        body: JSON.stringify({ expectedTargetsRevision: 0, groupIds: [INTEGRATION_GROUP_ID] }),
+      }),
+    ]);
+    expect([
+      [204, 404],
+      [409, 200],
+    ]).toContainEqual([deletion.response.status, replacement.response.status]);
+    const state = await pool.query<{ deleted: boolean; targets_revision: string; targets: string }>(
+      `SELECT c.deleted_at IS NOT NULL AS deleted, c.targets_revision::text,
+         (SELECT count(*)::text FROM campaign_targets ct WHERE ct.campaign_id = c.id) AS targets
+       FROM campaigns c WHERE c.id = $1`,
+      [campaignId],
+    );
+    if (deletion.response.status === 204) {
+      expect(state.rows[0]).toEqual({ deleted: true, targets_revision: '0', targets: '0' });
+    } else {
+      expect(state.rows[0]).toEqual({ deleted: false, targets_revision: '1', targets: '1' });
+    }
+  });
+
+  it('validates deletion preconditions and preserves not-found session scoping', async () => {
+    const created = await createCampaign();
+    const missingPreconditions = await jsonRequest(`/campaigns/${created.body.id as string}`, {
+      method: 'DELETE',
+    });
+    expect(missingPreconditions.response.status).toBe(400);
+    expect(missingPreconditions.body.code).toBe('CAMPAIGN_TARGETS_REVISION_INVALID');
+
+    await pool.query(
+      `INSERT INTO gateway_sessions
+         (id, name, status, engine_loaded, gateway_created_at, gateway_updated_at)
+       VALUES ($1, 'Hidden session', 'ready', true, now(), now())`,
+      [DISALLOWED_SESSION_ID],
+    );
+    const hidden = await pool.query<{ id: string }>(
+      `INSERT INTO campaigns (session_id, name, payload)
+       VALUES ($1, 'Hidden campaign', '{"text":"hidden"}'::jsonb) RETURNING id`,
+      [DISALLOWED_SESSION_ID],
+    );
+    const denied = await jsonRequest(
+      `/campaigns/${hidden.rows[0]!.id}?expectedRevision=1&expectedTargetsRevision=0`,
+      { method: 'DELETE' },
+    );
+    expect(denied.response.status).toBe(404);
+    expect(denied.body.code).toBe('CAMPAIGN_NOT_FOUND');
+    const retained = await pool.query<{ deleted_at: Date | null }>(
+      'SELECT deleted_at FROM campaigns WHERE id = $1',
+      [hidden.rows[0]!.id],
+    );
+    expect(retained.rows[0]?.deleted_at).toBeNull();
   });
 
   it('requires a UUID idempotency key and returns typed validation errors', async () => {

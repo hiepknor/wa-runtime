@@ -74,6 +74,24 @@ describe('campaign OpenAPI contract', () => {
     expect(parameters).toContainEqual(expect.objectContaining({ name: 'Idempotency-Key', required: true }));
   });
 
+  it('publishes revision-fenced idempotent campaign deletion', () => {
+    const operation = contract.paths['/api/v1/campaigns/{id}']?.delete as Record<string, any>;
+    const parameters = new Map<string, Record<string, any>>(
+      (operation.parameters ?? []).map((parameter: Record<string, any>) => [parameter.name, parameter]),
+    );
+    expect(parameters.get('expectedRevision')).toMatchObject({
+      in: 'query', required: true, schema: { type: 'integer', minimum: 1 },
+    });
+    expect(parameters.get('expectedTargetsRevision')).toMatchObject({
+      in: 'query', required: true, schema: { type: 'integer', minimum: 0 },
+    });
+    expect(operation.description).toContain('tombstone');
+    expect(operation.responses).toEqual(expect.objectContaining({
+      204: expect.any(Object), 400: expect.any(Object), 404: expect.any(Object), 409: expect.any(Object),
+    }));
+    expect(contract.components.schemas.CampaignDto?.properties).not.toHaveProperty('deletedAt');
+  });
+
   it('publishes typed errors for campaign-run operations', () => {
     const createRun = contract.paths['/api/v1/campaigns/{id}/runs']?.post as Record<string, any>;
     expect(createRun.responses).toHaveProperty('400');

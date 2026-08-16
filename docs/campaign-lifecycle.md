@@ -141,6 +141,18 @@ campaign/target revisions, and stale values return HTTP 409. A LIVE `ONCE` launc
 instant has passed is rejected. Idempotent replay of the winning key is checked before lifecycle
 rejection and therefore remains safe after launch.
 
+## Campaign deletion
+
+`DELETE /campaigns/{id}` removes a quiescent campaign from active workspace reads by writing a
+`deleted_at` tombstone. It requires `expectedRevision` and `expectedTargetsRevision`. The campaign
+must be `DRAFT` or `ARCHIVED`, and every DRY_RUN or LIVE run must already be terminal. `ACTIVE` and
+`PAUSED` campaigns require LIVE cancellation; non-terminal DRY_RUNs require their own cancellation.
+
+Deletion leaves campaign targets and immutable run/delivery/message-job evidence intact. Direct run
+reads remain available until normal operational retention. Repeating DELETE returns HTTP 204, while
+replaying the Campaign create idempotency key returns `CAMPAIGN_IDEMPOTENCY_KEY_RETIRED` rather than
+resurrecting or returning the hidden Campaign.
+
 ## Run states
 
 ```text

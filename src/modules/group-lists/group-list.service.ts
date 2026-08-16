@@ -65,6 +65,10 @@ export class GroupListService {
       throw new GroupListError(HttpStatus.CONFLICT, 'GROUP_LIST_IDEMPOTENCY_CONFLICT',
         'Idempotency-Key was already used with a different group-list payload');
     }
+    if (result.list?.archivedAt) {
+      throw new GroupListError(HttpStatus.CONFLICT, 'GROUP_LIST_IDEMPOTENCY_KEY_RETIRED',
+        'Idempotency-Key belongs to an archived saved group list and cannot be reused');
+    }
     return { list: result.list!, created: result.created };
   }
 
@@ -88,10 +92,16 @@ export class GroupListService {
   }
 
   async archive(id: string, expectedRevision?: number): Promise<void> {
-    const current = await this.getForMutation(id);
+    const current = await this.repository.find(id, true);
+    if (!current || !this.sessions.isAllowed(current.sessionId)) this.notFound();
+    if (current.archivedAt) return;
     this.assertExpectedRevision(expectedRevision, current.revision);
     const archived = await this.repository.archive(id, current.revision);
-    if (!archived) await this.throwMutationRace(id, current.revision);
+    if (archived) return;
+    const latest = await this.repository.find(id, true);
+    if (!latest || !this.sessions.isAllowed(latest.sessionId)) this.notFound();
+    if (latest.archivedAt) return;
+    this.revisionConflict(current.revision, latest.revision);
   }
 
   async membership(id: string) {

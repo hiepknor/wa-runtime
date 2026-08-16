@@ -7,6 +7,7 @@ import type { CampaignQueryDto } from '../../contracts/campaigns/campaign-query.
 import type { CampaignPreflightRequestDto } from '../../contracts/campaigns/campaign-preflight.dto';
 import type { CreateCampaignDto } from '../../contracts/campaigns/create-campaign.dto';
 import { CampaignScheduleType } from '../../contracts/campaigns/create-campaign.dto';
+import type { DeleteCampaignQueryDto } from '../../contracts/campaigns/delete-campaign.dto';
 import type { UpdateCampaignDto } from '../../contracts/campaigns/update-campaign.dto';
 import { CampaignRepository } from './campaign.repository';
 import { CampaignPreflightService } from './campaign-preflight.service';
@@ -50,6 +51,10 @@ export class CampaignService {
     if (result.requestHash !== requestHash) {
       throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_IDEMPOTENCY_CONFLICT',
         'Idempotency-Key was already used with a different campaign payload');
+    }
+    if (result.deleted) {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_IDEMPOTENCY_KEY_RETIRED',
+        'Idempotency-Key belongs to a deleted campaign and cannot be reused');
     }
     return { campaign: result.campaign, created: result.created };
   }
@@ -247,6 +252,40 @@ export class CampaignService {
       campaignRevision: campaign.revision,
       targetsRevision: campaign.targetsRevision,
     });
+  }
+
+  async delete(id: string, query: DeleteCampaignQueryDto): Promise<void> {
+    const result = await this.repository.delete({
+      id,
+      allowedSessionIds: this.config.OPENWA_ALLOWED_SESSION_IDS,
+      expectedRevision: query.expectedRevision,
+      expectedTargetsRevision: query.expectedTargetsRevision,
+    });
+    if (!result.found) {
+      throw new CampaignError(HttpStatus.NOT_FOUND, 'CAMPAIGN_NOT_FOUND', 'Campaign not found');
+    }
+    if (result.alreadyDeleted || result.deleted) return;
+    if (result.revisionConflict) {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_REVISION_CONFLICT',
+        'Campaign content or targets changed after deletion was requested', {
+          expectedRevision: query.expectedRevision,
+          expectedTargetsRevision: query.expectedTargetsRevision,
+          currentRevision: result.currentRevision,
+          currentTargetsRevision: result.currentTargetsRevision,
+        });
+    }
+    if (result.stateConflict) {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_DELETE_STATE_CONFLICT',
+        'ACTIVE or PAUSED campaigns must have their LIVE run cancelled before deletion', {
+          currentStatus: result.currentStatus,
+        });
+    }
+    if (result.runConflict) {
+      throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_DELETE_RUN_CONFLICT',
+        'Campaign has a non-terminal run that must be cancelled before deletion');
+    }
+    throw new CampaignError(HttpStatus.CONFLICT, 'CAMPAIGN_DELETE_STATE_CONFLICT',
+      'Campaign could not be deleted from its current state');
   }
 
   private assertAllowedSession(sessionId: string): void {

@@ -320,7 +320,8 @@ describe('saved group lists HTTP API', () => {
   });
 
   it('soft-archives a list without changing campaign targets and hides it from all active reads', async () => {
-    const created = await createList();
+    const createKey = randomUUID();
+    const created = await createList({}, createKey);
     const listId = created.body.id as string;
     const updated = await jsonRequest(`/group-lists/${listId}`, {
       method: 'PATCH', body: JSON.stringify({ expectedRevision: 1, description: 'Ready to archive' }),
@@ -355,9 +356,14 @@ describe('saved group lists HTTP API', () => {
     });
     expect(archivedMutation.response.status).toBe(409);
     expect(archivedMutation.body.code).toBe('GROUP_LIST_ARCHIVED');
-    const repeatedArchive = await jsonRequest(`/group-lists/${listId}`, { method: 'DELETE' });
-    expect(repeatedArchive.response.status).toBe(409);
-    expect(repeatedArchive.body.code).toBe('GROUP_LIST_ARCHIVED');
+    const repeatedArchive = await jsonRequest(
+      `/group-lists/${listId}?expectedRevision=${updated.body.revision as number}`,
+      { method: 'DELETE' },
+    );
+    expect(repeatedArchive.response.status).toBe(204);
+    const retiredReplay = await createList({}, createKey);
+    expect(retiredReplay.response.status).toBe(409);
+    expect(retiredReplay.body.code).toBe('GROUP_LIST_IDEMPOTENCY_KEY_RETIRED');
 
     const browse = await jsonRequest(`/group-lists?sessionId=${INTEGRATION_SESSION_ID}`);
     expect(browse.body.meta.total).toBe(0);

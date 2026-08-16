@@ -73,7 +73,10 @@ export class GroupListController {
 
   @Delete(':id')
   @HttpCode(204)
-  @ApiOperation({ summary: 'Archive a saved group list without changing campaign targets' })
+  @ApiOperation({
+    summary: 'Idempotently archive a saved group list without changing campaign targets',
+    description: 'A repeated DELETE succeeds after the list has reached the archived state.',
+  })
   @ApiNoContentResponse()
   async archive(
     @Param('id', ParseUUIDPipe) id: string,

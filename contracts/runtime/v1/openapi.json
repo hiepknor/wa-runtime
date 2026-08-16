@@ -920,6 +920,7 @@
         ]
       },
       "delete": {
+        "description": "A repeated DELETE succeeds after the list has reached the archived state.",
         "operationId": "GroupListController_archive",
         "parameters": [
           {
@@ -991,7 +992,7 @@
             "runtime-key": []
           }
         ],
-        "summary": "Archive a saved group list without changing campaign targets",
+        "summary": "Idempotently archive a saved group list without changing campaign targets",
         "tags": [
           "group-lists"
         ]
@@ -1555,6 +1556,94 @@
           }
         ],
         "summary": "Update an editable campaign draft",
+        "tags": [
+          "campaigns"
+        ]
+      },
+      "delete": {
+        "description": "Creates a durable tombstone without deleting immutable run, delivery, or message-job audit data.",
+        "operationId": "CampaignController_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "expectedRevision",
+            "required": true,
+            "in": "query",
+            "description": "Campaign content revision observed before deletion. A stale value returns HTTP 409.",
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "expectedTargetsRevision",
+            "required": true,
+            "in": "query",
+            "description": "Campaign target-set revision observed before deletion. A stale value returns HTTP 409.",
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "runtime-key": []
+          }
+        ],
+        "summary": "Delete a quiescent campaign from the active workspace",
         "tags": [
           "campaigns"
         ]

@@ -1,10 +1,11 @@
 import {
-  Body, Controller, Get, Headers, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res,
+  Body, Controller, Delete, Get, Headers, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Put, Query, Res,
   UseFilters,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse, ApiConflictResponse, ApiCreatedResponse, ApiHeader, ApiNotFoundResponse,
-  ApiOkResponse, ApiOperation, ApiQuery, ApiResponse, ApiSecurity, ApiTags, ApiUnprocessableEntityResponse,
+  ApiNoContentResponse, ApiOkResponse, ApiOperation, ApiQuery, ApiResponse, ApiSecurity, ApiTags,
+  ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { PaginationQueryDto } from '../../contracts/common/pagination.dto';
@@ -18,6 +19,7 @@ import {
   ReplaceCampaignTargetsDto,
 } from '../../contracts/campaigns/campaign-target.dto';
 import { CampaignScheduleType, CreateCampaignDto } from '../../contracts/campaigns/create-campaign.dto';
+import { DeleteCampaignQueryDto } from '../../contracts/campaigns/delete-campaign.dto';
 import { UpdateCampaignDto } from '../../contracts/campaigns/update-campaign.dto';
 import { CampaignRunDto, CampaignRunListDto, CreateCampaignRunDto } from '../../contracts/campaigns/campaign-run.dto';
 import { CampaignRunService } from './campaign-run.service';
@@ -78,6 +80,20 @@ export class CampaignController {
   @ApiOkResponse({ type: CampaignDto })
   update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateCampaignDto) {
     return this.campaigns.update(id, dto);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Delete a quiescent campaign from the active workspace',
+    description: 'Creates a durable tombstone without deleting immutable run, delivery, or message-job audit data.',
+  })
+  @ApiNoContentResponse()
+  async delete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: DeleteCampaignQueryDto,
+  ): Promise<void> {
+    await this.campaigns.delete(id, query);
   }
 
   @Get(':id/targets')

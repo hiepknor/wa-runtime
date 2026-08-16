@@ -158,6 +158,8 @@ groups remain valid members.
 
 `DELETE` soft-archives a list and accepts optional `expectedRevision`. Archive and later list edits
 never alter campaign targets already materialized from it. Archived lists cannot be newly applied.
+Repeating DELETE after archive returns HTTP 204. Replaying the archived resource's create key returns
+`GROUP_LIST_IDEMPOTENCY_KEY_RETIRED` and never recreates or returns the hidden list.
 
 Saved-list validation uses stable `GROUP_LIST_*` codes, including `GROUP_LIST_SESSION_INVALID`,
 `GROUP_LIST_NAME_INVALID`, `GROUP_LIST_QUERY_INVALID`, `GROUP_LIST_GROUP_INVALID`, duplicate/limit,
@@ -171,6 +173,7 @@ POST  /campaigns
 GET   /campaigns
 GET   /campaigns/{id}
 PATCH /campaigns/{id}
+DELETE /campaigns/{id}
 GET   /campaigns/{id}/targets
 PUT   /campaigns/{id}/targets
 POST  /campaigns/{id}/targets/apply-group-list
@@ -190,6 +193,13 @@ Campaign create defaults `scheduleType` to `IMMEDIATE`, whose canonical `schedul
 `ONCE` requires a valid future ISO-8601 date-time; create or scheduling updates reject past times.
 A content-only PATCH preserves scheduling, while changing back to `IMMEDIATE` clears the timestamp.
 All timestamps are emitted as ISO-8601 UTC. Only `DRAFT` campaigns can be edited.
+
+Campaign DELETE is a workspace tombstone, not the lifecycle `ARCHIVED` transition. It requires
+`expectedRevision` and `expectedTargetsRevision`, accepts only `DRAFT` or `ARCHIVED` campaigns, and
+returns HTTP 409 while any run is non-terminal. Callers cancel active work and retry with current
+revisions. Success and repeated deletion return HTTP 204. Active reads and mutations then use
+not-found semantics, while immutable terminal run records remain directly readable until retention.
+Replaying the deleted Campaign's create key returns `CAMPAIGN_IDEMPOTENCY_KEY_RETIRED`.
 
 Campaign PATCH accepts optional `expectedRevision`, and target replacement accepts optional
 `expectedTargetsRevision`. Saved-list metadata/archive mutations accept optional `expectedRevision`;

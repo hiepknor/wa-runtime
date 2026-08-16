@@ -82,6 +82,8 @@ describe('saved group-list OpenAPI contract', () => {
       name: 'expectedRevision', required: false,
       schema: expect.objectContaining({ type: 'integer', minimum: 1 }),
     }));
+    expect(contract.paths['/api/v1/group-lists/{id}']?.delete?.description)
+      .toContain('repeated DELETE succeeds');
   });
 
   it('documents typed errors for every saved-list operation', () => {

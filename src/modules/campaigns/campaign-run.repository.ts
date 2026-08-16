@@ -84,7 +84,7 @@ export class CampaignRunRepository {
       }>(`SELECT id, session_id, payload, schedule_type, scheduled_at, status, revision, targets_revision
              , target_source_group_list_id, target_source_group_list_name_snapshot,
                target_source_membership_revision, target_source_applied_at
-           FROM campaigns WHERE id = $1 FOR UPDATE`, [input.campaignId]);
+           FROM campaigns WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, [input.campaignId]);
       const campaign = campaignResult.rows[0];
       const empty = {
         run: null, created: false, campaignFound: Boolean(campaign), idempotencyConflict: false,

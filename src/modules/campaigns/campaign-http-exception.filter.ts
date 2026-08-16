@@ -32,6 +32,12 @@ export class CampaignHttpExceptionFilter implements ExceptionFilter {
   }
 
   private campaignValidationError(messages: string[]): { code: string; field: string } | null {
+    if (messages.some(message => /\bexpectedTargetsRevision\b/u.test(message))) {
+      return { code: 'CAMPAIGN_TARGETS_REVISION_INVALID', field: 'expectedTargetsRevision' };
+    }
+    if (messages.some(message => /\bexpectedRevision\b/u.test(message))) {
+      return { code: 'CAMPAIGN_REVISION_INVALID', field: 'expectedRevision' };
+    }
     if (messages.some(message => /\bstatus\b/u.test(message))) {
       return { code: 'CAMPAIGN_FILTER_STATUS_INVALID', field: 'status' };
     }

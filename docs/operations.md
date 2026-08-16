@@ -52,6 +52,15 @@ A production release should follow this order:
 
 Do not deploy from an uncommitted working tree or a floating branch such as `main`.
 
+### Campaign-deletion rollout floor
+
+Migration 040 adds nullable Campaign tombstones. Deploy a tombstone-aware Runtime to every API,
+worker and scheduler process before WA Studio exposes Campaign Delete. Verify active reads and every
+Campaign mutation ignore `deleted_at`, then synchronize the generated Runtime contract and enable the
+client action. After the first deletion is accepted, do not roll back below this Runtime release: an
+older binary ignores the tombstone and can expose or mutate a deleted Campaign. Database rollback is
+not required; use a compatible forward fix or this release as the rollback floor.
+
 ### Single-LIVE rollout gate
 
 The campaign single-LIVE database invariant is a two-release change. Release A deploys the repository

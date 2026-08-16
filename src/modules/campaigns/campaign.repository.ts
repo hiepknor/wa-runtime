@@ -26,8 +26,21 @@ interface CampaignRow {
   target_source_membership_revision: string | number | null;
   target_source_applied_at: Date | null;
   create_request_hash?: string | null;
+  deleted_at: Date | null;
   created_at: Date;
   updated_at: Date;
+}
+
+export interface CampaignDeletionResult {
+  found: boolean;
+  alreadyDeleted: boolean;
+  deleted: boolean;
+  revisionConflict: boolean;
+  stateConflict: boolean;
+  runConflict: boolean;
+  currentRevision?: number;
+  currentTargetsRevision?: number;
+  currentStatus?: CampaignStatus;
 }
 
 interface TargetRow {
@@ -106,7 +119,7 @@ export class CampaignRepository {
     scheduledAt: Date | null;
     idempotencyKey: string;
     requestHash: string;
-  }): Promise<{ campaign: CampaignDto; created: boolean; requestHash: string }> {
+  }): Promise<{ campaign: CampaignDto; created: boolean; requestHash: string; deleted: boolean }> {
     return this.database.transaction(async client => {
       const existing = await client.query<CampaignRow>(
         `${campaignSelect} WHERE c.create_idempotency_key = $1::uuid FOR UPDATE OF c`,
@@ -114,7 +127,10 @@ export class CampaignRepository {
       );
       if (existing.rows[0]) {
         const row = existing.rows[0];
-        return { campaign: mapCampaign(row), created: false, requestHash: row.create_request_hash! };
+        return {
+          campaign: mapCampaign(row), created: false, requestHash: row.create_request_hash!,
+          deleted: row.deleted_at !== null,
+        };
       }
 
       const inserted = await client.query<CampaignRow>(
@@ -127,7 +143,9 @@ export class CampaignRepository {
           input.idempotencyKey, input.requestHash],
       );
       if (inserted.rows[0]) {
-        return { campaign: mapCampaign(inserted.rows[0]), created: true, requestHash: input.requestHash };
+        return {
+          campaign: mapCampaign(inserted.rows[0]), created: true, requestHash: input.requestHash, deleted: false,
+        };
       }
 
       const replay = await client.query<CampaignRow>(
@@ -136,12 +154,18 @@ export class CampaignRepository {
       );
       const row = replay.rows[0];
       if (!row) throw new Error('Campaign idempotency conflict row was not visible after insert conflict');
-      return { campaign: mapCampaign(row), created: false, requestHash: row.create_request_hash! };
+      return {
+        campaign: mapCampaign(row), created: false, requestHash: row.create_request_hash!,
+        deleted: row.deleted_at !== null,
+      };
     });
   }
 
-  async find(id: string): Promise<CampaignDto | null> {
-    const result = await this.database.query<CampaignRow>(`${campaignSelect} WHERE c.id = $1`, [id]);
+  async find(id: string, includeDeleted = false): Promise<CampaignDto | null> {
+    const result = await this.database.query<CampaignRow>(
+      `${campaignSelect} WHERE c.id = $1${includeDeleted ? '' : ' AND c.deleted_at IS NULL'}`,
+      [id],
+    );
     return result.rows[0] ? mapCampaign(result.rows[0]) : null;
   }
 
@@ -165,7 +189,7 @@ export class CampaignRepository {
     return this.database.transaction(async client => {
       await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
       const values = [sessionIds, searchPattern, input.exactCampaignId ?? null, statuses, scheduleTypes];
-      const predicate = `c.session_id = ANY($1::text[])
+      const predicate = `c.session_id = ANY($1::text[]) AND c.deleted_at IS NULL
         AND ($2::text IS NULL OR c.name ILIKE $2 ESCAPE '\\' OR c.id = $3::uuid)
         AND ($4::campaign_status[] IS NULL OR c.status = ANY($4))
         AND ($5::campaign_schedule_type[] IS NULL OR c.schedule_type = ANY($5))`;
@@ -196,7 +220,7 @@ export class CampaignRepository {
              IS DISTINCT FROM ($2, $3::jsonb, $4::campaign_schedule_type, $5::timestamptz) THEN 1 ELSE 0 END,
            updated_at = CASE WHEN (name, payload, schedule_type, scheduled_at)
              IS DISTINCT FROM ($2, $3::jsonb, $4::campaign_schedule_type, $5::timestamptz) THEN now() ELSE updated_at END
-         WHERE id = $1 AND status = 'DRAFT' AND revision = $6 RETURNING *
+         WHERE id = $1 AND deleted_at IS NULL AND status = 'DRAFT' AND revision = $6 RETURNING *
        )
        SELECT updated.*,
          (SELECT count(*) FROM campaign_targets WHERE campaign_id = updated.id AND enabled) AS target_count
@@ -213,7 +237,10 @@ export class CampaignRepository {
   } | null> {
     return this.database.transaction(async client => {
       await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
-      const campaignResult = await client.query<CampaignRow>(`${campaignSelect} WHERE c.id = $1`, [campaignId]);
+      const campaignResult = await client.query<CampaignRow>(
+        `${campaignSelect} WHERE c.id = $1 AND c.deleted_at IS NULL`,
+        [campaignId],
+      );
       const row = campaignResult.rows[0];
       if (!row) return null;
       return {
@@ -230,7 +257,10 @@ export class CampaignRepository {
   } | null> {
     return this.database.transaction(async client => {
       await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
-      const campaignResult = await client.query<CampaignRow>(`${campaignSelect} WHERE c.id = $1`, [campaignId]);
+      const campaignResult = await client.query<CampaignRow>(
+        `${campaignSelect} WHERE c.id = $1 AND c.deleted_at IS NULL`,
+        [campaignId],
+      );
       const row = campaignResult.rows[0];
       if (!row) return null;
       return {
@@ -258,7 +288,7 @@ export class CampaignRepository {
         target_source_group_list_id: string | null;
       }>(
         `SELECT session_id, status, targets_revision::text, target_source_group_list_id
-         FROM campaigns WHERE id = $1 FOR UPDATE`, [campaignId],
+         FROM campaigns WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, [campaignId],
       );
       const campaign = campaignResult.rows[0];
       if (!campaign || campaign.status !== 'DRAFT') {
@@ -369,7 +399,7 @@ export class CampaignRepository {
       }>(
         `SELECT session_id, status, targets_revision::text, target_source_group_list_id,
            target_source_membership_revision::text
-         FROM campaigns WHERE id = $1 FOR UPDATE`,
+         FROM campaigns WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
         [input.campaignId],
       );
       const campaign = campaignResult.rows[0];
@@ -460,6 +490,63 @@ export class CampaignRepository {
         sourceSessionMismatch: false,
         sourceRevisionConflict: false,
       };
+    });
+  }
+
+  async delete(input: {
+    id: string;
+    allowedSessionIds: string[];
+    expectedRevision: number;
+    expectedTargetsRevision: number;
+  }): Promise<CampaignDeletionResult> {
+    return this.database.transaction(async client => {
+      const result = await client.query<{
+        status: CampaignStatus;
+        revision: string | number;
+        targets_revision: string | number;
+        deleted_at: Date | null;
+      }>(
+        `SELECT status, revision, targets_revision, deleted_at
+         FROM campaigns
+         WHERE id = $1 AND session_id = ANY($2::text[])
+         FOR UPDATE`,
+        [input.id, input.allowedSessionIds],
+      );
+      const campaign = result.rows[0];
+      const empty: CampaignDeletionResult = {
+        found: Boolean(campaign), alreadyDeleted: false, deleted: false,
+        revisionConflict: false, stateConflict: false, runConflict: false,
+      };
+      if (!campaign) return empty;
+      if (campaign.deleted_at) return { ...empty, alreadyDeleted: true };
+
+      const currentRevision = Number(campaign.revision);
+      const currentTargetsRevision = Number(campaign.targets_revision);
+      const current = { currentRevision, currentTargetsRevision, currentStatus: campaign.status };
+      if (currentRevision !== input.expectedRevision
+        || currentTargetsRevision !== input.expectedTargetsRevision) {
+        return { ...empty, ...current, revisionConflict: true };
+      }
+      if (!['DRAFT', 'ARCHIVED'].includes(campaign.status)) {
+        return { ...empty, ...current, stateConflict: true };
+      }
+
+      const activeRun = await client.query(
+        `SELECT id FROM campaign_runs
+         WHERE campaign_id = $1
+           AND status IN ('PREPARING','BLOCKED','SCHEDULED','RUNNING','PAUSED')
+         ORDER BY id LIMIT 1 FOR UPDATE`,
+        [input.id],
+      );
+      if (activeRun.rowCount) return { ...empty, ...current, runConflict: true };
+
+      await client.query(
+        `UPDATE campaigns
+         SET deleted_at = now(), revision = revision + 1, updated_at = now()
+         WHERE id = $1 AND deleted_at IS NULL`,
+        [input.id],
+      );
+      return { ...empty, ...current, deleted: true };
     });
   }
 
