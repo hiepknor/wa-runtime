@@ -69,8 +69,8 @@ Required choices:
 - keep `ALLOW_LIVE_SENDS=false`;
 - keep `OPENWA_RELEASE_TAG` equal to the reviewed local OpenWA image tag.
 
-The current reviewed Gateway release is OpenWA `0.18.0`; its upstream contract snapshot is stored
-under `contracts/openwa/0.18.0`.
+The current reviewed Gateway release is OpenWA `0.22.0`; its upstream contract snapshot is stored
+under `contracts/openwa/0.22.0`.
 
 The checked-in Compose file consumes `.env` inside containers. Runtime storage resolves through the
 private aliases `wa-runtime-postgres` and `wa-runtime-redis`; OpenWA resolves as `openwa-dev-api` on

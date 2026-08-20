@@ -40,7 +40,7 @@ export class HealthReadyDto {
   @ApiProperty()
   liveSendsEnabled!: boolean;
 
-  @ApiProperty({ example: '0.18.0' })
+  @ApiProperty({ example: '0.22.0' })
   openwaRelease!: string;
 
   @ApiProperty({ minimum: 0 })

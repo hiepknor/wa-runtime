@@ -4473,7 +4473,7 @@
           },
           "openwaRelease": {
             "type": "string",
-            "example": "0.18.0"
+            "example": "0.22.0"
           },
           "allowedSessionCount": {
             "type": "number",

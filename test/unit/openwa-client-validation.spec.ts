@@ -10,7 +10,7 @@ vi.mock('../../src/core/config/runtime-config', () => ({
   runtimeConfig: () => ({
     OPENWA_BASE_URL: 'http://openwa.test',
     OPENWA_API_KEY: 'test-key',
-    OPENWA_RELEASE_TAG: '0.18.0',
+    OPENWA_RELEASE_TAG: '0.22.0',
   }),
 }));
 
@@ -31,21 +31,24 @@ describe('OpenWAClient response validation', () => {
     vi.restoreAllMocks();
   });
 
-  it('accepts only the reviewed OpenWA 0.18.0 release', async () => {
+  it('accepts only the reviewed OpenWA 0.22.0 release', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({
-        status: 'ok', timestamp: '2026-08-15T00:00:00Z', version: '0.18.0',
+        status: 'ok', timestamp: '2026-08-20T00:00:00Z', version: '0.22.0',
       }))
       .mockResolvedValueOnce(jsonResponse({
-        status: 'ok', timestamp: '2026-08-15T00:00:00Z', version: '0.18.1',
+        status: 'ok', timestamp: '2026-08-20T00:00:00Z', version: '0.22.1',
       }));
     vi.stubGlobal('fetch', fetchMock);
     const openwa = new OpenWAClient();
 
     await expect(openwa.assertCompatibleRelease()).resolves.toBeUndefined();
     await expect(openwa.assertCompatibleRelease()).rejects.toThrow(
-      'OpenWA release mismatch: expected 0.18.0, received 0.18.1',
+      'OpenWA release mismatch: expected 0.22.0, received 0.22.1',
     );
+    const firstRequest = fetchMock.mock.calls[0];
+    const headers = new Headers((firstRequest?.[1] as RequestInit | undefined)?.headers);
+    expect(headers.get('x-api-key')).toBe('test-key');
   });
 
   it('accepts a valid session and discards fields outside the integration contract', async () => {

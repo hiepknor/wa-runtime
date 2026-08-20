@@ -292,7 +292,7 @@ the group before resuming live work.
 OpenWA is pinned by `OPENWA_RELEASE_TAG`, and its reviewed Swagger snapshot lives under
 `contracts/openwa/<tag>/openapi.json`.
 
-The currently reviewed release is OpenWA `0.18.0`. A deployment using another release must update
+The currently reviewed release is OpenWA `0.22.0`. A deployment using another release must update
 and review the pinned snapshot and adapter tests before changing `OPENWA_RELEASE_TAG`.
 
 For an upgrade:
@@ -308,7 +308,7 @@ For an upgrade:
 Import an exact upstream artifact through the guarded repository command:
 
 ```bash
-npm run contract:openwa:import -- 0.18.0 < openapi.json
+npm run contract:openwa:import -- 0.22.0 < openapi.json
 ```
 
 The command validates the declared release and refuses to overwrite a different artifact already
