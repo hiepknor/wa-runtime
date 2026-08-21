@@ -197,11 +197,13 @@ describe('data retention', () => {
        FROM pg_class relation
        JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
        WHERE namespace.nspname = 'public'
-         AND relation.relname IN ('webhook_events', 'runtime_events', 'inbound_messages')
+         AND relation.relname IN (
+           'webhook_events', 'runtime_events', 'inbound_messages', 'contact_observations'
+         )
        ORDER BY relation.relname`,
     );
 
-    expect(result.rows).toHaveLength(3);
+    expect(result.rows).toHaveLength(4);
     for (const row of result.rows) {
       expect(new Set(row.reloptions)).toEqual(new Set([
         'autovacuum_vacuum_threshold=10000',
