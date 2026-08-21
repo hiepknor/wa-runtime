@@ -171,6 +171,11 @@ five-percent vacuum threshold starts near 135,000 rows while retaining PostgreSQ
 cost and timing controls. Roll it back with `ALTER TABLE ... RESET` for the four reviewed
 autovacuum options only if staging shows sustained I/O pressure; never disable autovacuum.
 
+Migration `044_contact_observation_autovacuum.sql` applies the same reviewed table-local settings to
+`contact_observations` when its message-observation retention is enabled. Migration
+`043_contact_retention_guard_indexes.sql` supplies the two small partial indexes used to exclude
+active projection work and cluster-owned name evidence without scanning their full histories.
+
 After deployment, verify that terminal `webhook_events.payload` values contain only the compact
 receipt, `message.received` runtime events use `event_version = 2` without a `body` key, Contact
 observation intent retries are draining, and the `inboundMessages` retention count eventually exceeds
@@ -202,6 +207,33 @@ intent age remains bounded, cleanup remains below 25 percent of its configured t
 expanded filesystem retains at least 30 days of projected headroom. Otherwise schedule the
 partitioning migration defined by ADR 012; do not compensate by shortening the event idempotency
 window or deleting Contact evidence indiscriminately.
+
+Run the versioned evaluator against the two observer outputs instead of judging the gate from two
+endpoint samples:
+
+```bash
+npm run storage:acceptance -- \
+  --observations /opt/wa-runtime/shared/runtime-storage-observations.tsv \
+  --retention-log /opt/wa-runtime/shared/runtime-retention-observations.jsonl \
+  --minimum-days 7 \
+  --target-disk-gib 150 \
+  --retention-time-budget-ms 240000
+```
+
+On a host where the compiled evaluator has been installed under
+`/opt/wa-runtime/tools/storage-acceptance/current`, run the equivalent root-readable wrapper with
+`sudo /opt/wa-runtime/scripts/runtime-storage-acceptance.sh`. Extra CLI threshold arguments may be
+appended to either form.
+
+It exits zero only on `PASS`, one on `FAIL`, and two while the gate is `PENDING`. The evaluator
+validates the exact TSV schema, requires at least 80-percent hourly coverage with no gap above three
+hours, uses robust median-pair slopes for filesystem and database growth, and handles PostgreSQL
+statistics resets when calculating counter deltas. Deletion catch-up permits ten percent for window
+boundary skew but also requires an observed peak delete rate above the average ingest rate. The other
+checks cover consecutive capacity exhaustion, p95 cleanup duration, Contact intent age, disk
+escalation and sustained autovacuum backlog. Only the latest complete window is evaluated, and a
+filesystem size change starts it again, so pre-expansion samples cannot satisfy the post-expansion
+seven-day gate or make a recovered historical incident fail forever.
 
 Enable `RUNTIME_COMPACT_EVENT_PAYLOAD_ENABLED` first on staging. After its event-version and inbox
 checks pass, enable `RUNTIME_COMPACT_PROCESSED_WEBHOOK_PAYLOAD_ENABLED`; rollback disables either

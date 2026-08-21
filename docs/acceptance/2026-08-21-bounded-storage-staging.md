@@ -33,16 +33,16 @@ inbox retention index, the 59 GB root filesystem had 11 GB free and was 81 perce
 the current and previous Runtime images are retained. The guest partition already occupies the
 whole attached 60 GB disk, so additional capacity must be allocated at the cloud-volume layer.
 
-## Deployment
+## Initial bounded-storage deployment
 
 API, worker and scheduler were stopped while PostgreSQL and Redis remained available. Migration 041
 completed successfully, and the maintenance window was about 20 seconds. Release symlinks now
-resolve to:
+resolved at that cutover to:
 
 - `current -> /opt/wa-runtime/releases/a134c10`;
 - `previous -> /opt/wa-runtime/releases/b671ee6`.
 
-API, worker and scheduler are healthy on `wa-runtime:a134c10`. PostgreSQL and Redis are healthy,
+API, worker and scheduler were healthy on `wa-runtime:a134c10`. PostgreSQL and Redis were healthy,
 external readiness reports `ready`, OpenWA reports `0.22.0`, and live sends are still disabled.
 
 ## Storage and durability evidence
@@ -128,6 +128,21 @@ the rollout but does not satisfy the 30-day free-space target under the pre-chan
 Expand the cloud volume, then observe seven days of post-change growth before deciding whether table
 partitioning or a cursor-store redesign is justified. Do not use `VACUUM FULL` as routine capacity
 management because it needs table locks and temporary disk headroom that this VPS does not have.
+
+The host identifies as Tencent Cloud CVM `ins-jas6o3cy` in `ap-singapore-2`. Its 60 GiB `/dev/vda`
+is fully occupied by the ext4 root partition `/dev/vda2`. Neither the operator workstation nor the
+instance has a Tencent Cloud credential or attached CAM role, so increasing the billable system disk
+to 150 GiB remains a cloud-account action. Guest tools `growpart` and `resize2fs` are already present;
+after the provider reports the larger block device, expand the partition and filesystem, then start
+a fresh seven-day gate.
+
+The versioned gate evaluator was exercised against the live observer files before installation. It
+correctly returned `PENDING` (exit 2): the current observation window was 0.139 days, the filesystem
+was 58.94 GiB, no retention tick was capacity-exhausted, p95 cleanup duration was 26.101 seconds,
+the oldest Contact intent was 11 seconds, and all three active seven-day families showed burst delete
+rates above average ingest. Its preliminary conservative growth estimate left only 3.7 days of
+headroom on the unexpanded disk; this short window is evidence for expansion urgency, not the final
+seven-day capacity result.
 
 ## Follow-up host cleanup
 

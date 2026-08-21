@@ -26,6 +26,7 @@
     "campaign:fixture:reset": "tsx scripts/reset-campaign-staging-fixture.ts",
     "campaign:lifecycle:audit": "tsx scripts/reconcile-campaign-live-status.ts",
     "campaign:lifecycle:reconcile": "tsx scripts/reconcile-campaign-live-status.ts --apply",
+    "storage:acceptance": "tsx scripts/evaluate-runtime-storage.ts",
     "test": "npm run test:unit",
     "test:unit": "vitest run test/unit",
     "test:integration": "npm run build --silent && vitest run --config vitest.integration.config.ts",
