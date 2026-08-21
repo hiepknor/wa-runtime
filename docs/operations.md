@@ -225,6 +225,30 @@ On a host where the compiled evaluator has been installed under
 `sudo /opt/wa-runtime/scripts/runtime-storage-acceptance.sh`. Extra CLI threshold arguments may be
 appended to either form.
 
+For the staging Tencent CVM, create and verify a provider snapshot, then expand the system disk to
+150 GiB in the CVM console. Tencent documents this under
+[Expanding Cloud Disks](https://intl.cloud.tencent.com/document/product/213/82048) and recommends a
+snapshot before changing partitions or filesystems. Check guest readiness first; this command exits
+2 without mutation until `/dev/vda` exposes the provider-side capacity:
+
+```bash
+sudo /opt/wa-runtime/scripts/runtime-root-filesystem-expand.sh --minimum-disk-gib 150
+```
+
+If it reports `READY`, apply the guarded online ext4 expansion with:
+
+```bash
+sudo /opt/wa-runtime/scripts/runtime-root-filesystem-expand.sh \
+  --minimum-disk-gib 150 --apply --snapshot-verified
+sudo systemctl start wa-runtime-storage-observation.service
+sudo /opt/wa-runtime/scripts/runtime-storage-acceptance.sh
+```
+
+The expansion guard verifies that `/` is a read-write ext4 filesystem on the last direct partition
+of its parent disk, refuses disks smaller than the target, and requires explicit snapshot
+acknowledgement before invoking `growpart` and `resize2fs`. A successful observer sample detects the
+new filesystem size and resets the seven-day acceptance window.
+
 It exits zero only on `PASS`, one on `FAIL`, and two while the gate is `PENDING`. The evaluator
 validates the exact TSV schema, requires at least 80-percent hourly coverage with no gap above three
 hours, uses robust median-pair slopes for filesystem and database growth, and handles PostgreSQL

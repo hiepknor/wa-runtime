@@ -144,6 +144,11 @@ rates above average ingest. Its preliminary conservative growth estimate left on
 headroom on the unexpanded disk; this short window is evidence for expansion urgency, not the final
 seven-day capacity result.
 
+The guest is already prepared for a guarded online extension: it has a GPT partition table,
+`/dev/vda2` is the final partition, `/` is read-write ext4, `growpart` and `resize2fs` are installed,
+and cloud-init includes both `growpart` and `resizefs`. The operational guard performs no mutation
+until the provider block device is at least 150 GiB and an operator confirms a verified snapshot.
+
 ## Follow-up host cleanup
 
 A second read-only audit found no duplicate PostgreSQL indexes and confirmed Docker log rotation was
