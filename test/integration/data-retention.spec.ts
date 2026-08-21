@@ -212,6 +212,28 @@ describe('data retention', () => {
     }
   });
 
+  it('indexes active-work and protected-observation retention guards', async () => {
+    const result = await pool.query<{ indexname: string; indexdef: string }>(
+      `SELECT indexname, indexdef FROM pg_indexes
+       WHERE schemaname = 'public' AND indexname IN (
+         'idx_contact_projection_work_active_session',
+         'idx_resolved_contact_clusters_name_observation'
+       )
+       ORDER BY indexname`,
+    );
+
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows[0]).toMatchObject({
+      indexname: 'idx_contact_projection_work_active_session',
+    });
+    expect(result.rows[0]!.indexdef).toContain('(session_id) WHERE (status = ANY');
+    expect(result.rows[1]).toMatchObject({
+      indexname: 'idx_resolved_contact_clusters_name_observation',
+    });
+    expect(result.rows[1]!.indexdef).toContain('(session_id, contact_name_observation_id)');
+    expect(result.rows[1]!.indexdef).toContain('contact_name_observation_id IS NOT NULL');
+  });
+
   it('compacts old push-name history only after derived contact work is idle', async () => {
     const old = new Date(Date.now() - 40 * 86_400_000);
     const identity = await pool.query<{ id: string }>(
