@@ -127,6 +127,19 @@ describe('versioned contact resolution', () => {
       linkedIdentities: 3,
       conflictIdentities: 0,
     });
+    const firstCompletion = await pool.query<{
+      completed_after_start: boolean;
+      timestamps_match: boolean;
+    }>(
+      `SELECT completed_at > started_at AS completed_after_start,
+         completed_at = updated_at AS timestamps_match
+       FROM contact_resolution_runs WHERE session_id = $1 AND id = $2`,
+      [INTEGRATION_SESSION_ID, first.claim.runId],
+    );
+    expect(firstCompletion.rows[0]).toEqual({
+      completed_after_start: true,
+      timestamps_match: true,
+    });
     const firstAssignments = await assignments(first.claim.runId);
     expect(new Set(firstAssignments.map(row => row.cluster_id)).size).toBe(1);
     expect(firstAssignments.every(row => row.resolved_phone_number === '84970000000')).toBe(true);

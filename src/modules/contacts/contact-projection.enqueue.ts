@@ -7,7 +7,9 @@ export async function enqueueContactProjectionWork(
 ): Promise<number> {
   if (identityIds.length === 0) return 0;
   const result = await client.query<{ enqueued: string }>(
-    `WITH latest_run AS MATERIALIZED (
+    `WITH request_time AS MATERIALIZED (
+       SELECT statement_timestamp() AS value
+     ), latest_run AS MATERIALIZED (
        SELECT id FROM contact_resolution_runs
        WHERE session_id = $1 AND status = 'COMPLETED'
        ORDER BY completed_at DESC, id DESC LIMIT 1
@@ -30,16 +32,18 @@ export async function enqueueContactProjectionWork(
        (session_id, identity_id, requested_revision, requested_cutoff_at,
         first_requested_at, last_requested_at)
      SELECT $1, canonical.projection_identity_id,
-       nextval('contact_projection_revision_seq'), now(), now(), now()
-     FROM canonical
+       nextval('contact_projection_revision_seq'),
+       request_time.value, request_time.value, request_time.value
+     FROM canonical CROSS JOIN request_time
      ON CONFLICT (session_id, identity_id) DO UPDATE SET
        requested_revision = EXCLUDED.requested_revision,
        requested_cutoff_at = EXCLUDED.requested_cutoff_at,
        first_requested_at = CASE
-         WHEN contact_projection_work.status IN ('IDLE', 'FAILED') THEN now()
+         WHEN contact_projection_work.status IN ('IDLE', 'FAILED')
+           THEN EXCLUDED.first_requested_at
          ELSE contact_projection_work.first_requested_at
        END,
-       last_requested_at = now(),
+       last_requested_at = EXCLUDED.last_requested_at,
        status = CASE
          WHEN contact_projection_work.status IN ('RUNNING', 'RETRY')
            AND contact_projection_work.active_revision IS NOT NULL
@@ -76,15 +80,16 @@ export async function enqueueContactProjectionWork(
            AND contact_projection_work.active_revision IS NOT NULL
          THEN contact_projection_work.attempt_count ELSE 0
        END,
-       next_attempt_at = now(), failed_at = NULL, error_code = NULL, updated_at = now()
+       next_attempt_at = EXCLUDED.last_requested_at,
+       failed_at = NULL, error_code = NULL, updated_at = EXCLUDED.last_requested_at
      RETURNING identity_id
      ), retired_aliases AS (
        UPDATE contact_projection_work work SET status = 'IDLE',
          active_revision = NULL, active_cutoff_at = NULL, active_resolution_run_id = NULL,
          cursor_group_id = NULL, cursor_participant_id = NULL,
          lease_token = NULL, lease_expires_at = NULL, failed_at = NULL, error_code = NULL,
-         updated_at = now()
-       FROM requested
+         updated_at = request_time.value
+       FROM requested CROSS JOIN request_time
        WHERE work.session_id = $1 AND work.identity_id = requested.source_identity_id
          AND requested.source_identity_id <> requested.projection_identity_id
          AND work.status IN ('PENDING', 'RETRY', 'FAILED')

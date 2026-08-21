@@ -229,18 +229,24 @@ export class ContactResolutionRepository {
         linked_identities: string;
         conflict_identities: string;
       }>(
-        `WITH metrics AS (
+        `WITH cluster_metrics AS MATERIALIZED (
+           SELECT cluster_id, count(*)::integer AS identity_count
+           FROM resolution_components GROUP BY cluster_id
+         ), metrics AS (
            SELECT
-             count(*)::integer AS identities,
-             count(DISTINCT assignment.cluster_id)::integer AS clusters,
-             count(*) FILTER (WHERE cluster.identity_count > 1)::integer AS linked_identities,
-             count(*) FILTER (WHERE assignment.resolution_status = 'QUARANTINED')::integer
-               AS conflict_identities
-           FROM resolved_identity_assignments assignment
-           JOIN resolved_contact_clusters cluster
-             ON cluster.session_id = assignment.session_id AND cluster.run_id = assignment.run_id
-            AND cluster.cluster_id = assignment.cluster_id
-           WHERE assignment.session_id = $1 AND assignment.run_id = $2
+             COALESCE(sum(identity_count), 0)::integer AS identities,
+             count(*)::integer AS clusters,
+             COALESCE(sum(identity_count) FILTER (WHERE identity_count > 1), 0)::integer
+               AS linked_identities,
+             (
+               SELECT count(DISTINCT conflict.identity_id)::integer
+               FROM resolution_conflicted_identities conflict
+               JOIN resolution_components component
+                 ON component.identity_id = conflict.identity_id
+             ) AS conflict_identities
+           FROM cluster_metrics
+         ), completion_time AS MATERIALIZED (
+           SELECT clock_timestamp() AS value
          ), completion AS (
            UPDATE contact_resolution_runs run SET status = 'COMPLETED',
              identity_count = metrics.identities, cluster_count = metrics.clusters,
@@ -252,9 +258,9 @@ export class ContactResolutionRepository {
              legacy_linked_member_count = (
                SELECT count(*) FROM group_members WHERE session_id = $1 AND contact_id IS NOT NULL
              ),
-             completed_at = now(), failed_at = NULL, error_code = NULL,
-             lease_token = NULL, lease_expires_at = NULL, updated_at = now()
-           FROM metrics
+             completed_at = completion_time.value, failed_at = NULL, error_code = NULL,
+             lease_token = NULL, lease_expires_at = NULL, updated_at = completion_time.value
+           FROM metrics, completion_time
            WHERE run.session_id = $1 AND run.id = $2 AND run.lease_token = $3
            RETURNING metrics.*
          )
