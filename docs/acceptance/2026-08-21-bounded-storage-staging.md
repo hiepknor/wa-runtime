@@ -73,6 +73,21 @@ data accumulated before this release: about 6,342 MB for `webhook_events`, 5,175
 Compaction and retention bound new logical growth; they intentionally do not rewrite or vacuum-full
 historical tables during the rollout.
 
+## Seven-day observation automation
+
+Operational revision `2410fb9` installed an hourly, low-priority systemd observer without rebuilding
+or restarting the Runtime application image. `wa-runtime-storage-observation.timer` is enabled and
+active. Its first sandboxed service execution completed with exit status zero and recorded a
+35-field aggregate sample at `2026-08-21T05:17:02Z`.
+
+The observation file is root-owned with mode `0600` at
+`/opt/wa-runtime/shared/runtime-storage-observations.tsv`. It contains filesystem/database sizes,
+PostgreSQL table-statistics counters and aggregate Contact intent state only. It does not select
+message bodies, webhook payloads, identities or names. The initial statistics exposed approximately
+498,272 dead tuples in `webhook_events`, consistent with inserting a recoverable full envelope and
+then compacting it on success. Autovacuum had already completed once; the seven-day series will show
+whether it maintains reusable space or whether ADR 012's partition trigger is reached.
+
 ## Automated verification
 
 - `npm run check:all` passed on `a134c10`.

@@ -17,4 +17,3 @@ PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths=/opt/wa-runtime/shared
-
