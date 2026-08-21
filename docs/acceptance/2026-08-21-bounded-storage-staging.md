@@ -88,11 +88,33 @@ message bodies, webhook payloads, identities or names. The initial statistics ex
 then compacting it on success. Autovacuum had already completed once; the seven-day series will show
 whether it maintains reusable space or whether ADR 012's partition trigger is reached.
 
+## High-churn autovacuum rollout
+
+The initial observer evidence showed that `webhook_events` reached 19.55 percent dead tuples before
+PostgreSQL's cluster-wide 20-percent default initiated cleanup. Operational revisions `51d0116` and
+`64ff9d2` added migration `042_high_churn_autovacuum.sql`, its integration assertion and fail-fast
+lock/statement timeouts. The migration changes table metadata only; it does not rewrite a table or
+index and does not alter cluster-wide autovacuum resource controls.
+
+Migration 042 applied online in 2.568 seconds without restarting API, worker or scheduler. The
+recorded checksum is `99ec6f7b05c61330e8892c0c235ec6607ef722ec2251d60200df87e3d7088336`.
+All three high-churn tables report the reviewed 10,000-row floor, five-percent vacuum scale factor
+and two-percent analyze scale factor.
+
+Because the existing 508,069 dead webhook tuples already exceeded the new trigger, PostgreSQL began
+autovacuum immediately. The first backlog cleanup completed in about 87 seconds, increased
+`autovacuum_count` from one to two and reduced the estimate to 1,544 dead tuples. Ten HTTPS readiness
+samples taken during that first, largest cleanup ranged from 145 to 279 ms with no failures. I/O wait
+returned to 2–6 percent after completion. A post-vacuum aggregate sample was appended to the hourly
+series; subsequent lower-trigger runs remain part of the seven-day gate.
+
 ## Automated verification
 
 - `npm run check:all` passed on `a134c10`.
 - 42 unit files with 136 tests passed.
-- 26 integration files with 214 tests passed.
+- On application revision `a134c10`, 26 integration files with 214 tests passed.
+- After migration 042, 26 integration files with 215 tests passed, including the table-option
+  assertion.
 - Architecture checks, type checking and production build passed.
 - The local worktree was clean and `main` matched `origin/main` before deployment.
 
