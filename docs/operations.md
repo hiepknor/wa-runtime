@@ -168,6 +168,33 @@ receipt, `message.received` runtime events use `event_version = 2` without a `bo
 observation intent retries are draining, and the `inboundMessages` retention count eventually exceeds
 the corresponding ingest rate once its cutoff becomes active.
 
+For the required seven-day staging observation, install `scripts/runtime-storage-observation.sh` at
+`/opt/wa-runtime/scripts/runtime-storage-observation.sh` with mode `0755`, and install the matching
+service and timer from `deploy/systemd/` under `/etc/systemd/system/`. Run and enable them with:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl start wa-runtime-storage-observation.service
+sudo systemctl enable --now wa-runtime-storage-observation.timer
+sudo systemctl status wa-runtime-storage-observation.timer
+```
+
+The timer writes one aggregate, pipe-delimited sample per hour to
+`/opt/wa-runtime/shared/runtime-storage-observations.tsv`, and copies the most recent aggregate
+`data.retention.completed` event to `runtime-retention-observations.jsonl`. It reads PostgreSQL
+statistics, relation sizes, Contact intent counts and root-filesystem usage; it never selects an
+identity, message body or webhook payload. Compare counter deltas rather than absolute
+`pg_stat_user_tables` counters, because PostgreSQL resets them after a statistics reset. Restarting
+the timer does not truncate either file, and its file lock prevents overlapping samples.
+
+After at least seven complete days, calculate daily database/filesystem growth and per-table insert,
+delete and autovacuum deltas. Keep the current design only when retention has not reported two
+consecutive `capacityExhausted` runs, delete capacity is keeping up after each cutoff, active Contact
+intent age remains bounded, cleanup remains below 25 percent of its configured time budget, and the
+expanded filesystem retains at least 30 days of projected headroom. Otherwise schedule the
+partitioning migration defined by ADR 012; do not compensate by shortening the event idempotency
+window or deleting Contact evidence indiscriminately.
+
 Enable `RUNTIME_COMPACT_EVENT_PAYLOAD_ENABLED` first on staging. After its event-version and inbox
 checks pass, enable `RUNTIME_COMPACT_PROCESSED_WEBHOOK_PAYLOAD_ENABLED`; rollback disables either
 flag without a schema downgrade or historical rewrite. Never enable raw compaction before every

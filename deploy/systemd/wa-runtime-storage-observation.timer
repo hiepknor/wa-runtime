@@ -1,0 +1,12 @@
+[Unit]
+Description=Record hourly WA Runtime storage observations
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5m
+Persistent=true
+AccuracySec=1m
+Unit=wa-runtime-storage-observation.service
+
+[Install]
+WantedBy=timers.target
