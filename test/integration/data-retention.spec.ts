@@ -193,9 +193,12 @@ describe('data retention', () => {
 
   it('uses bounded autovacuum thresholds for high-churn retained tables', async () => {
     const result = await pool.query<{ relname: string; reloptions: string[] }>(
-      `SELECT relname, reloptions FROM pg_class
-       WHERE relname IN ('webhook_events', 'runtime_events', 'inbound_messages')
-       ORDER BY relname`,
+      `SELECT relation.relname, relation.reloptions
+       FROM pg_class relation
+       JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+       WHERE namespace.nspname = 'public'
+         AND relation.relname IN ('webhook_events', 'runtime_events', 'inbound_messages')
+       ORDER BY relation.relname`,
     );
 
     expect(result.rows).toHaveLength(3);
