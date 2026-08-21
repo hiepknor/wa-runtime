@@ -2,8 +2,9 @@
 
 ## Scope
 
-- Runtime release and immutable image: `a134c10` / `wa-runtime:a134c10`.
-- Previous rollback release: `b671ee6`.
+- Initial bounded-storage release and immutable image: `a134c10` / `wa-runtime:a134c10`.
+- Current optimized release and immutable image: `6f03b5a` / `wa-runtime:6f03b5a`.
+- Current rollback release: `f5eeae0`.
 - Staging origin: `https://wa-runtime-staging.onio.cc`.
 - OpenWA remained pinned to release `0.22.0`.
 - Live sends remained disabled.
@@ -113,8 +114,8 @@ series; subsequent lower-trigger runs remain part of the seven-day gate.
 - `npm run check:all` passed on `a134c10`.
 - 42 unit files with 136 tests passed.
 - On application revision `a134c10`, 26 integration files with 214 tests passed.
-- After migration 042, 26 integration files with 215 tests passed, including the table-option
-  assertion.
+- After migrations 043 and 044, 26 integration files with 216 tests passed, including the guard-index
+  and table-option assertions.
 - Architecture checks, type checking and production build passed.
 - The local worktree was clean and `main` matched `origin/main` before deployment.
 
@@ -151,3 +152,55 @@ Filesystem usage fell from 50,036,023,296 to 47,787,724,800 bytes, reclaiming 2,
 the post-cleanup readiness and storage-observer execution both passed. This extends the staging
 observation runway but still does not satisfy the 30-day capacity gate or remove the cloud-volume
 expansion requirement.
+
+## Contact-resolution completion optimization
+
+The next daily contact resolution completed its durable data correctly but the scheduler reported a
+five-minute timeout. It resolved 62,389 identities into 42,989 clusters, including 38,800 linked
+identities and zero conflicts. A read-only phase profile showed that graph construction took 1.551
+seconds and projection diffing took 1.968 seconds; neither was the scaling bottleneck.
+
+A rollback-only staging reproduction isolated the completion-metrics CTE. Cluster insertion took
+3.071 seconds, assignment insertion 3.545 seconds and name projection 5.156 seconds, while the old
+metrics query alone took 337.446 seconds. It joined the newly inserted persistent cluster and
+assignment rows before PostgreSQL had statistics for the run, producing a CPU-bound nested-loop
+plan. Revision `3a03c3e` now computes the same four metrics from the already materialized temporary
+component and conflict tables. On the same 62,389-identity dataset, the replacement took 351 ms and
+returned the exact production result, an approximately 961-fold reduction for that phase.
+
+The same revision records one real completion instant with `clock_timestamp()`. Projection enqueue
+now uses one `statement_timestamp()` per statement so its evidence cutoff is guaranteed to include a
+resolution completed earlier in the same long transaction. This preserves snapshot fencing while
+removing the prior zero-duration observability error. All 19 projection integration tests and all
+five resolution integration tests passed after this coupling was corrected.
+
+## Seven-day message-observation retention
+
+The first exact seven-day candidate probe exposed two missing query-path indexes rather than a need
+for a large new index on the 2.4-million-row observation table. Migration 043, revision `f5eeae0`,
+added partial indexes for active projection work by session and protected cluster-name observations
+by observation ID. Each index occupied 188,416 bytes on staging. The exact 5,000-row production
+candidate query improved from a 30-second statement timeout to 5.621 seconds. Migration 043 applied
+online in 4.48 seconds; its checksum is
+`631da3d700dc14e30aeb8cef797a6530a87d3f699b9b613afa107d2e79b62b6e`.
+
+`CONTACT_MESSAGE_OBSERVATION_RETENTION_DAYS=7` was then enabled on the scheduler. The first live tick
+deleted 83,475 redundant contact observations and 479 other retained rows in 17 batches and 59.735
+seconds. A post-restart tick deleted another 2,898 contact observations plus 5,888 inbox/raw rows in
+one batch and 6.713 seconds. Both reported `capacityExhausted=false`; readiness remained healthy.
+Cleanup still preserves the newest message-derived push name per identity, all generation-scoped
+snapshot evidence, observations referenced by resolved clusters, and every session with active
+resolution or projection work.
+
+Because this makes `contact_observations` a high-churn retained table, migration 044, revision
+`6f03b5a`, applied the same reviewed 10,000-row floor, five-percent vacuum scale factor and
+two-percent analyze scale factor used by the other retained owners. It changed table metadata only,
+applied in 2.30 seconds and has checksum
+`ccec14f1726c4e3b60b7a1b1cfd8b33b7c96f01a82be7cf792e84d09b08c7696`.
+
+The final Runtime containers are healthy on `wa-runtime:6f03b5a`; `wa-runtime:f5eeae0` is the retained
+rollback image and release. Intermediate Runtime images and an exited successful migration
+container were removed, and the final build-cache prune reclaimed 366.5 MB. The final observer
+sample recorded 47,824,629,760 bytes used, 12,764,569,600 bytes available and 79-percent root
+filesystem utilization. OpenWA remained on `0.22.0`, live sends remained disabled, there were no
+post-cutover error-level Runtime logs, and the hourly observer remains active.
