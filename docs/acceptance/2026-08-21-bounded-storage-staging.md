@@ -189,6 +189,45 @@ the post-cleanup readiness and storage-observer execution both passed. This exte
 observation runway but still does not satisfy the 30-day capacity gate or remove the cloud-volume
 expansion requirement.
 
+## OpenWA message-retention stabilization
+
+A follow-up attribution audit found that OpenWA PostgreSQL was the largest remaining live consumer:
+about 14.1 GB under `/srv/openwa/postgres`, with the `messages` relation accounting for about
+13.6 GB and 2.8 million rows. OpenWA `0.22.0` has no native message-retention setting, so retention
+was implemented strictly in the host operations layer. The OpenWA application source, release tag
+and immutable image were not changed.
+
+Before deleting message history, a fresh PostgreSQL 17 custom-format backup was streamed off-host
+to `/Users/hiepknor/Backups/openwa/openwa-pre-messages-retention-20260821T090816Z.dump`. The file is
+1,728,872,724 bytes with mode `0600`; SHA-256
+`a74f16a3c3dc015b9ff9194858bbea5d01fec55a306355115a268370c2720a97` and a full
+`pg_restore --list` catalog check with 82 entries both passed.
+
+The existing indexed operations job was activated with a three-day retention window, 5,000-row
+batches, a 120-second run budget, two-second lock timeout, 15-second statement timeout and a 3 GiB
+free-space guard. It uses an exclusive host lock plus `FOR UPDATE SKIP LOCKED`, and each batch is a
+separate transaction. Two isolated catch-up runs deleted 725,000 and 930,180 expired rows. Each run
+was followed by PostgreSQL autovacuum before proceeding, avoiding overlapping bulk deletion and
+vacuum work. The first timer-triggered steady-state run then deleted 3,906 newly expired rows in one
+second and left zero rows behind its fixed cutoff. The next calendar-triggered run deleted 753 rows
+in one second, again left zero rows behind its fixed cutoff and scheduled the following tick normally.
+
+`openwa-messages-retention.timer` is enabled, active and scheduled every five minutes with up to 30
+seconds randomized delay. The job is bounded by systemd to 180 seconds and retains a `DRY_RUN`
+switch in its root-only environment file. After catch-up, about 1.17 million messages remained in
+the rolling three-day window. Autovacuum reduced the main-table dead-tuple estimate to 16 and
+completed the large-object cleanup without an error. Runtime readiness remained HTTP 200 and the
+OpenWA API remained healthy throughout.
+
+Regular vacuum deliberately preserves the allocated PostgreSQL relation pages for reuse; it does
+not promise an immediate reduction in root-filesystem usage. The root filesystem therefore remained
+at 81 percent with about 12.1 GB available after the temporary WAL high-water subsided. This stops
+the dominant unbounded logical growth but does not replace the required 150 GiB cloud-volume
+expansion. `VACUUM FULL` remains prohibited on this host because it would need an unsafe table lock
+and temporary copy space. A forced post-retention Runtime observer sample and daily gate execution
+both succeeded at `2026-08-21T09:41:43Z`; the gate correctly remained `PENDING` on the 58.94 GiB
+filesystem with only 0.184 days of evidence.
+
 ## Contact-resolution completion optimization
 
 The next daily contact resolution completed its durable data correctly but the scheduler reported a
