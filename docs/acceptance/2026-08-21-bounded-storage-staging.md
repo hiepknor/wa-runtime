@@ -157,6 +157,13 @@ current 60 GiB disk returned the expected `PENDING` exit 2 without mutation.
 A daily systemd acceptance timer atomically refreshes the root-only latest JSON report. `PENDING` is
 an accepted service result during collection, while a gate `FAIL` deliberately fails the oneshot so
 the existing systemd monitoring surface can alert without losing the diagnostic report.
+Revision `5d379ff` is installed and enabled as `wa-runtime-storage-acceptance.timer`. Its first
+oneshot completed successfully with evaluator status `PENDING`; the report is root-owned mode `0600`
+at `/opt/wa-runtime/shared/runtime-storage-acceptance.json`. The timer is scheduled daily with a
+ten-minute randomized delay after 00:20 UTC. Installed SHA-256 values are
+`994d4c4d794a78e195cff8df029ee545e6435f9f962e536d086a88438fe7c33b` for the monitor,
+`812d440b900ecc26fbf2cef4eb83b4bdbfd5187b9020e034cb5d31d5df10ecda` for the service and
+`c36c8c70ed8bacc1957b5ac301a0d2c97111ef5dae40bfb246afd64f98eb1bc7` for the timer.
 
 ## Follow-up host cleanup
 
