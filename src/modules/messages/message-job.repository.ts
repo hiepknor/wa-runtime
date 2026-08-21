@@ -205,7 +205,15 @@ export class MessageJobRepository {
   }
 
   async updateStatusByOpenWAMessageId(openwaMessageId: string, status: MessageJobStatus): Promise<void> {
-    await this.database.query(
+    await this.updateStatusByOpenWAMessageIdWithClient(this.database.pool, openwaMessageId, status);
+  }
+
+  async updateStatusByOpenWAMessageIdWithClient(
+    client: Pick<PoolClient, 'query'>,
+    openwaMessageId: string,
+    status: MessageJobStatus,
+  ): Promise<void> {
+    await client.query(
       `UPDATE message_jobs SET status = $2::message_job_status, updated_at = now()
        WHERE openwa_message_id = $1
          AND status NOT IN ('FAILED', 'CANCELLED', 'DRY_RUN_COMPLETED')

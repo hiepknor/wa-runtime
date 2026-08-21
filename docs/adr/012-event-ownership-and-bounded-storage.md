@@ -33,8 +33,9 @@ different audit value and do not need one shared lifetime.
    other session metadata without regressing a newer status or restriction observation.
 5. Retention uses separate lifetimes:
    - terminal operational/idempotency records: `RUNTIME_RETENTION_DAYS`;
-   - normalized runtime events and their inbox/delivery projections:
-     `RUNTIME_EVENT_RETENTION_DAYS`;
+   - normalized runtime events and delivery projections: `RUNTIME_EVENT_RETENTION_DAYS`;
+   - inbox message bodies: `RUNTIME_INBOX_RETENTION_DAYS`, defaulting to the event lifetime when
+     omitted for backward compatibility;
    - raw OpenWA webhook envelopes: `RUNTIME_RAW_WEBHOOK_RETENTION_DAYS`.
 6. Each retention tick drains multiple batches in independent transactions, bounded by both a batch
    count and wall-clock budget. A saturated run is reported as `capacityExhausted`; active work is
@@ -46,6 +47,17 @@ different audit value and do not need one shared lifetime.
    for the same session-scoped identity exists, and no resolution/projection work for that session is
    active. The newest observation is retained indefinitely; snapshot/contact-name provenance is not
    handled by generic retention.
+9. `inbound_messages.body` is the sole durable owner of an accepted inbound message body. The
+   `message.received` runtime ledger stores a versioned compact payload with identifiers, body byte
+   length and SHA-256, but not the body itself. Existing rows are not rewritten.
+10. Webhook processing has one fenced database commit point: the normalized event and its core
+    projections, outbound status reconciliation, any durable Contact observation intent, and the
+    terminal webhook state commit or roll back together. A duplicate normalized event does not skip
+    the remaining idempotent reconciliation steps.
+11. A successfully processed raw webhook payload is replaced in that same terminal update by a
+    compact receipt when the rollout flag is enabled. `PENDING`, `PROCESSING`, `RETRY` and `DEAD`
+    rows retain the complete envelope so recovery and operator diagnosis do not depend on an
+    already-compacted payload.
 
 ## Operational thresholds
 
@@ -61,6 +73,8 @@ different audit value and do not need one shared lifetime.
 - Runtime favors duplicate-send prevention over claiming a failure it cannot prove.
 - Session projections no longer regress under delayed webhook delivery or an older OpenWA snapshot.
 - Raw payload exposure and disk cost are lower than normalized business-history retention.
+- Message bodies have one durable owner; the ledger retains integrity metadata but cannot rebuild an
+  expired inbox body by design.
 - Cleanup can catch up after a cutoff without one long-running transaction, while still producing
   WAL and vacuum work that operators must monitor.
 - Event/inbox history beyond its configured lifetime is intentionally unavailable. Backups have an

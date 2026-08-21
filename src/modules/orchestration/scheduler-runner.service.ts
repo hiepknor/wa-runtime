@@ -18,6 +18,7 @@ import { ContactMemberIdentityBackfillTick } from '../contacts/contact-member-id
 import { ContactResolutionTick } from '../contacts/contact-resolution.tick';
 import { ContactProjectionTick } from '../contacts/contact-projection.tick';
 import { SchedulerLeadershipService } from './scheduler-leadership.service';
+import { ContactMessageObservationTick } from '../contacts/contact-message-observation.tick';
 
 @Injectable()
 export class SchedulerRunnerService {
@@ -36,6 +37,7 @@ export class SchedulerRunnerService {
     private readonly contactMemberIdentityBackfill: ContactMemberIdentityBackfillTick,
     private readonly contactResolution: ContactResolutionTick,
     private readonly contactProjection: ContactProjectionTick,
+    private readonly contactMessageObservations: ContactMessageObservationTick,
     private readonly leadership: SchedulerLeadershipService,
     @Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig(),
   ) {}
@@ -76,6 +78,12 @@ export class SchedulerRunnerService {
         5_000,
         60_000,
         () => this.contactProjection.run(),
+      ),
+      this.tick(
+        'contact-message-observations',
+        5_000,
+        60_000,
+        () => this.contactMessageObservations.run(),
       ),
       this.tick(
         'webhook-registration',

@@ -1,4 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
+import type { PoolClient } from 'pg';
+import { runtimeConfig, type RuntimeConfig } from '../../core/config/runtime-config';
+import { RUNTIME_CONFIG } from '../../core/config/runtime-config.module';
 import { DatabaseService } from '../../core/database/database.service';
 
 export interface OpenWAWebhookEnvelope {
@@ -24,7 +27,10 @@ export type WebhookAttemptResult = 'RETRY' | 'DEAD' | 'LOST_OWNERSHIP';
 
 @Injectable()
 export class WebhookRepository {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    @Inject(RUNTIME_CONFIG) private readonly config: RuntimeConfig = runtimeConfig(),
+  ) {}
 
   async insert(envelope: OpenWAWebhookEnvelope): Promise<boolean> {
     const result = await this.database.query(
@@ -96,13 +102,45 @@ export class WebhookRepository {
   }
 
   async markProcessed(idempotencyKey: string, leaseToken: string, error?: string): Promise<boolean> {
-    const result = await this.database.query(
+    return this.database.transaction(async client => {
+      if (!await this.lockProcessingLease(client, idempotencyKey, leaseToken)) return false;
+      return this.markProcessedInTransaction(client, idempotencyKey, leaseToken, error);
+    });
+  }
+
+  async lockProcessingLease(client: PoolClient, idempotencyKey: string, leaseToken: string): Promise<boolean> {
+    const result = await client.query(
+      `SELECT 1 FROM webhook_events
+       WHERE idempotency_key = $1 AND processing_state = 'PROCESSING' AND lease_token = $2
+         AND lease_expires_at > now()
+       FOR UPDATE`,
+      [idempotencyKey, leaseToken],
+    );
+    return result.rowCount === 1;
+  }
+
+  async markProcessedInTransaction(
+    client: PoolClient,
+    idempotencyKey: string,
+    leaseToken: string,
+    error?: string,
+  ): Promise<boolean> {
+    const result = await client.query(
       `UPDATE webhook_events
        SET processing_state = 'PROCESSED', processed_at = now(), processing_error = $2,
-         lease_token = NULL, lease_expires_at = NULL
+         lease_token = NULL, lease_expires_at = NULL,
+         payload = CASE WHEN $4::boolean THEN jsonb_build_object(
+             'event', event_type,
+             'timestamp', payload->'timestamp',
+             'sessionId', session_id,
+             'idempotencyKey', idempotency_key,
+             'deliveryId', delivery_id,
+             'data', '{}'::jsonb
+           ) ELSE payload END
        WHERE idempotency_key = $1 AND processing_state = 'PROCESSING' AND lease_token = $3
          AND lease_expires_at > now()`,
-      [idempotencyKey, error ?? null, leaseToken],
+      [idempotencyKey, error ?? null, leaseToken,
+        this.config.RUNTIME_COMPACT_PROCESSED_WEBHOOK_PAYLOAD_ENABLED],
     );
     return result.rowCount === 1;
   }

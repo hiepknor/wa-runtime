@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { DatabaseService } from '../../core/database/database.service';
 import { MessageJobRepository } from '../messages/message-job.repository';
 import type { MessageJobStatus } from '../messages/message-job.types';
 import { normalizeOpenWAWebhook } from './webhook-normalizer';
@@ -16,9 +17,8 @@ const webhookStatus = (event: string, data: Record<string, unknown>): MessageJob
 
 @Injectable()
 export class WebhookProcessorService {
-  private readonly logger = new Logger(WebhookProcessorService.name);
-
   constructor(
+    private readonly database: DatabaseService,
     private readonly webhooks: WebhookRepository,
     private readonly runtimeEvents: RuntimeEventRepository,
     private readonly messages: MessageJobRepository,
@@ -31,29 +31,38 @@ export class WebhookProcessorService {
     const { envelope, leaseToken } = claim;
     try {
       const runtimeEvent = normalizeOpenWAWebhook(envelope);
-      await this.runtimeEvents.store(runtimeEvent);
-      if (envelope.event === 'message.received') {
-        const senderId = String(envelope.data.author ?? envelope.data.from ?? '');
-        const contact = typeof envelope.data.contact === 'object' && envelope.data.contact !== null
-          ? envelope.data.contact as Record<string, unknown>
-          : null;
-        const pushName = typeof contact?.pushName === 'string' ? contact.pushName : null;
-        if (senderId && pushName) {
-          await this.contacts.observe(
-            envelope.sessionId,
-            senderId,
-            pushName,
-            runtimeEvent.occurredAt,
-            envelope.idempotencyKey,
-          ).catch(() => {
-            this.logger.warn({ event: 'contacts.message_sender.observe_failed' });
-          });
-        }
-      }
       const status = webhookStatus(envelope.event, envelope.data);
       const messageId = String(envelope.data.messageId ?? envelope.data.id ?? '');
-      if (status && messageId) await this.messages.updateStatusByOpenWAMessageId(messageId, status);
-      if (!await this.webhooks.markProcessed(envelope.idempotencyKey, leaseToken)) {
+      const owned = await this.database.transaction(async client => {
+        if (!await this.webhooks.lockProcessingLease(client, envelope.idempotencyKey, leaseToken)) {
+          return false;
+        }
+        await this.runtimeEvents.storeInTransaction(client, runtimeEvent);
+        if (envelope.event === 'message.received') {
+          const senderId = String(envelope.data.author ?? envelope.data.from ?? '');
+          const contact = typeof envelope.data.contact === 'object' && envelope.data.contact !== null
+            ? envelope.data.contact as Record<string, unknown>
+            : null;
+          const pushName = typeof contact?.pushName === 'string' ? contact.pushName : null;
+          if (senderId && pushName) {
+            await this.contacts.enqueue(client, {
+              eventId: envelope.idempotencyKey,
+              sessionId: envelope.sessionId,
+              senderId,
+              pushName,
+              observedAt: runtimeEvent.occurredAt,
+            });
+          }
+        }
+        if (status && messageId) {
+          await this.messages.updateStatusByOpenWAMessageIdWithClient(client, messageId, status);
+        }
+        if (!await this.webhooks.markProcessedInTransaction(client, envelope.idempotencyKey, leaseToken)) {
+          throw new Error(`Webhook processing lease changed while locked: ${envelope.idempotencyKey}`);
+        }
+        return true;
+      });
+      if (!owned) {
         return { skipped: true, lostOwnership: true };
       }
       return { statusUpdated: Boolean(status && messageId) };

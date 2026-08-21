@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
 import { DatabaseService } from '../../src/core/database/database.service';
+import { runtimeConfig } from '../../src/core/config/runtime-config';
 import { DataRetentionTick } from '../../src/modules/orchestration/data-retention.tick';
 import {
   INTEGRATION_GROUP_ID,
@@ -87,7 +88,7 @@ describe('data retention', () => {
     const result = await new DataRetentionTick(database).cleanup();
 
     expect(result).toEqual({
-      campaignRuns: 1, messageJobs: 1, runtimeEvents: 1, webhookEvents: 1, syncRuns: 1,
+      campaignRuns: 1, messageJobs: 1, inboundMessages: 0, runtimeEvents: 1, webhookEvents: 1, syncRuns: 1,
       contactObservations: 0,
       batches: 1, capacityExhausted: false,
     });
@@ -146,6 +147,32 @@ describe('data retention', () => {
       { event_id: 'ten-day-event' },
     ]);
     await expectCount('message_jobs', 1);
+  });
+
+  it('expires inbox bodies independently while preserving their normalized event ledger', async () => {
+    const tenDaysOld = new Date(Date.now() - 10 * 86_400_000);
+    await pool.query(
+      `INSERT INTO runtime_events
+         (event_id, source_event_type, event_type, session_id, occurred_at, payload, created_at)
+       VALUES ('inbox-retention-event','message','message.received',$1,$2,'{}',$2)`,
+      [INTEGRATION_SESSION_ID, tenDaysOld],
+    );
+    await pool.query(
+      `INSERT INTO inbound_messages
+         (session_id, message_id, group_id, sender_id, body, message_type, received_at, event_id, created_at)
+       VALUES ($1,'inbox-retention-message',$2,'sender','body','text',$3,'inbox-retention-event',$3)`,
+      [INTEGRATION_SESSION_ID, INTEGRATION_GROUP_ID, tenDaysOld],
+    );
+
+    const result = await new DataRetentionTick(database, {
+      ...runtimeConfig(),
+      RUNTIME_INBOX_RETENTION_DAYS: 7,
+      RUNTIME_EVENT_RETENTION_DAYS: 30,
+    }).cleanup();
+
+    expect(result).toMatchObject({ inboundMessages: 1, runtimeEvents: 0 });
+    await expectCount('inbound_messages', 0);
+    await expectCount('runtime_events', 1);
   });
 
   it('reports remaining capacity pressure when the configured batch cap is reached', async () => {

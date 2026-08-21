@@ -1,12 +1,15 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
 import { DatabaseService } from '../../src/core/database/database.service';
+import { runtimeConfig } from '../../src/core/config/runtime-config';
 import type { MessageJobRepository } from '../../src/modules/messages/message-job.repository';
 import { RuntimeEventRepository } from '../../src/modules/webhooks/runtime-event.repository';
 import { GatewayGroupIntentRepository } from '../../src/modules/gateway/gateway-group-intent.repository';
 import { GatewayRepository } from '../../src/modules/gateway/gateway.repository';
 import { ContactRepository } from '../../src/modules/contacts/contact.repository';
 import { ContactMessageObserverService } from '../../src/modules/contacts/contact-message-observer.service';
+import { ContactMessageObservationIntentRepository } from '../../src/modules/contacts/contact-message-observation-intent.repository';
+import { ContactMessageObservationTick } from '../../src/modules/contacts/contact-message-observation.tick';
 import { GatewaySyncItemRepository } from '../../src/modules/gateway/gateway-sync-item.repository';
 import { GatewaySyncService } from '../../src/modules/gateway/gateway-sync.service';
 import type { OpenWAClient } from '../../src/integrations/openwa/openwa.client';
@@ -22,7 +25,10 @@ describe('durable webhook processing', () => {
   beforeAll(() => {
     pool = integrationPool();
     database = new DatabaseService();
-    webhooks = new WebhookRepository(database);
+    webhooks = new WebhookRepository(database, {
+      ...runtimeConfig(),
+      RUNTIME_COMPACT_PROCESSED_WEBHOOK_PAYLOAD_ENABLED: true,
+    });
   });
 
   beforeEach(() => resetIntegrationDatabase(pool));
@@ -44,19 +50,33 @@ describe('durable webhook processing', () => {
     const runtimeEvents = new RuntimeEventRepository(
       database,
       new GatewayGroupIntentRepository(database),
+      { ...runtimeConfig(), RUNTIME_COMPACT_EVENT_PAYLOAD_ENABLED: true },
     );
     const processor = new WebhookProcessorService(
+      database,
       webhooks,
       runtimeEvents,
       { updateStatusByOpenWAMessageId: vi.fn() } as unknown as MessageJobRepository,
-      new ContactMessageObserverService(new ContactRepository(database), true),
+      new ContactMessageObserverService(
+        new ContactRepository(database),
+        new ContactMessageObservationIntentRepository(database),
+        true,
+      ),
     );
 
     expect(await webhooks.insert(envelope)).toBe(true);
     await processor.process(envelope.idempotencyKey);
 
-    const stored = await pool.query(
-      `SELECT we.processing_state, re.event_type, im.body
+    const stored = await pool.query<{
+      processing_state: string;
+      raw_payload: Record<string, unknown>;
+      event_type: string;
+      event_version: number;
+      event_payload: Record<string, unknown>;
+      body: string;
+    }>(
+      `SELECT we.processing_state, we.payload AS raw_payload, re.event_type, re.event_version,
+         re.payload AS event_payload, im.body
        FROM webhook_events we
        JOIN runtime_events re ON re.event_id = we.idempotency_key
        JOIN inbound_messages im ON im.event_id = re.event_id
@@ -64,8 +84,14 @@ describe('durable webhook processing', () => {
       [envelope.idempotencyKey],
     );
     expect(stored.rows[0]).toMatchObject({
-      processing_state: 'PROCESSED', event_type: 'message.received', body: 'hello',
+      processing_state: 'PROCESSED',
+      raw_payload: { event: 'message.received', data: {} },
+      event_type: 'message.received',
+      event_version: 2,
+      body: 'hello',
     });
+    expect(stored.rows[0]!.event_payload).not.toHaveProperty('body');
+    expect(stored.rows[0]!.event_payload).toMatchObject({ bodyBytes: 5 });
   });
 
   it('enriches a synchronized member from message push-name evidence without storing raw contact data', async () => {
@@ -101,14 +127,24 @@ describe('durable webhook processing', () => {
       database,
       new GatewayGroupIntentRepository(database),
     );
+    const observationIntents = new ContactMessageObservationIntentRepository(database);
+    const observer = new ContactMessageObserverService(
+      contacts,
+      observationIntents,
+      true,
+    );
     const processor = new WebhookProcessorService(
-      webhooks, runtimeEvents,
+      database, webhooks, runtimeEvents,
       { updateStatusByOpenWAMessageId: vi.fn() } as unknown as MessageJobRepository,
-      new ContactMessageObserverService(contacts, true),
+      observer,
     );
 
     await webhooks.insert(envelope);
     await processor.process(envelope.idempotencyKey);
+    await new ContactMessageObservationTick(observationIntents, observer, {
+      enabled: true,
+      maxPerTick: 100,
+    }).run();
 
     const member = await pool.query<{ display_name: string; display_name_source: string }>(
       `SELECT display_name, display_name_source FROM group_members
@@ -123,6 +159,52 @@ describe('durable webhook processing', () => {
     );
     expect(JSON.stringify(runtimeEvent.rows[0]?.payload)).not.toContain('Observed sender');
     expect(JSON.stringify(runtimeEvent.rows[0]?.payload)).not.toContain('privateField');
+    expect(await pool.query('SELECT 1 FROM contact_message_observation_intents')).toHaveProperty('rowCount', 0);
+  });
+
+  it('rolls back projections and preserves raw payload when the atomic commit fails', async () => {
+    const envelope: OpenWAWebhookEnvelope = {
+      event: 'message.ack', timestamp: '2026-08-11T00:00:00.000Z',
+      sessionId: INTEGRATION_SESSION_ID, idempotencyKey: 'atomic-failure', deliveryId: 'atomic-delivery',
+      data: { id: 'outbound-message', status: 'delivered', body: 'raw evidence' },
+    };
+    const runtimeEvents = new RuntimeEventRepository(
+      database,
+      new GatewayGroupIntentRepository(database),
+    );
+    const processor = new WebhookProcessorService(
+      database,
+      webhooks,
+      runtimeEvents,
+      {
+        updateStatusByOpenWAMessageIdWithClient: vi.fn().mockRejectedValue(new Error('projection unavailable')),
+      } as unknown as MessageJobRepository,
+      new ContactMessageObserverService(
+        new ContactRepository(database),
+        new ContactMessageObservationIntentRepository(database),
+        true,
+      ),
+    );
+
+    await webhooks.insert(envelope);
+    await expect(processor.process(envelope.idempotencyKey)).rejects.toThrow('projection unavailable');
+
+    const state = await pool.query<{
+      processing_state: string;
+      payload: OpenWAWebhookEnvelope;
+      runtime_event_exists: boolean;
+    }>(
+      `SELECT webhook.processing_state, webhook.payload,
+         EXISTS (SELECT 1 FROM runtime_events event WHERE event.event_id = webhook.idempotency_key)
+           AS runtime_event_exists
+       FROM webhook_events webhook WHERE webhook.idempotency_key = $1`,
+      [envelope.idempotencyKey],
+    );
+    expect(state.rows[0]).toEqual({
+      processing_state: 'RETRY',
+      payload: envelope,
+      runtime_event_exists: false,
+    });
   });
 
   it('recovers an expired lease and eventually dead-letters a poison event', async () => {
@@ -150,12 +232,19 @@ describe('durable webhook processing', () => {
       secondClaim!.leaseToken,
       'invalid payload',
     )).toBe('DEAD');
-    const state = await pool.query(
-      'SELECT processing_state, processing_error, dead_at FROM webhook_events WHERE idempotency_key = $1',
+    const state = await pool.query<{
+      processing_state: string;
+      processing_error: string;
+      dead_at: Date;
+      payload: OpenWAWebhookEnvelope;
+    }>(
+      `SELECT processing_state, processing_error, dead_at, payload
+       FROM webhook_events WHERE idempotency_key = $1`,
       [envelope.idempotencyKey],
     );
     expect(state.rows[0]).toMatchObject({ processing_state: 'DEAD', processing_error: 'invalid payload' });
-    expect(state.rows[0].dead_at).toBeInstanceOf(Date);
+    expect(state.rows[0]!.dead_at).toBeInstanceOf(Date);
+    expect(state.rows[0]!.payload).toEqual(envelope);
   });
 
   it('fences a stale attempt after the event is reclaimed', async () => {
@@ -274,10 +363,15 @@ describe('durable webhook processing', () => {
       intents,
     );
     const processor = new WebhookProcessorService(
+      database,
       webhooks,
       runtimeEvents,
       { updateStatusByOpenWAMessageId: vi.fn() } as unknown as MessageJobRepository,
-      new ContactMessageObserverService(new ContactRepository(database), true),
+      new ContactMessageObserverService(
+        new ContactRepository(database),
+        new ContactMessageObservationIntentRepository(database),
+        true,
+      ),
     );
     const event = (index: number): OpenWAWebhookEnvelope => ({
       event: 'group.update', timestamp: '2026-08-11T00:00:00.000Z',

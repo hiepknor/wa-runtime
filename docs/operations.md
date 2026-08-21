@@ -141,9 +141,11 @@ pressure, queue age and OpenWA 429/5xx responses. Keep the outbound maximum dela
 seconds so the session and message processing leases remain bounded.
 
 Terminal operational rows are retained for `RUNTIME_RETENTION_DAYS` (90 days by default), normalized
-events and their projections for `RUNTIME_EVENT_RETENTION_DAYS` (30 days), and raw webhook envelopes
-for `RUNTIME_RAW_WEBHOOK_RETENTION_DAYS` (7 days). Operational retention is the effective historical
-idempotency window. Backups remain governed by their own retention policy.
+events for `RUNTIME_EVENT_RETENTION_DAYS` (30 days), inbox message bodies for
+`RUNTIME_INBOX_RETENTION_DAYS` (equal to event retention when omitted; 7 days in the staging
+template), and raw webhook envelopes for `RUNTIME_RAW_WEBHOOK_RETENTION_DAYS` (7 days). The event
+retention is the effective webhook idempotency window. Backups remain governed by their own
+retention policy.
 
 The scheduler runs cleanup every `RUNTIME_RETENTION_INTERVAL_MS`. Each transaction deletes at most
 `RUNTIME_RETENTION_BATCH_SIZE` rows per family, then the tick repeats until all families drain below
@@ -153,6 +155,23 @@ timeout. Page on `capacityExhausted` in two consecutive completion logs: configu
 may not be keeping up with ingest. Monitor inserted/deleted rows and disk utilization; use 70/80/90
 percent as warning/escalation/critical thresholds. The partitioning trigger and Contacts evidence
 exception are defined in [ADR 012](adr/012-event-ownership-and-bounded-storage.md).
+
+Do not apply storage migrations while disk utilization is at or above the 90% critical threshold.
+Restore at least 30 days of projected headroom first, including WAL, backup and index-build working
+space. Migration `041_runtime_storage_ownership.sql` builds the inbox retention index and must be
+scheduled in a staging maintenance window; do not attempt to reclaim filesystem space with
+`VACUUM FULL` or `REINDEX` on a nearly full volume. PostgreSQL may retain deleted space inside its
+relations for reuse, so a flat filesystem graph after cleanup is not evidence that retention failed.
+
+After deployment, verify that terminal `webhook_events.payload` values contain only the compact
+receipt, `message.received` runtime events use `event_version = 2` without a `body` key, Contact
+observation intent retries are draining, and the `inboundMessages` retention count eventually exceeds
+the corresponding ingest rate once its cutoff becomes active.
+
+Enable `RUNTIME_COMPACT_EVENT_PAYLOAD_ENABLED` first on staging. After its event-version and inbox
+checks pass, enable `RUNTIME_COMPACT_PROCESSED_WEBHOOK_PAYLOAD_ENABLED`; rollback disables either
+flag without a schema downgrade or historical rewrite. Never enable raw compaction before every
+deployed worker contains the fenced atomic processor and durable Contact intent consumer.
 
 Contacts snapshot generations use `CONTACT_SNAPSHOT_RETENTION_DAYS`, preserving both the latest
 publication and the generation owned by the latest completed resolution. Derived resolution rows

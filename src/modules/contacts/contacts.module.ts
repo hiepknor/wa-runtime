@@ -15,6 +15,8 @@ import { ContactResolutionRepository } from './contact-resolution.repository';
 import { ContactResolutionTick } from './contact-resolution.tick';
 import { ContactProjectionRepository } from './contact-projection.repository';
 import { ContactProjectionTick } from './contact-projection.tick';
+import { ContactMessageObservationIntentRepository } from './contact-message-observation-intent.repository';
+import { ContactMessageObservationTick } from './contact-message-observation.tick';
 
 @Module({
   imports: [OpenWAModule],
@@ -39,6 +41,7 @@ import { ContactProjectionTick } from './contact-projection.tick';
       inject: [DatabaseService, ContactEvidenceWriter, RUNTIME_CONFIG],
     },
     ContactMemberIdentityBackfillRepository,
+    ContactMessageObservationIntentRepository,
     {
       provide: ContactResolutionRepository,
       useFactory: (database: DatabaseService, config: RuntimeConfig) => new ContactResolutionRepository(
@@ -104,11 +107,28 @@ import { ContactProjectionTick } from './contact-projection.tick';
     },
     {
       provide: ContactMessageObserverService,
-      useFactory: (repository: ContactRepository, config: RuntimeConfig) => new ContactMessageObserverService(
+      useFactory: (
+        repository: ContactRepository,
+        intents: ContactMessageObservationIntentRepository,
+        config: RuntimeConfig,
+      ) => new ContactMessageObserverService(
         repository,
+        intents,
         config.CONTACT_MESSAGE_ENRICHMENT_ENABLED,
       ),
-      inject: [ContactRepository, RUNTIME_CONFIG],
+      inject: [ContactRepository, ContactMessageObservationIntentRepository, RUNTIME_CONFIG],
+    },
+    {
+      provide: ContactMessageObservationTick,
+      useFactory: (
+        intents: ContactMessageObservationIntentRepository,
+        observer: ContactMessageObserverService,
+        config: RuntimeConfig,
+      ) => new ContactMessageObservationTick(intents, observer, {
+        enabled: config.CONTACT_MESSAGE_ENRICHMENT_ENABLED,
+        maxPerTick: 100,
+      }),
+      inject: [ContactMessageObservationIntentRepository, ContactMessageObserverService, RUNTIME_CONFIG],
     },
     {
       provide: ContactMemberIdentityBackfillTick,
@@ -125,6 +145,8 @@ import { ContactProjectionTick } from './contact-projection.tick';
     ContactRepository,
     ContactSyncService,
     ContactMessageObserverService,
+    ContactMessageObservationIntentRepository,
+    ContactMessageObservationTick,
     ContactPeriodicSyncTick,
     ContactMemberIdentityBackfillTick,
     ContactEvidenceWriter,

@@ -38,7 +38,10 @@ const schema = z
     CAMPAIGN_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(2),
     RUNTIME_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(90),
     RUNTIME_EVENT_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(30),
+    RUNTIME_INBOX_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).optional(),
     RUNTIME_RAW_WEBHOOK_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(7),
+    RUNTIME_COMPACT_EVENT_PAYLOAD_ENABLED: booleanFromEnv(false),
+    RUNTIME_COMPACT_PROCESSED_WEBHOOK_PAYLOAD_ENABLED: booleanFromEnv(false),
     RUNTIME_RETENTION_INTERVAL_MS: z.coerce.number().int().min(60_000).default(3_600_000),
     RUNTIME_RETENTION_BATCH_SIZE: z.coerce.number().int().min(100).max(10_000).default(5000),
     RUNTIME_RETENTION_MAX_BATCHES_PER_RUN: z.coerce.number().int().min(1).max(1_000).default(100),
@@ -168,7 +171,12 @@ const schema = z
     }
   });
 
-export type RuntimeConfig = z.infer<typeof schema> & { enableRuntimeDocs: boolean };
+type ParsedRuntimeConfig = z.infer<typeof schema>;
+
+export type RuntimeConfig = Omit<ParsedRuntimeConfig, 'RUNTIME_INBOX_RETENTION_DAYS'> & {
+  RUNTIME_INBOX_RETENTION_DAYS: number;
+  enableRuntimeDocs: boolean;
+};
 
 let cached: RuntimeConfig | undefined;
 
@@ -176,6 +184,8 @@ export function parseRuntimeConfig(environment: NodeJS.ProcessEnv): RuntimeConfi
   const parsed = schema.parse(environment);
   return {
     ...parsed,
+    RUNTIME_INBOX_RETENTION_DAYS:
+      parsed.RUNTIME_INBOX_RETENTION_DAYS ?? parsed.RUNTIME_EVENT_RETENTION_DAYS,
     enableRuntimeDocs: parsed.ENABLE_RUNTIME_DOCS ?? parsed.NODE_ENV !== 'production',
   };
 }

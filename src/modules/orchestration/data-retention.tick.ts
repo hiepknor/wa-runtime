@@ -7,6 +7,7 @@ import { DatabaseService } from '../../core/database/database.service';
 export interface RetentionResult {
   campaignRuns: number;
   messageJobs: number;
+  inboundMessages: number;
   runtimeEvents: number;
   webhookEvents: number;
   syncRuns: number;
@@ -33,7 +34,7 @@ export class DataRetentionTick {
   async run(): Promise<void> {
     const started = performance.now();
     const result = await this.cleanup();
-    const deleted = result.campaignRuns + result.messageJobs + result.runtimeEvents
+    const deleted = result.campaignRuns + result.messageJobs + result.inboundMessages + result.runtimeEvents
       + result.webhookEvents + result.syncRuns + result.contactObservations;
     this.logger.log({
       event: 'data.retention.completed', deleted, durationMs: Math.round(performance.now() - started), ...result,
@@ -44,6 +45,7 @@ export class DataRetentionTick {
     const now = options.now ?? new Date();
     const operationalCutoff = new Date(now.valueOf() - this.config.RUNTIME_RETENTION_DAYS * 86_400_000);
     const eventCutoff = new Date(now.valueOf() - this.config.RUNTIME_EVENT_RETENTION_DAYS * 86_400_000);
+    const inboxCutoff = new Date(now.valueOf() - this.config.RUNTIME_INBOX_RETENTION_DAYS * 86_400_000);
     const webhookCutoff = new Date(now.valueOf() - this.config.RUNTIME_RAW_WEBHOOK_RETENTION_DAYS * 86_400_000);
     const contactObservationCutoff = new Date(
       now.valueOf() - this.config.CONTACT_MESSAGE_OBSERVATION_RETENTION_DAYS * 86_400_000,
@@ -52,7 +54,7 @@ export class DataRetentionTick {
     const maxBatches = options.maxBatches ?? this.config.RUNTIME_RETENTION_MAX_BATCHES_PER_RUN;
     const deadline = performance.now() + (options.timeBudgetMs ?? this.config.RUNTIME_RETENTION_TIME_BUDGET_MS);
     const total: RetentionResult = {
-      campaignRuns: 0, messageJobs: 0, runtimeEvents: 0, webhookEvents: 0, syncRuns: 0,
+      campaignRuns: 0, messageJobs: 0, inboundMessages: 0, runtimeEvents: 0, webhookEvents: 0, syncRuns: 0,
       contactObservations: 0,
       batches: 0, capacityExhausted: false,
     };
@@ -66,6 +68,7 @@ export class DataRetentionTick {
       const current = await this.database.transaction(async client => ({
         campaignRuns: await this.deleteCampaignRuns(client, operationalCutoff, limit),
         messageJobs: await this.deleteMessageJobs(client, operationalCutoff, limit),
+        inboundMessages: await this.deleteInboundMessages(client, inboxCutoff, limit),
         runtimeEvents: await this.deleteRuntimeEvents(client, eventCutoff, limit),
         webhookEvents: await this.deleteWebhookEvents(client, webhookCutoff, limit),
         syncRuns: await this.deleteSyncRuns(client, operationalCutoff, limit),
@@ -78,6 +81,7 @@ export class DataRetentionTick {
       total.batches += 1;
       total.campaignRuns += current.campaignRuns;
       total.messageJobs += current.messageJobs;
+      total.inboundMessages += current.inboundMessages;
       total.runtimeEvents += current.runtimeEvents;
       total.webhookEvents += current.webhookEvents;
       total.syncRuns += current.syncRuns;
@@ -128,6 +132,18 @@ export class DataRetentionTick {
          DELETE FROM inbound_messages im USING candidates c WHERE im.event_id = c.event_id
        )
        DELETE FROM runtime_events re USING candidates c WHERE re.event_id = c.event_id`,
+      [cutoff, limit],
+    ));
+  }
+
+  private async deleteInboundMessages(client: PoolClient, cutoff: Date, limit: number): Promise<number> {
+    return this.count(await client.query(
+      `WITH candidates AS (
+         SELECT event_id FROM inbound_messages
+         WHERE created_at < $1 ORDER BY created_at, event_id LIMIT $2 FOR UPDATE SKIP LOCKED
+       )
+       DELETE FROM inbound_messages message USING candidates
+       WHERE message.event_id = candidates.event_id`,
       [cutoff, limit],
     ));
   }
