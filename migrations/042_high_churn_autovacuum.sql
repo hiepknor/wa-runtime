@@ -1,0 +1,20 @@
+ALTER TABLE webhook_events SET (
+  autovacuum_vacuum_threshold = 10000,
+  autovacuum_vacuum_scale_factor = 0.05,
+  autovacuum_analyze_threshold = 10000,
+  autovacuum_analyze_scale_factor = 0.02
+);
+
+ALTER TABLE runtime_events SET (
+  autovacuum_vacuum_threshold = 10000,
+  autovacuum_vacuum_scale_factor = 0.05,
+  autovacuum_analyze_threshold = 10000,
+  autovacuum_analyze_scale_factor = 0.02
+);
+
+ALTER TABLE inbound_messages SET (
+  autovacuum_vacuum_threshold = 10000,
+  autovacuum_vacuum_scale_factor = 0.05,
+  autovacuum_analyze_threshold = 10000,
+  autovacuum_analyze_scale_factor = 0.02
+);

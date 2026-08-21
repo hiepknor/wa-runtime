@@ -191,6 +191,24 @@ describe('data retention', () => {
     await expectCount('runtime_events', 50);
   });
 
+  it('uses bounded autovacuum thresholds for high-churn retained tables', async () => {
+    const result = await pool.query<{ relname: string; reloptions: string[] }>(
+      `SELECT relname, reloptions FROM pg_class
+       WHERE relname IN ('webhook_events', 'runtime_events', 'inbound_messages')
+       ORDER BY relname`,
+    );
+
+    expect(result.rows).toHaveLength(3);
+    for (const row of result.rows) {
+      expect(new Set(row.reloptions)).toEqual(new Set([
+        'autovacuum_vacuum_threshold=10000',
+        'autovacuum_vacuum_scale_factor=0.05',
+        'autovacuum_analyze_threshold=10000',
+        'autovacuum_analyze_scale_factor=0.02',
+      ]));
+    }
+  });
+
   it('compacts old push-name history only after derived contact work is idle', async () => {
     const old = new Date(Date.now() - 40 * 86_400_000);
     const identity = await pool.query<{ id: string }>(

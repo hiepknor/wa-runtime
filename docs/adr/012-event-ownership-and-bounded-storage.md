@@ -58,6 +58,10 @@ different audit value and do not need one shared lifetime.
     compact receipt when the rollout flag is enabled. `PENDING`, `PROCESSING`, `RETRY` and `DEAD`
     rows retain the complete envelope so recovery and operator diagnosis do not depend on an
     already-compacted payload.
+12. `webhook_events`, `runtime_events` and `inbound_messages` use table-local five-percent vacuum and
+    two-percent analyze scale factors, each with a 10,000-row floor. Compact updates and retention
+    deletes must not wait for PostgreSQL's cluster-wide 20-percent default. Global autovacuum cost,
+    worker and timing settings remain unchanged until staging evidence proves they are insufficient.
 
 ## Operational thresholds
 
@@ -67,6 +71,9 @@ different audit value and do not need one shared lifetime.
   Deletion capacity after a cutoff becomes active must exceed the corresponding ingest rate.
 - Introduce time partitioning before sustained cleanup consumes 25% of the retention tick budget or
   vacuum cannot maintain reusable space with at least 30 days of projected disk headroom.
+- Review the table-local autovacuum thresholds if vacuum runs create sustained I/O pressure or dead
+  tuples remain materially above their configured trigger; do not disable autovacuum to suppress
+  the symptom.
 
 ## Consequences
 
@@ -90,3 +97,5 @@ different audit value and do not need one shared lifetime.
 - raw, normalized and operational cutoffs are tested independently;
 - staging records deletion throughput, tick duration, `capacityExhausted` and disk headroom before
   changing production retention values.
+- migration verification confirms the three high-churn tables retain their reviewed table-local
+  autovacuum options.

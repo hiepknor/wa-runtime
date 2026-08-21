@@ -163,6 +163,14 @@ scheduled in a staging maintenance window; do not attempt to reclaim filesystem 
 `VACUUM FULL` or `REINDEX` on a nearly full volume. PostgreSQL may retain deleted space inside its
 relations for reuse, so a flat filesystem graph after cleanup is not evidence that retention failed.
 
+Migration `042_high_churn_autovacuum.sql` lowers only the vacuum/analyze scale factors for
+`webhook_events`, `runtime_events` and `inbound_messages`. At roughly 2.5 million live rows, the
+cluster-wide 20-percent vacuum default permits about 500,000 dead tuples before starting; compact
+webhook updates and retention deletes make that burst unnecessarily large. The table-local
+five-percent vacuum threshold starts near 135,000 rows while retaining PostgreSQL's global worker,
+cost and timing controls. Roll it back with `ALTER TABLE ... RESET` for the four reviewed
+autovacuum options only if staging shows sustained I/O pressure; never disable autovacuum.
+
 After deployment, verify that terminal `webhook_events.payload` values contain only the compact
 receipt, `message.received` runtime events use `event_version = 2` without a `body` key, Contact
 observation intent retries are draining, and the `inboundMessages` retention count eventually exceeds
