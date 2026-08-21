@@ -127,3 +127,27 @@ the rollout but does not satisfy the 30-day free-space target under the pre-chan
 Expand the cloud volume, then observe seven days of post-change growth before deciding whether table
 partitioning or a cursor-store redesign is justified. Do not use `VACUUM FULL` as routine capacity
 management because it needs table locks and temporary disk headroom that this VPS does not have.
+
+## Follow-up host cleanup
+
+A second read-only audit found no duplicate PostgreSQL indexes and confirmed Docker log rotation was
+already bounded for both Runtime and OpenWA. The remaining large consumers were live PostgreSQL data,
+not disposable logs or images. A conservative cleanup was performed without touching live or
+dangling database volumes:
+
+- the current 1.6 GB OpenWA backup set was streamed off-host to
+  `/Users/hiepknor/Backups/openwa/openwa-backup-20260821-031815` with mode `0600`; all four manifest
+  checksums and all four compressed tar catalogs passed before the on-host copies were removed;
+- five unmounted, unopened restore-test directories dated 2026-08-10/11 and carrying
+  `RESTORE-VERIFIED` markers were removed; they can be regenerated from the verified backup;
+- 355.5 MB of unused Docker build cache, 109 MB of apt cache, 48 MB of archived journal data and the
+  unused `alpine:3.20` and `hello-world:latest` images were removed;
+- `wa-runtime:a134c10`, rollback image `wa-runtime:b671ee6`, all running service images and every
+  Docker volume were retained. Four unreferenced legacy automation volumes totaling about 420 MB
+  remain until their business ownership is explicitly retired.
+
+Filesystem usage fell from 50,036,023,296 to 47,787,724,800 bytes, reclaiming 2,248,298,496 bytes
+(about 2.09 GiB). The root filesystem moved from 83 to 79 percent with about 12.8 GB available, and
+the post-cleanup readiness and storage-observer execution both passed. This extends the staging
+observation runway but still does not satisfy the 30-day capacity gate or remove the cloud-volume
+expansion requirement.
