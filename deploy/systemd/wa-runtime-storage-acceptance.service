@@ -1,0 +1,19 @@
+[Unit]
+Description=Evaluate the WA Runtime storage acceptance gate
+After=wa-runtime-storage-observation.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/opt/wa-runtime/scripts/runtime-storage-acceptance-monitor.sh
+SuccessExitStatus=2
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=120
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/wa-runtime/shared

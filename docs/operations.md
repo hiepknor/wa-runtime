@@ -225,6 +225,11 @@ On a host where the compiled evaluator has been installed under
 `sudo /opt/wa-runtime/scripts/runtime-storage-acceptance.sh`. Extra CLI threshold arguments may be
 appended to either form.
 
+Install and enable `deploy/systemd/wa-runtime-storage-acceptance.{service,timer}` to evaluate the gate
+daily. The monitor atomically replaces the root-only
+`/opt/wa-runtime/shared/runtime-storage-acceptance.json`; exit 2 (`PENDING`) is an accepted oneshot
+result, while a real `FAIL` leaves the report available and marks the service failed for alerting.
+
 For the staging Tencent CVM, create and verify a provider snapshot, then expand the system disk to
 150 GiB in the CVM console. Tencent documents this under
 [Expanding Cloud Disks](https://intl.cloud.tencent.com/document/product/213/82048) and recommends a

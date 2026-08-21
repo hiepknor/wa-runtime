@@ -136,18 +136,27 @@ to 150 GiB remains a cloud-account action. Guest tools `growpart` and `resize2fs
 after the provider reports the larger block device, expand the partition and filesystem, then start
 a fresh seven-day gate.
 
-The versioned gate evaluator was exercised against the live observer files before installation. It
-correctly returned `PENDING` (exit 2): the current observation window was 0.139 days, the filesystem
-was 58.94 GiB, no retention tick was capacity-exhausted, p95 cleanup duration was 26.101 seconds,
-the oldest Contact intent was 11 seconds, and all three active seven-day families showed burst delete
-rates above average ingest. Its preliminary conservative growth estimate left only 3.7 days of
-headroom on the unexpanded disk; this short window is evidence for expansion urgency, not the final
-seven-day capacity result.
+The versioned gate evaluator from revision `384132e` is installed under
+`/opt/wa-runtime/tools/storage-acceptance/384132e`, with `current` resolving to that immutable path.
+It was exercised against the live observer files and correctly returned `PENDING` (exit 2): the
+current observation window was 0.139 days, the filesystem was 58.94 GiB, no retention tick was
+capacity-exhausted, p95 cleanup duration was 26.101 seconds, the oldest Contact intent was 11 seconds,
+and all three active seven-day families showed burst delete rates above average ingest. Its
+preliminary conservative growth estimate left only 3.7 days of headroom on the unexpanded disk; this
+short window is evidence for expansion urgency, not the final seven-day capacity result.
 
 The guest is already prepared for a guarded online extension: it has a GPT partition table,
 `/dev/vda2` is the final partition, `/` is read-write ext4, `growpart` and `resize2fs` are installed,
 and cloud-init includes both `growpart` and `resizefs`. The operational guard performs no mutation
 until the provider block device is at least 150 GiB and an operator confirms a verified snapshot.
+Revision `98afc77` is installed root-owned with mode `0755` at
+`/opt/wa-runtime/scripts/runtime-root-filesystem-expand.sh`; its SHA-256 is
+`09974d8d8ed0c2d3cc0d44cc70f914ea9dcca31ba2b7f5668dd5bb9e4f63c4fa`. A live check against the
+current 60 GiB disk returned the expected `PENDING` exit 2 without mutation.
+
+A daily systemd acceptance timer atomically refreshes the root-only latest JSON report. `PENDING` is
+an accepted service result during collection, while a gate `FAIL` deliberately fails the oneshot so
+the existing systemd monitoring surface can alert without losing the diagnostic report.
 
 ## Follow-up host cleanup
 

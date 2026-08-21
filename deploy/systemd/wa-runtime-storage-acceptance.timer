@@ -1,0 +1,12 @@
+[Unit]
+Description=Evaluate the WA Runtime storage acceptance gate daily
+
+[Timer]
+OnCalendar=*-*-* 00:20:00 UTC
+RandomizedDelaySec=10m
+Persistent=true
+AccuracySec=1m
+Unit=wa-runtime-storage-acceptance.service
+
+[Install]
+WantedBy=timers.target
